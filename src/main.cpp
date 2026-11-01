@@ -260,9 +260,11 @@ bool AegisubApp::OnInit() {
 #ifdef WITH_GPUI_DEFAULT
 		// The GPUI workspace only ships Chinese strings, so the legacy wxWidgets
 		// dialogs follow it. A profile that still stores en_US from an older build
-		// would otherwise leave the app half translated.
-		lang = "zh_CN";
-		OPT_SET("App/Language")->SetString(lang);
+		// would otherwise leave the app half translated. The stored choice is only
+		// read here: writing it back is what silently undid a language the user
+		// picked in the preferences panel.
+		if (lang.empty() || !locale.HasLanguage(lang))
+			lang = "zh_CN";
 #else
 		if (lang.empty() || (lang != "en_US" && !locale.HasLanguage(lang))) {
 			lang = locale.PickLanguage();

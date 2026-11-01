@@ -29,6 +29,10 @@
 #undef Bool
 
 namespace agi {
+/// Number of option writes since startup, so a caller can tell whether a batch
+/// of work changed the configuration without comparing every value itself.
+uint64_t OptionValueRevision() noexcept;
+
 /// Option type
 /// No bitsets here.
 enum class OptionType {
@@ -68,7 +72,7 @@ class OptionValue {
 	}
 
 protected:
-	void NotifyChanged() { ValueChanged(*this); }
+	void NotifyChanged();
 
 	OptionValue(std::string name) noexcept : name(std::move(name)) { }
 

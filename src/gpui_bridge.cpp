@@ -1093,6 +1093,23 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 	}
 
 	std::string Command(json::Object const& object) {
+		// Commands are how the GPUI window flips preferences (hide overrides,
+		// spectrum, overscan…). Those writes used to wait for a clean exit, so a
+		// killed process lost them; write the file as soon as the command actually
+		// changed an option, and stay quiet when it changed nothing.
+		struct FlushChangedOptions {
+			uint64_t const before = agi::OptionValueRevision();
+			~FlushChangedOptions() {
+				if (agi::OptionValueRevision() == before) return;
+				try {
+					config::opt->Flush();
+				}
+				catch (agi::Exception const& error) {
+					LOG_E("gpui/bridge") << "Could not save the configuration: " << error.GetMessage();
+				}
+			}
+		} flush_changed_options;
+
 		auto name_it = object.find("name");
 		if (name_it == object.end())
 			return R"({"ok":false,"error":"missing command name"})";

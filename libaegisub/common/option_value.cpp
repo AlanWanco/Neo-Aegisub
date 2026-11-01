@@ -14,9 +14,27 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include <atomic>
+#include <cstdint>
+
 #include <libaegisub/option_value.h>
 
+namespace {
+	/// Bumped on every option write so callers can cheaply detect that a batch of
+	/// work changed the configuration.
+	std::atomic<uint64_t> option_writes{0};
+}
+
 namespace agi {
+	uint64_t OptionValueRevision() noexcept {
+		return option_writes.load(std::memory_order_relaxed);
+	}
+
+	void OptionValue::NotifyChanged() {
+		option_writes.fetch_add(1, std::memory_order_relaxed);
+		ValueChanged(*this);
+	}
+
 	std::string OptionValue::TypeToString(OptionType type) const {
 		switch (type) {
 			case OptionType::String:     return "String";
