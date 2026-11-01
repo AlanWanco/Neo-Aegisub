@@ -899,7 +899,7 @@ impl AudioPanel {
                 .id("audio-scrollbar")
                 .relative()
                 .w_full()
-                .h(px(12.))
+                .h(px(16.))
                 .flex_shrink_0()
                 .cursor_pointer()
                 .on_any_mouse_down(
@@ -956,10 +956,10 @@ impl AudioPanel {
                         .absolute()
                         .left_0()
                         .right_0()
-                        .top(px(4.))
-                        .h(px(5.))
+                        .top(px(5.))
+                        .h(px(6.))
                         .rounded(px(3.))
-                        .bg(p.muted),
+                        .bg(ink.opacity(0.16)),
                 );
             if state.end > state.start {
                 let from = state.start.max(0) as f32 / duration as f32;
@@ -967,8 +967,8 @@ impl AudioPanel {
                 scrollbar = scrollbar.child(
                     div()
                         .absolute()
-                        .top(px(4.))
-                        .h(px(5.))
+                        .top(px(5.))
+                        .h(px(6.))
                         .left(relative(from.clamp(0., 1.)))
                         .w(relative((to - from).clamp(0., 1.).max(0.002)))
                         .rounded(px(3.))
@@ -983,12 +983,12 @@ impl AudioPanel {
             scrollbar = scrollbar.child(
                 div()
                     .absolute()
-                    .top(px(3.))
-                    .h(px(7.))
+                    .top(px(4.))
+                    .h(px(8.))
                     .left(relative(thumb_left))
                     .w(relative(thumb_width))
                     .rounded(px(4.))
-                    .bg(p.muted_foreground.opacity(0.65)),
+                    .bg(p.muted_foreground),
             );
             (ruler.into_any_element(), scrollbar.into_any_element())
         } else {
@@ -1021,8 +1021,16 @@ impl AudioPanel {
             .p_3()
             .child(title_row.when(!state.loaded, |row| row.child(load_audio)))
             .child(ruler)
-            .child(graph)
-            .child(scrollbar);
+            // The scrollbar hugs the waveform the way the wx timeline does, so the
+            // pair reads as one control instead of two separate rows.
+            .child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .child(graph)
+                    .child(scrollbar),
+            );
         let compact_viewport = div()
             .h_flex()
             .flex_wrap()
