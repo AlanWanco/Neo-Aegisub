@@ -90,6 +90,10 @@ pub struct AudioPanel {
     pub span: i64,
     pub gain: i64,
     pub image: Option<Arc<Image>>,
+    /// Time range the current image was rendered for, so it can be shown at the
+    /// right place while a sharper render for the new zoom is still in flight.
+    pub image_start: i64,
+    pub image_span: i64,
     pub loading: bool,
     pub requested: Option<(u64, i64, i64, &'static str, i64, i64, u64)>,
     pub bounds: Rc<RefCell<Bounds<Pixels>>>,
@@ -111,6 +115,8 @@ impl AudioPanel {
             span: 12000,
             gain: 800,
             image: None,
+            image_start: 0,
+            image_span: 1,
             loading: false,
             requested: None,
             bounds: Rc::new(RefCell::new(Bounds::default())),
@@ -272,12 +278,21 @@ impl AudioPanel {
                 .absolute()
                 .size_full(),
             );
+        let width = f32::from(self.bounds.borrow().size.width).max(1.);
         if let Some(image) = &self.image {
+            // Draw the image over the time range it was rendered for, so zooming
+            // and panning stay in step with the gesture instead of freezing on
+            // the previous render until the next one lands.
+            let image_left = (self.image_start - self.view_start) as f32 / self.span as f32;
+            let image_width = self.image_span as f32 / self.span as f32;
             graph = graph.child(
-                img(image.clone())
+                div()
                     .absolute()
-                    .size_full()
-                    .object_fit(ObjectFit::Fill),
+                    .top_0()
+                    .bottom_0()
+                    .left(px(width * image_left))
+                    .w(px(width * image_width))
+                    .child(img(image.clone()).size_full().object_fit(ObjectFit::Fill)),
             );
         } else {
             graph = graph.child(
@@ -291,10 +306,19 @@ impl AudioPanel {
                     }),
             );
         }
-        let width = f32::from(self.bounds.borrow().size.width).max(1.);
         let left = ((state.start - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
         let right = ((state.end - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
         if state.loaded && right >= left {
+            let start_color = appearance.color(
+                "Colour/Audio Display/Line boundary Start",
+                rgb(0x7ec2ff).into(),
+            );
+            let end_color = appearance.color(
+                "Colour/Audio Display/Line boundary End",
+                rgb(0x7ec2ff).into(),
+            );
+            // Only the active line's two boundaries can be dragged, so the grab
+            // handles sit on them; every other marker stays a plain line.
             graph = graph.child(
                 div()
                     .absolute()
@@ -304,16 +328,36 @@ impl AudioPanel {
                     .w(px(width * (right - left)))
                     .bg(gpui_kit::rgba(0x65b8ff26))
                     .border_l_2()
-                    .border_color(appearance.color(
-                        "Colour/Audio Display/Line boundary Start",
-                        rgb(0x7ec2ff).into(),
-                    ))
-                    .child(div().absolute().right_0().top_0().bottom_0().w(px(2.)).bg(
-                        appearance.color(
-                            "Colour/Audio Display/Line boundary End",
-                            rgb(0x7ec2ff).into(),
-                        ),
-                    )),
+                    .border_color(start_color)
+                    .child(
+                        div()
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(2.))
+                            .bg(end_color),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(2.))
+                            .left(px(-3.))
+                            .w(px(8.))
+                            .h(px(10.))
+                            .rounded(px(2.))
+                            .bg(start_color),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(2.))
+                            .right(px(-3.))
+                            .w(px(8.))
+                            .h(px(10.))
+                            .rounded(px(2.))
+                            .bg(end_color),
+                    ),
             );
         }
         for &marker in &state.markers {
@@ -321,8 +365,6 @@ impl AudioPanel {
                 continue;
             }
             let left = (marker - self.view_start) as f32 / self.span as f32 * width;
-            // A 1px translucent line reads as a grid line, not as something you
-            // can grab, so markers get a small handle at the top edge.
             graph = graph.child(
                 div()
                     .absolute()
@@ -333,20 +375,7 @@ impl AudioPanel {
                     .bg(appearance.color(
                         "Colour/Audio Display/Line Boundary Inactive Line",
                         gpui_kit::rgba(0xe5c78bff).into(),
-                    ))
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(2.))
-                            .left(px(-3.))
-                            .w(px(8.))
-                            .h(px(10.))
-                            .rounded(px(2.))
-                            .bg(appearance.color(
-                                "Colour/Audio Display/Line Boundary Inactive Line",
-                                gpui_kit::rgba(0xe5c78bff).into(),
-                            )),
-                    ),
+                    )),
             );
         }
         if state.playing {

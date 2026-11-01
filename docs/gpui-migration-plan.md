@@ -116,6 +116,8 @@ macOS 个人词典属于系统状态，隔离 profile 不能隔离学习词。�
 
 2026-11-01 语言选择器收口：`WITH_GPUI_DEFAULT` 构建启动时把 `App/Language` 固定为 `zh_CN`，所以“界面语言”里另外 32 种目录只是死选项——选中后要重启，重启又被覆盖回中文。`src/gpui_dialogs.cpp` 的 `languages()` 在该宏下只返回当前生效语言并附 `note` 说明，前端把 `note` 显示为窗口副标题；非 GPUI 构建仍返回完整列表。macOS 实际窗口确认语言窗口只剩“中文（中国）”与说明文字，点击遮罩可关闭；前端 release 构建、`fmt --check`、11 项 Rust 测试与 Meson `gtest main` 通过。
 
+2026-11-01 音频把手与缩放跟随：灰色竖线原来也画了手柄，但它们对应秒刻度、非活动行与关键帧，本来就不响应拖动；现在只有活动行的两个选区边界带手柄（起点取 `Colour/Audio Display/Line boundary Start`，终点取 `... End`），其余 marker 只画 2px 竖线。实际鼠标拖动手柄把选区终点 5000 改到 3581，宿主按同一手势收到 down/drag/up。滚轮缩放约 400ms 黏滞的成因是 `refresh_audio` 要求回复的 `view_start`/`span`/`mode`/`gain` 与当前视图完全相等才换图，滚动期间视图每帧都在变，回复被逐条丢弃，波形在整个手势里冻结、停手才跳变；改为只校验 `epoch` 与 `render_revision`，并记录每张图自身的渲染范围（`image_start`/`image_span`），按该范围定位绘制，新渲染在飞时旧图按比例跟随手势。一次连续滚轮（span 12000→4889）实测每 16ms 一帧、图片范围落后 1–2 步（约 20–40ms）而不是冻结，停手后 `image_span` 与 `span` 相等；灰色 marker 在顶部各行仍是 4 设备像素竖线，红/蓝手柄为 16×20 设备像素。`cargo fmt --check`、11 项 Rust 测试与 Meson `gtest main` 通过。
+
 打开字幕时询问关联媒体、未保存确认、加载关联脚本的信任提示，以及未移植的对话框仍可能进入 wx 原生模态循环；桥接等待此时不等于程序崩溃。输入法、Windows 栈溢出和跨平台运行仍为未验证项。
 
 ## 提交边界

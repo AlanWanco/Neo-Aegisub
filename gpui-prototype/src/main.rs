@@ -4454,16 +4454,18 @@ impl Workspace {
             let _ = weak.update(cx, |view, cx| {
                 view.audio.loading = false;
                 match result {
+                    // Accept a render even when the view has moved on: it is
+                    // drawn over its own time range, so the waveform follows the
+                    // gesture instead of waiting for a render that matches it.
                     Ok((state, start, image)) if state.epoch == view.snapshot.audio.epoch
-                        && state.render_revision == view.snapshot.audio.render_revision
-                        && request.1 == view.audio.view_start && request.2 == view.audio.span
-                        && request.3 == view.audio.mode && request.4 == view.audio.gain => {
+                        && state.render_revision == view.snapshot.audio.render_revision => {
                         if let Some(image) = image {
                             if let Some(previous) = view.audio.image.replace(image) {
                                 previous.remove_asset(cx);
                             }
+                            view.audio.image_start = start.round() as i64;
+                            view.audio.image_span = request.2;
                         }
-                        let _ = start;
                     }
                     Ok(_) => {},
                     Err(error) => { view.status = format!("音频画面生成失败：{error}"); view.audio.requested = None; }
