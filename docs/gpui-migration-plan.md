@@ -143,4 +143,8 @@ macOS 个人词典属于系统状态，隔离 profile 不能隔离学习词。�
 每批只提交实际完成的范围，附构建/运行结果；提交或推送前展示对应完整 diff 并取得确认。本计划分别记录已实现功能、桌面验收与尚待验证范围，提交不代表全部迁移完成。保留根目录 41 张 JPEG、演示资源和 `subprojects/checkasm.wrap`。配置修改前备份；本机配置、测试、截图、日志和二进制只放在忽略的构建目录。
 
 
+2026-11-02 字幕文本操作按钮：文本编辑框正下方新增一排胶囊按钮——还原（`edit/revert`）、清除（`edit/clear`）、清除文本（`edit/clear/text`）、插入原文（`edit/insert_original`），沿用格式工具条的 ghost 小按钮样式，可用状态逐帧取自命令目录的 `can_invoke()`。macOS 实际窗口核验：`{\i1}测试文本{\i0}尾巴` 点“清除文本”后只剩标签 `{\i1}{\i0}`，“清除”清空整行；程序写回 `XYZ` 后“还原”回到空行；单行工程原文 `原文ABC` 改成 `ZZZ` 后“插入原文”得到 `原文ABCZZZ`。前端 release 构建、`fmt` 与 13 项 Rust 测试通过。
+
+2026-11-02 音频标尺拖动与滚动条：波形上方补上时间标尺，下方补上横向滚动条，两者都只平移视图（`view_start`），不改游标。标尺语义对齐 wx `AudioDisplayTimeline::OnMouseEvent`（`src/audio_display.cpp:397`）：左键拖动时按 `-(Δx/宽度)*span` 反向平移时间轴；滚动条对齐 `AudioDisplayScrollbar`（`src/audio_display.cpp:132`），滑块宽度为 `视窗/总长`、不小于 28 px，轨道点击与滑块拖动按真实轴长映射。刻度步长取 `[50,100,200,500,1s,2s,5s,10s,15s,30s,1m,2m,5m,10m]` 中第一个使相邻刻线间距 ≥ 76 px 的值。标尺高 20 px：9.5 px 标签在顶部、5 px 刻度线贴底；刻线原先用 `bottom_0()` 完全不绘制（像素核对整行都是背景色），改 `top` 锚定后正常。macOS 实际窗口（20000 ms 音频，窗口 1321×888）：拖动标尺 `400,176 → 250,176` 后标签由 `0:00:00`–`0:00:10` 变为 `0:00:04`–`0:00:14`，5 s 蓝色标记由设备 x 794 移到 519；点击滚动条轨道 x=600 跳到 `0:00:08`–`0:00:18`，滑块由 368..994 移到 788..1414；再把滑块从 550 拖到 350 回到 `0:00:02`–`0:00:12`。`ruler_drag_scrolls_opposite_the_pointer_and_clamps` 与 `thumb_wraps_the_visible_window_and_keeps_a_grab_width` 两项单测随 13 项一起通过。
+
 2026-10-27 打包修复：ARM64 Lua 模块失败来自 BOM 与有符号 `char` 比较，改为无符号字节判断；本机用 `-funsigned-char` 编译真实读取器加载 `aegisub/unicode.moon` 通过，新增回归后 381 项 C++ 测试通过。未签名 Intel 前端的嵌套 `.app` 签名回归通过。隔离 macOS 预览确认默认自动打开 GPUI、宿主隐藏、关闭 GPUI 后两个进程退出。Windows portable/installer 已修正遗漏前端的问题，最终产物仍需以新 CI 归档内容验证；不以此本机检查宣称 Windows/Linux 桌面已通过。

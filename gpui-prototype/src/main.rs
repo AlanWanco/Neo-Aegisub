@@ -8194,6 +8194,49 @@ impl Workspace {
             }
         };
         let editor_height = self.subtitle_editor_height;
+        // The four line-text actions of the classic edit box, directly under the
+        // text they rewrite; they used to be reachable only from the palette.
+        let mut text_actions = div().h_flex().gap_1().items_center();
+        for (id, label, tip, name) in [
+            (
+                "text-revert",
+                "还原",
+                "恢复到载入本行时的原文",
+                "edit/revert",
+            ),
+            ("text-clear", "清除", "清空整行文本", "edit/clear"),
+            (
+                "text-clear-text",
+                "清除文本",
+                "清除文本，保留特效标签",
+                "edit/clear/text",
+            ),
+            (
+                "text-insert-original",
+                "插入原文",
+                "在光标处插入原文",
+                "edit/insert_original",
+            ),
+        ] {
+            let enabled = self
+                .catalog
+                .command(name)
+                .is_some_and(|command| command.can_invoke());
+            text_actions = text_actions.child(
+                Button::new(id)
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(13.))
+                    .py(gpui_kit::px(3.))
+                    .label(label)
+                    .tooltip(tip)
+                    .ghost()
+                    .disabled(!enabled)
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.invoke(json!({"op": "command", "name": name}), cx)
+                    })),
+            );
+        }
         // Header, formatting bar and the text box stay in one column so the
         // inspector can sit beside them as a second column.
         let editor_content = div()
@@ -8283,7 +8326,8 @@ impl Workspace {
                                 .child(self.editor_original.clone()),
                         )
                     })
-                    .child(editor.flex_1().min_h(px(40.)));
+                    .child(editor.flex_1().min_h(px(40.)))
+                    .child(text_actions);
         let editor_section = div()
             .id("subtitle-editor-section")
             .flex_shrink_0()

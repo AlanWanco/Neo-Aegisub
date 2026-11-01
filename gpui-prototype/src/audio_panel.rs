@@ -9,7 +9,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     Bounds, Context, Image, IntoElement, MouseButton, ObjectFit, Pixels, Styled, StyledImage,
-    canvas, div, img, prelude::*, px, rgb,
+    canvas, div, img, prelude::*, px, relative, rgb,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -117,6 +117,16 @@ pub struct AudioImage {
     #[serde(default)]
     pub view_start: f64,
 }
+/// A horizontal pan in progress. The ruler above the waveform and the
+/// scrollbar below it move the same view window: `shaft` is zero for the
+/// ruler, whose pixels map straight onto time, and is the thumb travel in
+/// pixels for the scrollbar, whose pixels map onto the scrollable remainder.
+#[derive(Clone, Copy)]
+pub struct PanDrag {
+    origin_x: f32,
+    origin_start: i64,
+    shaft: f32,
+}
 
 pub struct AudioPanel {
     pub mode: &'static str,
@@ -146,6 +156,7 @@ pub struct AudioPanel {
     pub drag_button: Option<MouseButton>,
     pub drag_moved: bool,
     pub snap_inverted: bool,
+    pub pan_drag: Option<PanDrag>,
 }
 
 impl AudioPanel {
@@ -171,6 +182,7 @@ impl AudioPanel {
             drag_button: None,
             drag_moved: false,
             snap_inverted: false,
+            pan_drag: None,
         }
     }
 
@@ -191,6 +203,22 @@ impl AudioPanel {
         self.view_start =
             ((anchor - span as f64 * fraction).round() as i64).clamp(0, (duration - span).max(0));
         self.span = span;
+    }
+
+    /// Moves the view window from a cursor position while a pan is active.
+    /// The ruler and the scrollbar differ only in how many milliseconds one
+    /// pixel of travel is worth.
+    fn pan_to(&mut self, x: f32, width: f32, duration: i64) {
+        let Some(drag) = self.pan_drag else {
+            return;
+        };
+        let delta = if drag.shaft > 1. {
+            (x - drag.origin_x) / drag.shaft * (duration - self.span).max(0) as f32
+        } else {
+            -(x - drag.origin_x) / width.max(1.) * self.span as f32
+        };
+        self.view_start =
+            (drag.origin_start + delta.round() as i64).clamp(0, (duration - self.span).max(0));
     }
 
     pub fn render_compact(
@@ -776,6 +804,196 @@ impl AudioPanel {
                     .text_color(Theme::global(cx).muted_foreground)
                     .child(hint),
             );
+        // The wx audio display lets you drag its ruler to scroll sideways and
+        // gives you a scrollbar whose thumb is the visible window. Both are
+        // pure view panning here: they move `view_start` and never the cursor.
+        let (ruler, scrollbar) = if state.loaded {
+            let p = Theme::global(cx);
+            let duration = state.duration.max(1);
+            let ink = gpui_kit::rgba(0xc6d0dcff);
+            let step = ruler_step(self.span, width);
+            let mut ruler = div()
+                .id("audio-ruler")
+                .relative()
+                .w_full()
+                .h(px(20.))
+                .flex_shrink_0()
+                .overflow_hidden()
+                .bg(graph_bg)
+                .rounded_t(gpui_kit::px(crate::workspace_theme::RADIUS_MD))
+                .cursor_pointer()
+                .on_any_mouse_down(cx.listener(
+                    |view, event: &gpui_kit::MouseDownEvent, window, cx| {
+                        if !view.snapshot.audio.loaded || event.button != MouseButton::Left {
+                            return;
+                        }
+                        view.claim_key_focus(crate::KeyFocus::Audio, window, cx);
+                        view.audio.pan_drag = Some(PanDrag {
+                            origin_x: f32::from(event.position.x),
+                            origin_start: view.audio.view_start,
+                            shaft: 0.,
+                        });
+                    },
+                ))
+                .on_mouse_move(
+                    cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                        if event.pressed_button != Some(MouseButton::Left)
+                            || view.audio.pan_drag.is_none()
+                        {
+                            return;
+                        }
+                        let width = f32::from(view.audio.bounds.borrow().size.width).max(1.);
+                        view.audio.pan_to(
+                            f32::from(event.position.x),
+                            width,
+                            view.snapshot.audio.duration,
+                        );
+                        view.schedule_audio_render(cx);
+                        cx.notify();
+                    }),
+                )
+                .capture_any_mouse_up(cx.listener(|view, _: &gpui_kit::MouseUpEvent, _, cx| {
+                    if view.audio.pan_drag.take().is_some() {
+                        view.schedule_audio_render(cx);
+                    }
+                }))
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(px(1.))
+                        .bg(p.border),
+                );
+            let mut mark = (self.view_start / step) * step;
+            while mark <= self.view_start + self.span {
+                if mark >= self.view_start {
+                    let fraction = (mark - self.view_start) as f32 / self.span.max(1) as f32;
+                    ruler = ruler
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(14.))
+                                .left(relative(fraction))
+                                .w(px(1.5))
+                                .h(px(5.))
+                                .bg(ink.opacity(0.55)),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(1.))
+                                .left(relative((fraction + 3. / width).min(0.98)))
+                                .whitespace_nowrap()
+                                .text_size(px(9.5))
+                                .text_color(ink.opacity(0.85))
+                                .child(format_time(mark)),
+                        );
+                }
+                mark += step;
+            }
+            let (thumb_left, thumb_width) =
+                thumb_fractions(width, self.span, duration, self.view_start);
+            let mut scrollbar = div()
+                .id("audio-scrollbar")
+                .relative()
+                .w_full()
+                .h(px(12.))
+                .flex_shrink_0()
+                .cursor_pointer()
+                .on_any_mouse_down(
+                    cx.listener(|view, event: &gpui_kit::MouseDownEvent, _, cx| {
+                        if !view.snapshot.audio.loaded || event.button != MouseButton::Left {
+                            return;
+                        }
+                        let duration = view.snapshot.audio.duration.max(1);
+                        let span = view.audio.span;
+                        if duration <= span {
+                            return;
+                        }
+                        let bounds = *view.audio.bounds.borrow();
+                        let width = f32::from(bounds.size.width).max(1.);
+                        let thumb = (width * span as f32 / duration as f32).max(28.).min(width);
+                        let shaft = (width - thumb).max(1.);
+                        let target = (f32::from(event.position.x - bounds.left()) - thumb / 2.)
+                            .clamp(0., shaft);
+                        let start = (target / shaft * (duration - span) as f32).round() as i64;
+                        view.audio.view_start = start;
+                        view.audio.pan_drag = Some(PanDrag {
+                            origin_x: f32::from(event.position.x),
+                            origin_start: start,
+                            shaft,
+                        });
+                        view.schedule_audio_render(cx);
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_move(
+                    cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                        if event.pressed_button != Some(MouseButton::Left)
+                            || view.audio.pan_drag.is_none()
+                        {
+                            return;
+                        }
+                        let width = f32::from(view.audio.bounds.borrow().size.width).max(1.);
+                        view.audio.pan_to(
+                            f32::from(event.position.x),
+                            width,
+                            view.snapshot.audio.duration,
+                        );
+                        view.schedule_audio_render(cx);
+                        cx.notify();
+                    }),
+                )
+                .capture_any_mouse_up(cx.listener(|view, _: &gpui_kit::MouseUpEvent, _, cx| {
+                    if view.audio.pan_drag.take().is_some() {
+                        view.schedule_audio_render(cx);
+                    }
+                }))
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(px(4.))
+                        .h(px(5.))
+                        .rounded(px(3.))
+                        .bg(p.muted),
+                );
+            if state.end > state.start {
+                let from = state.start.max(0) as f32 / duration as f32;
+                let to = state.end.max(0) as f32 / duration as f32;
+                scrollbar = scrollbar.child(
+                    div()
+                        .absolute()
+                        .top(px(4.))
+                        .h(px(5.))
+                        .left(relative(from.clamp(0., 1.)))
+                        .w(relative((to - from).clamp(0., 1.).max(0.002)))
+                        .rounded(px(3.))
+                        .bg(appearance
+                            .color(
+                                "Colour/Audio Display/Line boundary Start",
+                                rgb(0x7ec2ff).into(),
+                            )
+                            .opacity(0.45)),
+                );
+            }
+            scrollbar = scrollbar.child(
+                div()
+                    .absolute()
+                    .top(px(3.))
+                    .h(px(7.))
+                    .left(relative(thumb_left))
+                    .w(relative(thumb_width))
+                    .rounded(px(4.))
+                    .bg(p.muted_foreground.opacity(0.65)),
+            );
+            (ruler.into_any_element(), scrollbar.into_any_element())
+        } else {
+            (div().into_any_element(), div().into_any_element())
+        };
         let palette = crate::workspace_theme::Palette::new(Theme::global(cx).is_dark());
         let mut panel = div()
             .v_flex()
@@ -802,7 +1020,9 @@ impl AudioPanel {
             )
             .p_3()
             .child(title_row.when(!state.loaded, |row| row.child(load_audio)))
-            .child(graph);
+            .child(ruler)
+            .child(graph)
+            .child(scrollbar);
         let compact_viewport = div()
             .h_flex()
             .flex_wrap()
@@ -941,9 +1161,40 @@ fn audio_image_layer(
         .child(img(image).size_full().object_fit(ObjectFit::Fill))
 }
 
+/// Spacing between ruler labels: the smallest step that still leaves room for
+/// a `0:00:01.00` label at the current zoom.
+fn ruler_step(span: i64, width: f32) -> i64 {
+    const STEPS: [i64; 14] = [
+        50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000,
+        600_000,
+    ];
+    let span = span.max(1);
+    STEPS
+        .iter()
+        .copied()
+        .find(|step| *step as f32 / span as f32 * width.max(1.) >= 76.)
+        .unwrap_or_else(|| *STEPS.last().unwrap())
+}
+
+/// Scrollbar thumb as `(left, width)` fractions of the track for a view window
+/// of `span` inside `duration`. The thumb keeps a minimum grab width, so the
+/// shaft it can travel along is what maps onto the unscrolled remainder.
+fn thumb_fractions(width: f32, span: i64, duration: i64, view_start: i64) -> (f32, f32) {
+    let track = width.max(1.);
+    let span = span.max(1);
+    let duration = duration.max(1);
+    if duration <= span {
+        return (0., 1.);
+    }
+    let thumb = (track * span as f32 / duration as f32).max(28.).min(track);
+    let shaft = (track - thumb).max(0.);
+    let left = view_start.clamp(0, duration - span) as f32 / (duration - span) as f32 * shaft;
+    (left / track, thumb / track)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::AudioPanel;
+    use super::{AudioPanel, PanDrag, thumb_fractions};
 
     #[test]
     fn zoom_preserves_time_under_pointer() {
@@ -979,5 +1230,41 @@ mod tests {
         assert_eq!(panel.view_start, start);
         panel.zoom_at(i64::MAX, 0.5, 900000);
         assert_eq!(panel.span, 600000);
+    }
+
+    #[test]
+    fn ruler_drag_scrolls_opposite_the_pointer_and_clamps() {
+        let mut panel = AudioPanel::new();
+        panel.view_start = 5000;
+        panel.span = 10_000;
+        panel.pan_drag = Some(PanDrag {
+            origin_x: 100.,
+            origin_start: 5000,
+            shaft: 0.,
+        });
+        // Dragging 200 px left over a 1000 px view moves the window 2 s later.
+        panel.pan_to(-100., 1000., 60_000);
+        assert_eq!(panel.view_start, 7000);
+        panel.pan_to(-5000., 1000., 60_000);
+        assert_eq!(
+            panel.view_start, 50_000,
+            "the window stops at duration - span"
+        );
+        panel.pan_to(9000., 1000., 60_000);
+        assert_eq!(panel.view_start, 0, "it never scrolls before zero");
+    }
+
+    #[test]
+    fn thumb_wraps_the_visible_window_and_keeps_a_grab_width() {
+        // 12 s of 120 s in a 1200 px track: a 120 px thumb on a 1080 px shaft.
+        assert_eq!(thumb_fractions(1200., 12_000, 120_000, 0), (0., 0.1));
+        let (left, width) = thumb_fractions(1200., 12_000, 120_000, 54_000);
+        assert!((left - 0.45).abs() < 1e-4, "{left}");
+        assert!((width - 0.1).abs() < 1e-4, "{width}");
+        // Fully zoomed out: the thumb covers the whole track.
+        assert_eq!(thumb_fractions(1200., 120_000, 120_000, 0), (0., 1.));
+        // A very wide view keeps the 28 px minimum grab width.
+        let (_, width) = thumb_fractions(800., 6_000, 600_000, 0);
+        assert!((width - 28. / 800.).abs() < 1e-5, "{width}");
     }
 }
