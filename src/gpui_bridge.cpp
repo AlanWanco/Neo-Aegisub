@@ -430,7 +430,12 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 
 		auto it = clients.find(socket);
 		if (it == clients.end()) return;
-		if (event.GetSocketEvent() == wxSOCKET_LOST || socket->Error()) {
+		// A write that filled the socket buffer leaves wxSOCKET_WOULDBLOCK in the
+		// socket's error state, and Error() keeps reporting it until the next
+		// operation. Treating that as fatal here closed the connection right after
+		// a partial write, so a large snapshot arrived truncated; only a lost
+		// connection is fatal, and WriteResponse reports real write errors.
+		if (event.GetSocketEvent() == wxSOCKET_LOST) {
 			CloseClient(socket);
 			return;
 		}
@@ -471,6 +476,9 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 	}
 
 	void BeginResponse(wxSocketBase *socket, Client& client, std::string response) {
+		// A new answer starts from the beginning of its own body; keeping the
+		// previous offset would skip bytes of the new response.
+		client.response_offset = 0;
 		client.response = std::move(response);
 		client.response.push_back('\n');
 		client.responding = true;
@@ -493,8 +501,9 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			bool const matching_still_frame = client.requested_frame == current_frame
 				&& event.frame_number == current_frame;
 			if (client.waiting_for_frame && client.video_epoch == video_epoch && client.provider == current_provider
-				&& (playing || matching_still_frame))
+				&& (playing || matching_still_frame)) {
 				ready.push_back(socket);
+			}
 		}
 		for (auto socket : ready) {
 			auto it = clients.find(socket);
@@ -522,9 +531,9 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 
 	void WriteResponse(wxSocketBase *socket, Client& client) {
 		while (client.response_offset < client.response.size()) {
-			size_t count = std::min<size_t>(65536, client.response.size() - client.response_offset);
+			size_t const count = std::min<size_t>(65536, client.response.size() - client.response_offset);
 			socket->Write(client.response.data() + client.response_offset, count);
-			size_t written = socket->LastCount();
+			size_t const written = socket->LastCount();
 			client.response_offset += written;
 			if (socket->Error()) {
 				if (socket->LastError() == wxSOCKET_WOULDBLOCK) return;
