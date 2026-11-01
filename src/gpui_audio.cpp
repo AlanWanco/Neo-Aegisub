@@ -23,14 +23,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
-#include <stdexcept>
 #include <sstream>
+#include <stdexcept>
 #include <wx/base64.h>
 #include <wx/bitmap.h>
 #include <wx/dcmemory.h>
 #include <wx/image.h>
 #include <wx/mstream.h>
+#include <wx/pen.h>
 
 namespace {
 std::string encode(json::Object const& object) {
@@ -126,7 +128,22 @@ struct Audio::Impl {
 		if (auto timing = context->audioController->GetTimingController()) {
 			AudioMarkerVector positions;
 			timing->GetMarkers(timing->GetIdealVisibleTimeRange(), positions);
-			for (auto marker : positions) markers.emplace_back(marker->GetPosition());
+			// Every provider draws with its own pen, and the seconds ticks are
+			// dotted while the structural lines are solid; without the pen the
+			// frontend cannot tell a second tick from a keyframe or the play
+			// cursor, so all of them looked like the same white line.
+			for (auto marker : positions) {
+				wxPen const pen = marker->GetStyle();
+				wxColour const colour = pen.GetColour();
+				char hex[10];
+				snprintf(hex, sizeof hex, "#%02x%02x%02x%02x", colour.Red(), colour.Green(), colour.Blue(), colour.Alpha());
+				json::Object item;
+				item["time"] = marker->GetPosition();
+				item["colour"] = std::string(hex);
+				item["width"] = marker->GetWidth() > 0 ? marker->GetWidth() : std::max(1, pen.GetWidth());
+				item["dotted"] = pen.GetStyle() == wxPENSTYLE_DOT;
+				markers.emplace_back(std::move(item));
+			}
 		}
 		result["markers"] = std::move(markers);
 		TimeRange range = context->audioController->GetPrimaryPlaybackRange();

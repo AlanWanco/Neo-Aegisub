@@ -6,13 +6,14 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::{
     Icon, StyledExt, Theme,
     button::{Button, ButtonVariants},
+    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
     scroll::ScrollableElement,
     switch::Switch,
 };
 use gpui_kit::{
-    AppContext, Context, Entity, IntoElement, Subscription, Window, div, prelude::*, px,
+    Anchor, AppContext, Context, Entity, IntoElement, Subscription, Window, div, prelude::*, px,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -40,11 +41,44 @@ pub struct PreferenceState {
     pub options: Vec<PreferenceOption>,
 }
 
+/// Colours travel to and from the host as `#rrggbb` or `#rrggbbaa`.
+///
+/// The host's alpha byte is Aegisub's transparency byte, not CSS opacity:
+/// `agi::Color::a` counts transparency, so `00` is opaque (`src/compat.cpp`
+/// builds `wxColour(r, g, b, 255 - color.a)`). Invert it on the way in and out
+/// so the picker previews the colour the grid and audio panel actually draw.
+fn parse_hex_colour(value: &str) -> Option<gpui_kit::Hsla> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if hex.len() != 6 && hex.len() != 8 {
+        return None;
+    }
+    let digits = u32::from_str_radix(hex, 16).ok()?;
+    let rgba = if hex.len() == 6 {
+        (digits << 8) | 0xff
+    } else {
+        (digits & 0xffff_ff00) | (0xff - (digits & 0xff))
+    };
+    Some(gpui_kit::rgba(rgba).into())
+}
+
+fn format_hex_colour(colour: gpui_kit::Hsla) -> String {
+    let rgba: gpui_kit::Rgba = colour.into();
+    let byte = |channel: f32| (channel.clamp(0., 1.) * 255.).round() as u32;
+    format!(
+        "#{:02x}{:02x}{:02x}{:02x}",
+        byte(rgba.r),
+        byte(rgba.g),
+        byte(rgba.b),
+        0xff - byte(rgba.a)
+    )
+}
+
 pub struct PreferencesPanel {
     pub options: Vec<PreferenceOption>,
     pub inputs: BTreeMap<String, Entity<InputState>>,
     pub drafts: BTreeMap<String, String>,
     pub search: Entity<InputState>,
+    pub pickers: BTreeMap<String, Entity<ColorPickerState>>,
     pub group: String,
     pub loading: bool,
     pub error: Option<String>,
@@ -66,11 +100,12 @@ impl PreferencesPanel {
             inputs: BTreeMap::new(),
             drafts: BTreeMap::new(),
             search,
-            group: "通用".into(),
+            pickers: BTreeMap::new(),
             loading: false,
             error: None,
             confirm_reset: false,
             subscriptions: vec![subscription],
+            group: String::new(),
         }
     }
 
@@ -120,7 +155,44 @@ impl PreferencesPanel {
             }
             let input = &view.preferences.inputs[&option.name];
             if input.read(cx).value().as_ref() != value {
-                input.update(cx, |state, cx| state.set_value(value, window, cx));
+                input.update(cx, |state, cx| state.set_value(value.clone(), window, cx));
+            }
+            if option.kind == "color" {
+                let colour =
+                    parse_hex_colour(&value).unwrap_or_else(|| gpui_kit::rgba(0xffff_ffff).into());
+                if !view.preferences.pickers.contains_key(&option.name) {
+                    let picker =
+                        cx.new(|cx| ColorPickerState::new(window, cx).default_value(colour));
+                    let key = option.name.clone();
+                    let subscription =
+                        cx.subscribe(&picker, move |view, _, event: &ColorPickerEvent, cx| {
+                            let ColorPickerEvent::Change(colour) = event;
+                            let Some(colour) = colour else {
+                                return;
+                            };
+                            let text = format_hex_colour(*colour);
+                            let original = view
+                                .preferences
+                                .options
+                                .iter()
+                                .find(|option| option.name == key)
+                                .map(|option| option.value.clone());
+                            if original.as_deref() == Some(text.as_str()) {
+                                view.preferences.drafts.remove(&key);
+                            } else {
+                                view.preferences.drafts.insert(key.clone(), text);
+                            }
+                            view.preferences.error = None;
+                            cx.notify();
+                        });
+                    view.preferences.pickers.insert(option.name.clone(), picker);
+                    view.preferences.subscriptions.push(subscription);
+                }
+                let picker = &view.preferences.pickers[&option.name];
+                if picker.read(cx).value().map(format_hex_colour).as_deref() != Some(value.as_str())
+                {
+                    picker.update(cx, |state, cx| state.set_value(colour, window, cx));
+                }
             }
         }
     }
@@ -325,10 +397,28 @@ impl PreferencesPanel {
                 } else {
                     String::new()
                 };
+                if option.kind == "color" {
+                    if let Some(picker) = self.pickers.get(&key) {
+                        // gpui-component's picker: its popover, palette and
+                        // sliders inherit the workspace theme instead of the
+                        // native macOS colour panel.
+                        control = control.child(
+                            ColorPicker::new(picker)
+                                .anchor(Anchor::TopRight)
+                                .accessibility_label(option.label.clone()),
+                        );
+                    }
+                }
                 control = control.child(
                     Input::new(input)
                         .disabled(self.loading)
-                        .w(px(if option.directory { 205. } else { 280. }))
+                        .w(px(if option.kind == "color" {
+                            230.
+                        } else if option.directory {
+                            205.
+                        } else {
+                            280.
+                        }))
                         .aria_label(option.label.clone()),
                 );
                 if option.directory {

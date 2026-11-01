@@ -72,7 +72,41 @@ pub struct AudioState {
     #[serde(default)]
     pub syllables: Vec<Syllable>,
     #[serde(default)]
-    pub markers: Vec<i64>,
+    pub markers: Vec<AudioMarker>,
+}
+
+/// One vertical line on the audio display. The host sends the pen each marker
+/// provider uses, so seconds ticks (dotted, dim) stay distinguishable from
+/// keyframes, the play cursor and inactive line boundaries.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AudioMarker {
+    pub time: i64,
+    #[serde(default)]
+    pub colour: String,
+    #[serde(default = "default_marker_width")]
+    pub width: i32,
+    #[serde(default)]
+    pub dotted: bool,
+}
+
+fn default_marker_width() -> i32 {
+    2
+}
+
+impl AudioMarker {
+    fn hsla(&self, fallback: gpui_kit::Hsla) -> gpui_kit::Hsla {
+        let hex = self.colour.strip_prefix('#').unwrap_or(&self.colour);
+        let digits = if hex.len() == 6 || hex.len() == 8 {
+            u32::from_str_radix(hex, 16).ok()
+        } else {
+            None
+        };
+        match digits {
+            Some(digits) if hex.len() == 6 => gpui_kit::rgba((digits << 8) | 0xff).into(),
+            Some(digits) => gpui_kit::rgba(digits).into(),
+            None => fallback,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -90,11 +124,18 @@ pub struct AudioPanel {
     pub span: i64,
     pub gain: i64,
     pub image: Option<Arc<Image>>,
+    /// Previous render, kept underneath the current one until the replacement
+    /// has finished loading. A new bitmap is decoded asynchronously, so drawing
+    /// it alone leaves a blank frame — that blank frame is the flicker seen
+    /// while scrolling.
+    pub fallback: Option<(Arc<Image>, i64, i64)>,
     /// Time range the current image was rendered for, so it can be shown at the
     /// right place while a sharper render for the new zoom is still in flight.
     pub image_start: i64,
     pub image_span: i64,
     pub loading: bool,
+    /// Bumped on every gesture step so only the last one schedules a render.
+    pub render_generation: u64,
     pub requested: Option<(u64, i64, i64, &'static str, i64, i64, u64)>,
     pub bounds: Rc<RefCell<Bounds<Pixels>>>,
     pub gesture: Option<u64>,
@@ -115,9 +156,11 @@ impl AudioPanel {
             span: 12000,
             gain: 800,
             image: None,
+            fallback: None,
             image_start: 0,
             image_span: 1,
             loading: false,
+            render_generation: 0,
             requested: None,
             bounds: Rc::new(RefCell::new(Bounds::default())),
             gesture: None,
@@ -279,21 +322,30 @@ impl AudioPanel {
                 .size_full(),
             );
         let width = f32::from(self.bounds.borrow().size.width).max(1.);
+        // The previous render stays underneath until the replacement has been
+        // decoded, otherwise every swap shows one blank frame.
+        if let Some((fallback, start, span)) = &self.fallback {
+            graph = graph.child(audio_image_layer(
+                fallback.clone(),
+                *start,
+                *span,
+                self.view_start,
+                self.span,
+                width,
+            ));
+        }
         if let Some(image) = &self.image {
             // Draw the image over the time range it was rendered for, so zooming
             // and panning stay in step with the gesture instead of freezing on
             // the previous render until the next one lands.
-            let image_left = (self.image_start - self.view_start) as f32 / self.span as f32;
-            let image_width = self.image_span as f32 / self.span as f32;
-            graph = graph.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(width * image_left))
-                    .w(px(width * image_width))
-                    .child(img(image.clone()).size_full().object_fit(ObjectFit::Fill)),
-            );
+            graph = graph.child(audio_image_layer(
+                image.clone(),
+                self.image_start,
+                self.image_span,
+                self.view_start,
+                self.span,
+                width,
+            ));
         } else {
             graph = graph.child(
                 div()
@@ -305,6 +357,30 @@ impl AudioPanel {
                         "载入音频后显示波形；视频有音轨时可从视频载入"
                     }),
             );
+        }
+        // Markers first: the selection borders and grab handles have to stay on
+        // top of them, otherwise the pale lines cross the red and blue handles
+        // and nothing reads as draggable.
+        let inactive_line = appearance.color(
+            "Colour/Audio Display/Line Boundary Inactive Line",
+            gpui_kit::rgba(0xe5c78bff).into(),
+        );
+        for marker in &state.markers {
+            if marker.time < self.view_start || marker.time > self.view_start + self.span {
+                continue;
+            }
+            let left = (marker.time - self.view_start) as f32 / self.span as f32 * width;
+            let mut line = div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(left))
+                .w(px(marker.width.max(1) as f32))
+                .bg(marker.hsla(inactive_line));
+            if marker.dotted {
+                line = line.opacity(0.55);
+            }
+            graph = graph.child(line);
         }
         let left = ((state.start - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
         let right = ((state.end - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
@@ -343,9 +419,11 @@ impl AudioPanel {
                             .absolute()
                             .top(px(2.))
                             .left(px(-3.))
-                            .w(px(8.))
-                            .h(px(10.))
+                            .w(px(9.))
+                            .h(px(11.))
                             .rounded(px(2.))
+                            .border_1()
+                            .border_color(gpui_kit::rgba(0x101418cc))
                             .bg(start_color),
                     )
                     .child(
@@ -353,29 +431,13 @@ impl AudioPanel {
                             .absolute()
                             .top(px(2.))
                             .right(px(-3.))
-                            .w(px(8.))
-                            .h(px(10.))
+                            .w(px(9.))
+                            .h(px(11.))
                             .rounded(px(2.))
+                            .border_1()
+                            .border_color(gpui_kit::rgba(0x101418cc))
                             .bg(end_color),
                     ),
-            );
-        }
-        for &marker in &state.markers {
-            if marker < self.view_start || marker > self.view_start + self.span {
-                continue;
-            }
-            let left = (marker - self.view_start) as f32 / self.span as f32 * width;
-            graph = graph.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(left))
-                    .w(px(2.))
-                    .bg(appearance.color(
-                        "Colour/Audio Display/Line Boundary Inactive Line",
-                        gpui_kit::rgba(0xe5c78bff).into(),
-                    )),
             );
         }
         if state.playing {
@@ -412,8 +474,9 @@ impl AudioPanel {
                         (view.audio.span as f64 * 1.25_f64.powf(-f64::from(delta))).round() as i64;
                     view.audio
                         .zoom_at(span, fraction, view.snapshot.audio.duration);
-                    view.refresh_audio(cx);
-                    cx.stop_propagation();
+                    // Wheel zoom fires many times per gesture; request one
+                    // render once it settles instead of one per tick.
+                    view.schedule_audio_render(cx);
                     cx.notify();
                 }),
             )
@@ -488,16 +551,18 @@ impl AudioPanel {
                 }),
             );
         let p = Theme::global(cx);
-        let rate_steps = [("0.5×", 50), ("1×", 100), ("1.5×", 150), ("2×", 200)];
+        // The host protocol takes percent, but `state.rate` is a multiplier;
+        // comparing 1.5 against 150 never matched, so the label stayed on 1×
+        // and every click resent the same 1.5× value.
+        let rate_steps = [("0.5×", 0.5), ("1×", 1.0), ("1.5×", 1.5), ("2×", 2.0)];
         let current = rate_steps
             .iter()
-            .position(|(_, rate)| (state.rate - *rate as f64).abs() < 0.5)
+            .position(|(_, rate)| (state.rate - rate).abs() < 0.05)
             .unwrap_or(1);
         let next = rate_steps[(current + 1) % rate_steps.len()];
         let rates = div()
             .h_flex()
             .items_center()
-            .gap_0p5()
             .p_0p5()
             .rounded_full()
             .bg(p.muted)
@@ -512,7 +577,7 @@ impl AudioPanel {
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
                         view.invoke(
-                            json!({"op":"audio_action", "action":"rate", "value":next.1}),
+                            json!({"op":"audio_action", "action":"rate", "value":(next.1 * 100.).round() as i64}),
                             cx,
                         )
                     })),
@@ -854,6 +919,26 @@ impl AudioPanel {
             .child(karaoke.when(state.karaoke, |row| row));
         panel.into_any_element()
     }
+}
+
+/// Places one waveform bitmap over the time range it was rendered for.
+fn audio_image_layer(
+    image: Arc<Image>,
+    start: i64,
+    span: i64,
+    view_start: i64,
+    view_span: i64,
+    width: f32,
+) -> impl IntoElement {
+    let left = (start - view_start) as f32 / view_span.max(1) as f32;
+    let image_width = span.max(1) as f32 / view_span.max(1) as f32;
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(width * left))
+        .w(px(width * image_width))
+        .child(img(image).size_full().object_fit(ObjectFit::Fill))
 }
 
 #[cfg(test)]

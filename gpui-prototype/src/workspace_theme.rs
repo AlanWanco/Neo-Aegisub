@@ -9,6 +9,7 @@ gpui_kit::assets::icon_assets!(
     StudioIcons,
     [
         Captions,
+        Pencil,
         AudioLines,
         Languages,
         Clock3,

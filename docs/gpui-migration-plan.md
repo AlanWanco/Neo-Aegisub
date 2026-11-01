@@ -118,6 +118,24 @@ macOS 个人词典属于系统状态，隔离 profile 不能隔离学习词。�
 
 2026-11-01 音频把手与缩放跟随：灰色竖线原来也画了手柄，但它们对应秒刻度、非活动行与关键帧，本来就不响应拖动；现在只有活动行的两个选区边界带手柄（起点取 `Colour/Audio Display/Line boundary Start`，终点取 `... End`），其余 marker 只画 2px 竖线。实际鼠标拖动手柄把选区终点 5000 改到 3581，宿主按同一手势收到 down/drag/up。滚轮缩放约 400ms 黏滞的成因是 `refresh_audio` 要求回复的 `view_start`/`span`/`mode`/`gain` 与当前视图完全相等才换图，滚动期间视图每帧都在变，回复被逐条丢弃，波形在整个手势里冻结、停手才跳变；改为只校验 `epoch` 与 `render_revision`，并记录每张图自身的渲染范围（`image_start`/`image_span`），按该范围定位绘制，新渲染在飞时旧图按比例跟随手势。一次连续滚轮（span 12000→4889）实测每 16ms 一帧、图片范围落后 1–2 步（约 20–40ms）而不是冻结，停手后 `image_span` 与 `span` 相等；灰色 marker 在顶部各行仍是 4 设备像素竖线，红/蓝手柄为 16×20 设备像素。`cargo fmt --check`、11 项 Rust 测试与 Meson `gtest main` 通过。
 
+2026-11-01 标记可读性与主题取色器：音频快照原来只发 `markers` 时间点，前端只能统一画成灰色竖线，秒刻度因此盖住选区把手。现在宿主按各 provider 自己的画笔发 `{time, colour, width, dotted}`（关键帧取 `Colour/Audio Display/Keyframe`、秒刻度取 `.../Seconds Line` 且 `wxPENSTYLE_DOT`、播放位置取 `.../Play Cursor`、非活动行取 `.../Line Boundary Inactive Line`），前端在选区块之前绘制，秒刻度用 1px + 0.55 透明度，把手放大到 9×11 并加深色描边。像素核对：起点边界为 4 设备像素 `#d80000` 实线，秒刻度为 1px 虚化蓝线，把手区域不再被白/蓝线穿过。`Audio/Display/Draw/Seconds=0` 时 marker 列表只剩两条实线边界，说明关掉秒刻度后仍在的竖线是关键帧、播放位置与非活动行边界，不是漏关的秒刻度。
+
+颜色偏好改用 gpui-component 的主题取色器（`ColorPicker` + `ColorPickerState`，弹层为同主题的 Palette/HSLA 面板，不是系统取色盘），十六进制输入框保留为次要编辑入口。宿主 `GetHexFormatted(true)` 的最后一个字节是 Aegisub 的“透明度”而不是 CSS 不透明度（`src/compat.cpp` 用 `255 - color.a` 构造 `wxColour`），前端必须取反，否则 `#D8000000` 会被当成全透明，色块直接看不见。取反后实测：`起始边线` 显示 `#d80000` 实心色块，`当前帧范围`（`rgba(255,255,255,160)`）显示半透明白色块；把 `#ffffffa0` 经取色器应用到 `config.json` 后仍是 `rgba(255, 255, 255, 160)`，取反不影响宿主语义。
+
+同轮界面收口：`文本编辑` 标题前补 `Pencil` 图标（`StudioIcons` 之前没打包该 svg，图标枚举存在但画不出来），原来的放大/缩小编辑区箭头换成“上一条字幕/下一条字幕”，实测连按可在第 4→3→2→3 行之间切换；`样式 / 角色` 列改为同一行横向排列（样式限宽 60% 省略，角色随后），默认字号由 `grid_size * 0.8` 提到 `* 0.9`（下限 12）。
+
+2026-11-01 波形滚动闪烁：闪烁不是缺少波形缓存，而是换图时机。`Image::from_bytes` 以字节哈希作 image id，新位图由 `image_cache` 异步解码，解码完成前 `get()` 返回 `None`；旧实现每个滚轮刻度都发一次 `audio_render` 并立刻 `image.replace` + `remove_asset`，于是每个刻度都空一帧。现在滚轮缩放走 `schedule_audio_render`：每次手势把 `render_generation` 加一，120ms 后只有代次未变才真正请求；换图时把上一张（连同它自己的 start/span）留在 `AudioPanel.fallback` 垫在下面，新图解码完成前仍有画面；回复末尾只在当前视图与已请求的 `(epoch, view_start, span, mode, gain, decoded, revision)` 不同时才续发。切换媒体时 `clear_audio_image` 连同 fallback 一起释放，不会残留上一条波形。实测：宿主临时打印 `audio/render`（验证后删除并重建），40 个事件的密集手势只产生 1 次请求；缩到最小 span 后继续放大为 0 次（已被夹紧）；同一次手势中连续抓 20 帧，音频面板亮像素始终 324322–325987（空白帧应接近 0）。Rust 11 项测试、前端与宿主 release 构建通过。
+
+2026-11-01 播放倍速按钮：音频面板的倍速按钮原来把 `state.rate`（0.5–2.0 的倍数）和 `rate_steps` 里的百分数 50/100/150/200 直接比较，永远匹配不到，标签固定显示 `1×`，每次点击都重发 1.5×，所以点了像没反应。改为按倍率比较（容差 0.05），发送时再乘 100 取整给宿主。实测连点四次依次为 1.0→1.5→2.0→0.5→1.0，标签随之显示 `1.5×`、状态栏显示 `1.50×`；`audio_action play` 后按 1.5 秒墙钟采样：100% 走 1505ms、200% 走 3006ms、50% 走 751ms，即宿主侧倍速真实生效。Rust 11 项测试与 `fmt --check` 通过。
+
+2026-11-01 字幕列表列分隔线：表头单元格本身就是拖拽调整列宽的把手，但原来整格只涂表头底色、没有任何分界，看不出哪里能拖。现在每个定宽列在右缘画一条 1px 竖线（`column_rule`），行与表头共用同一几何，线从上到下连续；颜色取 `muted.opacity(0.45)`（浅色主题下实测 `#aab2c7`，落在行底 `#e5eaff` 上），比 `Colour/Subtitle Grid/Lines` 的横线（`#e6eaf1`）明显，又不至于盖过文字。单元格改为 `h_full().flex().items_center()` 让竖线撑满行高，文字基线实测未移动（行文本 y 仍为 0.4255/0.4274），表头四个标签 x 位置与改动前完全一致；拖动 1975px 处的分界后列宽照常变化。
+
+2026-11-01 列表时间列跟随按帧显示：`按帧显示` 只把编辑区的 `始`/`终` 换成帧号，字幕列表的 `开始→结束` 列仍打印时间码，两处对不上。现在列表与字段共用同一个开关：`frame_rate` 由 `time_in_frames` 且 `snapshot.fps > 0` 决定，`subtitle_cell` 的 `Time` 分支在拿到帧率时按 `ms * fps / 1000` 四舍五入成整数帧，否则退回 `format_time`。真窗口实测（24.0008 fps，四行 0/5/8/11/14 秒）：关闭时列为 `0:00:00.00 → 0:00:05.00`、`0:00:05.00 → 0:00:08.00`…，开启后同一列变为 `0 → 120`、`120 → 192`、`192 → 264`、`264 → 336`，与编辑区字段 `264`/`336` 一致；再次关闭后恢复时间码。帧号文本更短，不会撑破列宽。
+
+2026-11-01 配置落盘：GPUI 的开关几乎都走 `cmd::call`，而这些命令改的 option 过去只在 `Options` 析构时 `Flush()`，进程被强杀就整批丢失。现在 `OptionValue::NotifyChanged()` 顺带递增一个原子计数器 `agi::OptionValueRevision()`，`src/gpui_bridge.cpp` 的 `Command()` 开头放一个 RAII 守卫，命令返回时若计数变了才 `config::opt->Flush()`——只读命令不写盘。语言选择另有单独的坑：`WITH_GPUI_DEFAULT` 分支过去每次启动都 `OPT_SET("App/Language")->SetString("zh_CN")`，把用户在偏好里选的语言覆盖掉；现在只读存储值，仅在存储语言不可用时用 `zh_CN` 兜底。隔离 profile 实测：`Audio/Auto/Scroll` 用 `audio/opt/autoscroll` 切换后立刻 `kill -9` 宿主，磁盘上已是新值；`App/Language` 写成 `ja` 后启动仍是 `ja`（修复前启动即被改回 `zh_CN`）。
+
+2026-11-01 视频卡顿：两个独立缺陷叠加。其一是视频帧纹理泄漏——每帧的 `RenderImage` 都会进 sprite atlas，而 `replace_frame_image` 直接覆盖旧值从不释放，播放时进程按每帧一张图的速率膨胀（实测 1.8 秒 135MB→412MB 后被系统杀掉），现在换图前 `cx.drop_image(previous, None)`，清空时同样释放，同样负载下 RSS 稳定在 143–155MB。其二是大响应被截断——`OnSocket` 把 `socket->Error()` 当作致命错误，而一次写满 socket 缓冲留下的 `wxSOCKET_WOULDBLOCK` 会留在错误状态里，下一次 OUTPUT 事件到达时就被当成断线，于是 2000 行工程约 700KB 的快照只写出 319020 字节就关连接，前端 JSON 解析失败、连错 5 次自杀；现在只有 `wxSOCKET_LOST` 才算断线，写错误由 `WriteResponse` 自己判断，`BeginResponse` 也把 `response_offset` 归零。实测 2000 行工程 + 1080p30 视频 + 噪声音频连续播放 15 秒：进程存活、`frame/produced` 间隔 p50 31.0ms、步进 1（≈32fps）、RSS 143MB、零桥接失败（修复前同一负载 0.8–4 秒内必死）。
+
 打开字幕时询问关联媒体、未保存确认、加载关联脚本的信任提示，以及未移植的对话框仍可能进入 wx 原生模态循环；桥接等待此时不等于程序崩溃。输入法、Windows 栈溢出和跨平台运行仍为未验证项。
 
 ## 提交边界

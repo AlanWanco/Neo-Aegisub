@@ -318,7 +318,7 @@ impl SubtitleColumn {
         match self {
             Self::IdLayer => (secondary * 4.2).clamp(46., 70.),
             Self::Time => (secondary * 15.5).clamp(170., 245.),
-            Self::StyleActor => (secondary * 8.4).clamp(100., 145.),
+            Self::StyleActor => (secondary * 12.6).clamp(150., 235.),
             Self::Layer => 52.,
             Self::Effect => (secondary * 9.).clamp(90., 160.),
             Self::Actor => (secondary * 7.5).clamp(80., 140.),
@@ -331,7 +331,7 @@ impl SubtitleColumn {
         match self {
             Self::IdLayer => 44.,
             Self::Time => 172.,
-            Self::StyleActor => 64.,
+            Self::StyleActor => 104.,
             Self::Layer => 32.,
             Self::Effect => 52.,
             Self::Actor => 52.,
@@ -1174,24 +1174,36 @@ struct Workspace {
 }
 
 impl Workspace {
-    fn clear_frame_image(&mut self, _cx: &mut Context<Self>) {
-        self.frame_image.take();
+    fn clear_frame_image(&mut self, cx: &mut Context<Self>) {
+        // Every frame becomes a texture in the sprite atlas, and the atlas keeps
+        // it until it is dropped explicitly. Playing back a video without this
+        // grows the process by one decoded frame per rendered picture until the
+        // window is killed for memory.
+        if let Some(image) = self.frame_image.take() {
+            cx.drop_image(image, None);
+        }
         self.frame_image_frame = -1;
         self.frame_image_revision = u64::MAX;
     }
 
     fn replace_frame_image(
         &mut self,
+        cx: &mut Context<Self>,
         image: Arc<gpui_kit::RenderImage>,
         frame: i64,
         revision: u64,
     ) {
-        self.frame_image = Some(image);
+        if let Some(previous) = self.frame_image.replace(image) {
+            cx.drop_image(previous, None);
+        }
         self.frame_image_frame = frame;
         self.frame_image_revision = revision;
     }
 
     fn clear_audio_image(&mut self, cx: &mut Context<Self>) {
+        if let Some((fallback, _, _)) = self.audio.fallback.take() {
+            fallback.remove_asset(cx);
+        }
         if let Some(image) = self.audio.image.take() {
             image.remove_asset(cx);
         }
@@ -4428,15 +4440,7 @@ impl Workspace {
         if !self.snapshot.audio.loaded || self.audio.loading {
             return;
         }
-        let request = (
-            self.snapshot.audio.epoch,
-            self.audio.view_start,
-            self.audio.span,
-            self.audio.mode,
-            self.audio.gain,
-            self.snapshot.audio.decoded,
-            self.snapshot.audio.render_revision,
-        );
+        let request = self.audio_request();
         if self.audio.requested == Some(request) {
             return;
         }
@@ -4460,8 +4464,19 @@ impl Workspace {
                     Ok((state, start, image)) if state.epoch == view.snapshot.audio.epoch
                         && state.render_revision == view.snapshot.audio.render_revision => {
                         if let Some(image) = image {
-                            if let Some(previous) = view.audio.image.replace(image) {
-                                previous.remove_asset(cx);
+                            // Drop the render from two swaps ago, keep the one on
+                            // screen as the fallback layer: the new bitmap is
+                            // decoded asynchronously and would show as a blank
+                            // frame until it is ready.
+                            if let Some((older, _, _)) = view.audio.fallback.take() {
+                                older.remove_asset(cx);
+                            }
+                            let previous = view.audio.image.replace(image);
+                            let (previous_start, previous_span) =
+                                (view.audio.image_start, view.audio.image_span);
+                            if let Some(previous) = previous {
+                                view.audio.fallback =
+                                    Some((previous, previous_start, previous_span));
                             }
                             view.audio.image_start = start.round() as i64;
                             view.audio.image_span = request.2;
@@ -4470,10 +4485,50 @@ impl Workspace {
                     Ok(_) => {},
                     Err(error) => { view.status = format!("音频画面生成失败：{error}"); view.audio.requested = None; }
                 }
-                if view.audio.requested.is_some() { view.refresh_audio(cx); }
+                // Wait for the gesture to settle before asking for the next
+                // render; re-requesting on every reply is what made scrolling
+                // flicker through one bitmap swap per wheel tick.
+                if view.audio.requested != Some(view.audio_request()) {
+                    view.schedule_audio_render(cx);
+                }
                 cx.notify();
             });
         }).detach();
+    }
+
+    /// Everything that decides which waveform the host has to render.
+    fn audio_request(&self) -> (u64, i64, i64, &'static str, i64, i64, u64) {
+        (
+            self.snapshot.audio.epoch,
+            self.audio.view_start,
+            self.audio.span,
+            self.audio.mode,
+            self.audio.gain,
+            self.snapshot.audio.decoded,
+            self.snapshot.audio.render_revision,
+        )
+    }
+
+    /// Debounced render request for view changes that arrive in a burst, such as
+    /// wheel zooming: only the last change in the gesture triggers a render.
+    fn schedule_audio_render(&mut self, cx: &mut Context<Self>) {
+        self.audio.render_generation = self.audio.render_generation.wrapping_add(1);
+        let generation = self.audio.render_generation;
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(120))
+                .await;
+            let Some(view) = weak.upgrade() else {
+                return;
+            };
+            let _ = view.update(cx, |view, cx| {
+                if view.audio.render_generation == generation {
+                    view.refresh_audio(cx);
+                }
+            });
+        })
+        .detach();
     }
 
     fn begin_audio_drag(
@@ -6140,8 +6195,7 @@ impl Workspace {
                             // resumed playback until it catches the previous position.
                             if generation < view.frame_image_generation { return; }
                             if !view.snapshot.playing && frame != view.snapshot.frame { return; }
-                            view.frame_image_generation = generation;
-                            view.replace_frame_image(image, frame, request_revision);
+                            view.replace_frame_image(cx, image, frame, request_revision);
                             cx.notify();
                         });
                     }
@@ -7731,7 +7785,7 @@ impl Workspace {
         let grid_font = appearance.grid_font.clone();
         // Secondary columns scale with the configured grid font so the list
         // reads as one type scale instead of 16px text beside 11px labels.
-        let secondary_size = (grid_size * 0.8).clamp(10., 20.);
+        let secondary_size = (grid_size * 0.9).clamp(12., 22.);
         // Column widths follow the type size, otherwise a larger grid font
         // pushes the time range into the style column. Anything the user has
         // dragged keeps its pixel width instead.
@@ -7815,6 +7869,13 @@ impl Workspace {
         let border = appearance.color("Colour/Subtitle Grid/Lines", p.divider);
         let header_bg = appearance.color("Colour/Subtitle Grid/Header", p.inset);
         let muted = p.muted;
+        // The list follows the same toggle as the start/end fields; otherwise the
+        // grid keeps timecodes while the editor shows frame numbers.
+        let frame_rate = self
+            .time_in_frames
+            .then_some(())
+            .and(self.snapshot.fps)
+            .filter(|fps| *fps > 0.);
         let selected_bg = appearance.color("Colour/Subtitle Grid/Background/Selection", p.selected);
         let accent = p.accent;
         let selected = self.snapshot.selected.clone();
@@ -8112,6 +8173,26 @@ impl Workspace {
                     }),
                 )
         });
+        // The editor header navigates lines instead of resizing the panel: the
+        // rail handle already resizes it, and stepping through dialogue is what
+        // timing work actually needs.
+        let (previous_line, next_line) = {
+            let index = self
+                .snapshot
+                .lines
+                .iter()
+                .position(|line| line.id == self.selected_line);
+            match index {
+                Some(index) => (
+                    index.checked_sub(1).map(|i| self.snapshot.lines[i].id),
+                    self.snapshot.lines.get(index + 1).map(|line| line.id),
+                ),
+                None => (
+                    self.snapshot.lines.last().map(|line| line.id),
+                    self.snapshot.lines.first().map(|line| line.id),
+                ),
+            }
+        };
         let editor_height = self.subtitle_editor_height;
         // Header, formatting bar and the text box stay in one column so the
         // inspector can sit beside them as a second column.
@@ -8131,6 +8212,11 @@ impl Workspace {
                             .gap_2()
                             .items_center()
                             .child(
+                                Icon::new(IconName::Pencil)
+                                    .size(px(15.))
+                                    .text_color(p.muted),
+                            )
+                            .child(
                                 div()
                                     .flex_shrink_0()
                                     .text_sm()
@@ -8139,29 +8225,37 @@ impl Workspace {
                             )
                             .child(div().flex_1())
                             .child(
-                                Button::new("shrink-subtitle-editor").rounded(gpui_kit::px(999.)).small().px(gpui_kit::px(13.)).py(gpui_kit::px(3.))
+                                Button::new("previous-subtitle-line")
+                                    .rounded(gpui_kit::px(999.))
+                                    .small()
+                                    .px(gpui_kit::px(9.))
+                                    .py(gpui_kit::px(3.))
                                     .child(Icon::new(IconName::ChevronUp).size(px(15.)))
-                                    .accessibility_label("缩小字幕编辑区")
-                                    .tooltip("缩小字幕编辑区")
+                                    .accessibility_label("上一条字幕")
+                                    .tooltip("上一条字幕")
                                     .ghost()
-
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.subtitle_editor_height =
-                                            (view.subtitle_editor_height - 24.).max(210.);
-                                        cx.notify();
+                                    .disabled(previous_line.is_none())
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        if let Some(id) = previous_line {
+                                            view.select_lines(id, false, false, cx);
+                                        }
                                     })),
                             )
                             .child(
-                                Button::new("grow-subtitle-editor").rounded(gpui_kit::px(999.)).small().px(gpui_kit::px(13.)).py(gpui_kit::px(3.))
+                                Button::new("next-subtitle-line")
+                                    .rounded(gpui_kit::px(999.))
+                                    .small()
+                                    .px(gpui_kit::px(9.))
+                                    .py(gpui_kit::px(3.))
                                     .child(Icon::new(IconName::ChevronDown).size(px(15.)))
-                                    .accessibility_label("增大字幕编辑区")
-                                    .tooltip("增大字幕编辑区")
+                                    .accessibility_label("下一条字幕")
+                                    .tooltip("下一条字幕")
                                     .ghost()
-
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.subtitle_editor_height =
-                                            (view.subtitle_editor_height + 24.).min(420.);
-                                        cx.notify();
+                                    .disabled(next_line.is_none())
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        if let Some(id) = next_line {
+                                            view.select_lines(id, false, false, cx);
+                                        }
                                     })),
                             )
                             .child(
@@ -8297,12 +8391,14 @@ impl Workspace {
                             .h_full()
                             .items_center()
                             .justify_between()
+                            .relative()
                             .w(px(width))
                             .flex_shrink_0()
                             .mr(px(COLUMN_GAP))
                             .text_size(px(secondary_size))
                             .text_color(muted)
                             .child(column.label())
+                            .child(column_rule(muted.opacity(0.45)))
                             .cursor_col_resize()
                             // Painting the strip colour keeps a full-cell
                             // hitbox: a bare div only reacts over its text.
@@ -8456,6 +8552,8 @@ impl Workspace {
                                                 time_font.clone(),
                                                 muted,
                                                 accent,
+                                                muted.opacity(0.45),
+                                                frame_rate,
                                             )
                                         }))
                                         .children({
@@ -8567,6 +8665,18 @@ impl Workspace {
     }
 }
 
+// The header cell doubles as the resize handle, so every column boundary needs
+// a visible hairline; without it the drag target is invisible.
+fn column_rule(colour: gpui_kit::Hsla) -> gpui_kit::Div {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right_0()
+        .w(px(1.))
+        .bg(colour)
+}
+
 fn subtitle_cell(
     column: SubtitleColumn,
     width: f32,
@@ -8575,57 +8685,75 @@ fn subtitle_cell(
     time_font: gpui_kit::SharedString,
     muted: gpui_kit::Hsla,
     accent: gpui_kit::Hsla,
+    divider: gpui_kit::Hsla,
+    frame_rate: Option<f64>,
 ) -> gpui_kit::AnyElement {
     let cell = || {
         div()
             .w(px(width))
+            .h_full()
+            .flex()
+            .items_center()
+            .relative()
             .flex_shrink_0()
             // Fixed-width columns overflowed into the next one when the grid
             // font grew; clip instead of letting the time run under the style.
             .overflow_hidden()
             .mr(px(COLUMN_GAP))
             .text_size(px(secondary_size))
+            .child(column_rule(divider))
     };
     match column {
         SubtitleColumn::IdLayer => cell()
             .text_color(muted)
             .child(format!("{:03} / {}", line.row + 1, line.layer))
             .into_any_element(),
-        SubtitleColumn::Time => cell()
-            .font_family(time_font)
-            .text_color(muted)
-            .child(format!(
-                "{} → {}",
-                format_time(line.start),
-                format_time(line.end)
-            ))
-            .into_any_element(),
+        SubtitleColumn::Time => {
+            // Same numbers the start/end fields show once 按帧显示 is on.
+            let range = match frame_rate {
+                Some(fps) => format!(
+                    "{} → {}",
+                    (line.start as f64 * fps / 1000.).round() as i64,
+                    (line.end as f64 * fps / 1000.).round() as i64
+                ),
+                None => format!("{} → {}", format_time(line.start), format_time(line.end)),
+            };
+            cell()
+                .font_family(time_font)
+                .text_color(muted)
+                .child(range)
+                .into_any_element()
+        }
         SubtitleColumn::StyleActor => {
-            // Stack style over actor and centre the block, so a single-line
-            // cell lines up with the other columns instead of sitting on the
-            // top edge.
-            let mut stacked = cell()
-                .v_flex()
-                .justify_center()
+            // Style and actor share one line now: the stacked pair doubled the
+            // row height for two short labels. Style keeps the accent colour and
+            // the actor truncates first.
+            let mut row = cell()
+                .h_flex()
+                .items_center()
+                .gap_1()
                 .min_w_0()
                 .overflow_hidden()
                 .child(
                     div()
+                        .flex_shrink_0()
+                        .max_w(px(width * 0.6))
                         .overflow_hidden()
                         .text_ellipsis()
                         .text_color(accent)
                         .child(line.style.clone()),
                 );
             if !line.actor.is_empty() {
-                stacked = stacked.child(
+                row = row.child(
                     div()
+                        .min_w_0()
                         .overflow_hidden()
                         .text_ellipsis()
                         .text_color(muted)
                         .child(line.actor.clone()),
                 );
             }
-            stacked.into_any_element()
+            row.into_any_element()
         }
         SubtitleColumn::Layer => cell()
             .text_color(muted)
