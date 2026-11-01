@@ -26,7 +26,7 @@
 namespace gpui {
 std::string_view CommandSurface(std::string_view name) {
 	static const std::set<std::string_view> dialogs = {
-		"am/manager", "am/meta", "app/about", "app/language", "app/log", "app/options", "app/updates",
+		"am/manager", "am/meta", "app/language", "app/options",
 		"audio/open", "audio/save/clip", "edit/find_replace", "edit/line/paste/over",
 		"keyframe/open", "keyframe/save", "subtitle/attachment", "subtitle/find", "subtitle/open",
 		"subtitle/open/autosave", "subtitle/open/charset", "subtitle/open/video", "subtitle/properties",
@@ -42,6 +42,7 @@ std::string_view CommandSurface(std::string_view name) {
 		"video/copy_coordinates", "video/detach", "video/focus_seek",
 		"edit/line/paste/over"
 	};
+	if (name == "app/about" || name == "app/log" || name == "app/updates") return "native";
 	if (name.starts_with("video/zoom/") || name == "video/reset_pan" || name == "video/show_overscan") return "native";
 	if (name == "app/toggle/toolbar" || name == "subtitle/spellcheck" || name == "subtitle/open/charset" || name == "subtitle/open/autosave" ||
 		name == "audio/save/clip" || name == "keyframe/save" || name == "timecode/save" || name == "app/options" ||

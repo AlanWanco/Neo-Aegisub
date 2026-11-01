@@ -20,6 +20,8 @@ use crate::{
 #[derive(Deserialize)]
 pub struct HotkeyState {
     pub bindings: Vec<Hotkey>,
+    pub imported: Option<i64>,
+    pub skipped: Option<i64>,
 }
 
 pub struct HotkeyPanel {
@@ -125,7 +127,8 @@ impl HotkeyPanel {
             .child(Button::new("hotkey-reset").icon(IconName::RotateCw).rounded(gpui_kit::px(999.)).small().px(gpui_kit::px(13.)).py(gpui_kit::px(3.)).label(if self.confirm_reset { "确认恢复全部默认快捷键" } else { "恢复默认快捷键…" }).disabled(self.loading).on_click(cx.listener(|view, _, _, cx| {
                 if view.hotkeys.confirm_reset { view.hotkey_request(json!({"action":"reset"}), cx); }
                 else { view.hotkeys.confirm_reset = true; cx.notify(); }
-            })));
+            })))
+            .child(Button::new("hotkey-import").icon(IconName::FileInput).rounded(gpui_kit::px(999.)).small().px(gpui_kit::px(13.)).py(gpui_kit::px(3.)).label("导入旧版快捷键…").disabled(self.loading).on_click(cx.listener(|view, _, _, cx| view.hotkey_import(cx))));
         if self.confirm_reset {
             actions = actions.child(
                 Button::new("hotkey-cancel-reset")

@@ -84,6 +84,21 @@ struct hotkey_visitor : json::ConstVisitor {
 	void Visit(bool) override { }
 	void Visit(const json::Null&) override { }
 };
+
+/// Convert one context's command -> shortcut list object into @a map.
+/// @return True if any entry used the pre-3.1 {modifiers, key} form.
+bool build_hotkeys(std::string_view context, json::Object const& hotkeys, Hotkey::HotkeyMap& map) {
+	bool legacy = false;
+	for (auto const& command : hotkeys) {
+		json::Array const& command_hotkeys = command.second;
+
+		hotkey_visitor visitor{context, command.first, map};
+		for (auto const& hotkey : command_hotkeys)
+			hotkey.Accept(visitor);
+		legacy |= visitor.needs_backup;
+	}
+	return legacy;
+}
 }
 
 Hotkey::Hotkey(fs::path const& file, std::string_view default_config)
@@ -93,19 +108,15 @@ Hotkey::Hotkey(fs::path const& file, std::string_view default_config)
 
 	auto root = json_util::file(config_file, default_config);
 	for (auto const& hotkey_context : static_cast<json::Object const&>(root))
-		BuildHotkey(hotkey_context.first, hotkey_context.second);
+		backup_config_file |= build_hotkeys(hotkey_context.first, hotkey_context.second, cmd_map);
 	UpdateStrMap();
 }
 
-void Hotkey::BuildHotkey(std::string_view context, json::Object const& hotkeys) {
-	for (auto const& command : hotkeys) {
-		json::Array const& command_hotkeys = command.second;
-
-		hotkey_visitor visitor{context, command.first, cmd_map};
-		for (auto const& hotkey : command_hotkeys)
-			hotkey.Accept(visitor);
-		backup_config_file |= visitor.needs_backup;
-	}
+Hotkey::HotkeyMap ParseHotkeyMap(json::Object const& root) {
+	Hotkey::HotkeyMap map;
+	for (auto const& hotkey_context : root)
+		build_hotkeys(hotkey_context.first, hotkey_context.second, map);
+	return map;
 }
 
 std::string_view Hotkey::Scan(std::string_view context, std::string_view str, bool always) const {

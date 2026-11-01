@@ -189,12 +189,15 @@ fn native_menu_items(catalog: &Catalog, submenu: &str) -> Vec<gpui_kit::MenuItem
         } else {
             menu_label(&entry.text)
         };
-        items.push(gpui_kit::MenuItem::action(
-            label,
-            RunCommand {
-                name: command.name.clone(),
-            },
-        ));
+        items.push(
+            gpui_kit::MenuItem::action(
+                label,
+                RunCommand {
+                    name: command.name.clone(),
+                },
+            )
+            .checked(command.active),
+        );
     }
     while matches!(items.last(), Some(gpui_kit::MenuItem::Separator)) {
         items.pop();
@@ -428,12 +431,19 @@ struct Notice {
     choices: Vec<String>,
 }
 
-/// Host-drawn dialogs the front end renders itself: about, log, language and
-/// the font picker.
+/// Shared host data presented by the GPUI dialogs.
 struct LogEntry {
     section: String,
     message: String,
     severity: String,
+}
+
+impl LogEntry {
+    fn matches(&self, query: &str) -> bool {
+        query.is_empty()
+            || self.message.to_lowercase().contains(query)
+            || self.section.to_lowercase().contains(query)
+    }
 }
 
 struct LanguageItem {
@@ -449,7 +459,27 @@ struct FontState {
     underline: bool,
 }
 
+const FORK_RELEASES_URL: &str = "https://github.com/AlanWanco/Aegisub/releases";
+
+#[derive(Default, Deserialize)]
+struct UpdateState {
+    enabled: bool,
+    checking: bool,
+    current_version: String,
+    source: String,
+    message: String,
+    releases: Vec<UpdateRelease>,
+}
+
+#[derive(Deserialize)]
+struct UpdateRelease {
+    name: String,
+    url: String,
+    description: String,
+}
+
 enum HostDialog {
+    Updates(UpdateState),
     About {
         version: String,
         long_version: String,
@@ -695,11 +725,7 @@ fn line_field_row(
                         .text_color(p.muted)
                         .child(label),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(if key == "style" {
+                .child(div().flex_1().min_w_0().child(if key == "style" {
                     // Style names come from the script, so a text box only ever
                     // produced typos: pick one of the styles that exist.
                     let options = view.snapshot.styles.clone();
@@ -730,7 +756,7 @@ fn line_field_row(
                                     },
                                 ));
                             }
-                            menu
+                            menu.scrollable(true)
                         })
                         .into_any_element()
                 } else {
@@ -740,8 +766,7 @@ fn line_field_row(
                         .h(px(32.))
                         .w_full()
                         .into_any_element()
-                }),
-                ),
+                })),
         );
     }
     // No apply button here: the panel's own button commits the same fields, and
@@ -945,7 +970,6 @@ enum Panel {
     Subtitles,
     Styles,
     Project,
-    Audio,
     Visual,
     Translation,
     Styling,
@@ -968,7 +992,6 @@ impl Panel {
     fn label(self) -> &'static str {
         match self {
             Self::Subtitles => "字幕编辑",
-            Self::Audio => "音频调时",
             Self::Visual => "视觉排版",
             Self::Translation => "翻译助手",
             Self::Styles => "样式管理",
@@ -993,7 +1016,6 @@ impl Panel {
     fn icon(self) -> IconName {
         match self {
             Self::Subtitles => IconName::Captions,
-            Self::Audio => IconName::AudioLines,
             Self::Visual => IconName::Frame,
             Self::Translation => IconName::Languages,
             Self::Styles => IconName::Palette,
@@ -1031,11 +1053,6 @@ enum WorkspaceResizeDrag {
     ColumnSplit {
         start_x: gpui_kit::Pixels,
         start_width: f32,
-    },
-    /// Height of the waveform on the full audio page.
-    AudioPage {
-        start_y: gpui_kit::Pixels,
-        start_height: f32,
     },
     /// Width of one fixed column of the subtitle list.
     SubtitleColumn {
@@ -1083,7 +1100,6 @@ struct Workspace {
     subtitle_grid_width: f32,
     layout_drag: Option<WorkspaceResizeDrag>,
     audio_panel_height: f32,
-    audio_page_height: f32,
     column_split: Option<f32>,
     video_preview_height: Option<f32>,
     /// Height of the font preview at the top of the style editor.
@@ -1418,7 +1434,6 @@ impl Workspace {
             subtitle_grid_width: 0.,
             layout_drag: None,
             audio_panel_height: 80.,
-            audio_page_height: 260.,
             column_split: None,
             video_preview_height: None,
             style_preview_height: 132.,
@@ -1605,7 +1620,7 @@ impl Workspace {
         if details_changed || document_changed || media_changed {
             self.refresh_document(cx);
         }
-        if matches!(self.active_panel, Panel::Audio | Panel::Subtitles) {
+        if self.active_panel == Panel::Subtitles {
             self.refresh_audio(cx);
         }
         if self.active_panel == Panel::Attachments
@@ -1743,22 +1758,22 @@ impl Workspace {
             let result = bridge
                 .call(json!({"op":"preferences","action":"import","path":path}))
                 .await;
-            let _ = weak.update(cx, |view, cx| {
-                match result {
-                    Ok(value) => {
-                        let imported = value["imported"].as_i64().unwrap_or(0);
-                        let skipped = value["skipped"].as_i64().unwrap_or(0);
-                        view.status = if skipped > 0 {
-                            format!("已导入 {imported} 项设置，{skipped} 项当前版本不适用；重启后全部生效")
-                        } else {
-                            format!("已导入 {imported} 项设置；重启后全部生效")
-                        };
-                        view.preferences_request(json!({"action":"state"}), cx);
-                    }
-                    Err(error) => {
-                        view.status = format!("导入配置失败：{error}");
-                        cx.notify();
-                    }
+            let _ = weak.update(cx, |view, cx| match result {
+                Ok(value) => {
+                    let imported = value["imported"].as_i64().unwrap_or(0);
+                    let skipped = value["skipped"].as_i64().unwrap_or(0);
+                    view.status = if skipped > 0 {
+                        format!(
+                            "已导入 {imported} 项设置，{skipped} 项当前版本不适用；重启后全部生效"
+                        )
+                    } else {
+                        format!("已导入 {imported} 项设置；重启后全部生效")
+                    };
+                    view.preferences_request(json!({"action":"state"}), cx);
+                }
+                Err(error) => {
+                    view.status = format!("导入配置失败：{error}");
+                    cx.notify();
                 }
             });
         })
@@ -1905,23 +1920,105 @@ impl Workspace {
         });
     }
 
+    fn open_updates(&mut self, cx: &mut Context<Self>) {
+        self.host_dialog = Some(HostDialog::Updates(UpdateState {
+            enabled: true,
+            checking: true,
+            source: FORK_RELEASES_URL.into(),
+            message: "正在检查更新…".into(),
+            ..Default::default()
+        }));
+        cx.notify();
+        let bridge = self.bridge.clone();
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+            let mut action = "updates";
+            loop {
+                let result = bridge
+                    .call(json!({"op": "dialog", "action": action}))
+                    .await
+                    .and_then(|value| {
+                        serde_json::from_value::<UpdateState>(value).map_err(Into::into)
+                    });
+                let checking = weak
+                    .update(cx, |view, cx| {
+                        let Some(HostDialog::Updates(state)) = &mut view.host_dialog else {
+                            return false;
+                        };
+                        match result {
+                            Ok(value) => *state = value,
+                            Err(error) => {
+                                state.checking = false;
+                                state.message = format!("检查更新失败：{error}");
+                            }
+                        }
+                        cx.notify();
+                        state.checking
+                    })
+                    .unwrap_or(false);
+                if !checking {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(350))
+                    .await;
+                if !weak
+                    .update(cx, |view, _| {
+                        matches!(view.host_dialog, Some(HostDialog::Updates(_)))
+                    })
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+                action = "update_state";
+            }
+        })
+        .detach();
+    }
+
     fn open_log(&mut self, cx: &mut Context<Self>) {
         self.dialog_call("log", cx, |view, value, _| {
-            let entries = value["entries"]
-                .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|entry| LogEntry {
-                            section: entry["section"].as_str().unwrap_or("").to_owned(),
-                            message: entry["message"].as_str().unwrap_or("").to_owned(),
-                            severity: entry["severity"].as_str().unwrap_or("").to_owned(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            let entries = Self::read_log_entries(value);
             view.host_dialog = Some(HostDialog::Log { entries });
         });
+    }
+
+    fn refresh_log(&mut self, cx: &mut Context<Self>) {
+        self.dialog_call("log", cx, |view, value, _| {
+            if let Some(HostDialog::Log { entries }) = &mut view.host_dialog {
+                *entries = Self::read_log_entries(value);
+            }
+        });
+    }
+
+    fn read_log_entries(value: &Value) -> Vec<LogEntry> {
+        value["entries"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|entry| LogEntry {
+                        section: entry["section"].as_str().unwrap_or("").to_owned(),
+                        message: entry["message"].as_str().unwrap_or("").to_owned(),
+                        severity: entry["severity"].as_str().unwrap_or("").to_owned(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn copy_log(&mut self, cx: &mut Context<Self>) {
+        let Some(HostDialog::Log { entries }) = &self.host_dialog else {
+            return;
+        };
+        let query = self.log_filter.read(cx).value().to_lowercase();
+        let text = entries
+            .iter()
+            .filter(|entry| entry.matches(&query))
+            .map(|entry| format!("[{}] {}: {}", entry.severity, entry.section, entry.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
     }
 
     fn open_language(&mut self, cx: &mut Context<Self>) {
@@ -2404,6 +2501,77 @@ impl Workspace {
             gpui_kit::AnyElement,
             gpui_kit::AnyElement,
         ) = match &mut dialog {
+            HostDialog::Updates(state) => {
+                let mut body = div()
+                    .v_flex()
+                    .gap_3()
+                    .child(div().text_sm().child(state.message.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(p.muted)
+                            .child(format!("当前版本：{}", state.current_version)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(p.muted)
+                            .child(state.source.clone()),
+                    );
+                for (index, release) in state.releases.iter().enumerate() {
+                    let url = release.url.clone();
+                    body = body.child(
+                        div()
+                            .v_flex()
+                            .gap_2()
+                            .child(div().text_sm().font_semibold().child(release.name.clone()))
+                            .when(!release.description.is_empty(), |v| {
+                                v.child(
+                                    div()
+                                        .id(("update-description", index))
+                                        .max_h(px(220.))
+                                        .overflow_y_scrollbar()
+                                        .text_xs()
+                                        .child(release.description.clone()),
+                                )
+                            })
+                            .child(
+                                Button::new(("open-release", index))
+                                    .label("下载此版本")
+                                    .primary()
+                                    .small()
+                                    .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
+                            ),
+                    );
+                }
+                body = body.child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("updates-source")
+                                .label("查看发布页")
+                                .ghost()
+                                .small()
+                                .on_click(
+                                    cx.listener(|_, _, _, cx| cx.open_url(FORK_RELEASES_URL)),
+                                ),
+                        )
+                        .child(
+                            Button::new("updates-check")
+                                .label("重新检查")
+                                .small()
+                                .disabled(state.checking || !state.enabled)
+                                .on_click(cx.listener(|view, _, _, cx| view.open_updates(cx))),
+                        ),
+                );
+                (
+                    "检查更新".into(),
+                    "AlanWanco/Aegisub · 正式版与预览版".into(),
+                    body.into_any_element(),
+                    div().into_any_element(),
+                )
+            }
             HostDialog::About {
                 version,
                 long_version,
@@ -2445,12 +2613,15 @@ impl Workspace {
                     if *official { "正式版" } else { "开发版" }.to_owned(),
                 );
                 add("界面", "GPUI 工作台".to_owned());
-                add(
-                    "图标",
-                    "Papirus Development Team · GPL-3.0".to_owned(),
-                );
+                add("图标", "Papirus Development Team · GPL-3.0".to_owned());
                 drop(add);
-                let rows = div().v_flex().gap_2().children(rows);
+                let rows = div().v_flex().gap_2().children(rows).child(
+                    Button::new("about-project")
+                        .label("项目与发布版本")
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(|_, _, _, cx| cx.open_url(FORK_RELEASES_URL))),
+                );
                 (
                     "关于 Aegisub".into(),
                     "字幕编辑与卡拉 OK 打轴工具".into(),
@@ -2461,11 +2632,7 @@ impl Workspace {
             HostDialog::Log { entries } => {
                 let shown: Vec<&LogEntry> = entries
                     .iter()
-                    .filter(|entry| {
-                        log_query.is_empty()
-                            || entry.message.to_lowercase().contains(&log_query)
-                            || entry.section.to_lowercase().contains(&log_query)
-                    })
+                    .filter(|entry| entry.matches(&log_query))
                     .collect();
                 let mut list = div()
                     .id("host-dialog-log")
@@ -2515,6 +2682,27 @@ impl Workspace {
                         .v_flex()
                         .gap_2()
                         .child(self.log_filter.clone())
+                        .child(
+                            div()
+                                .h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("log-refresh")
+                                        .label("刷新日志")
+                                        .ghost()
+                                        .small()
+                                        .on_click(
+                                            cx.listener(|view, _, _, cx| view.refresh_log(cx)),
+                                        ),
+                                )
+                                .child(
+                                    Button::new("log-copy")
+                                        .label("复制筛选结果")
+                                        .ghost()
+                                        .small()
+                                        .on_click(cx.listener(|view, _, _, cx| view.copy_log(cx))),
+                                ),
+                        )
                         .child(list)
                         .into_any_element(),
                     div().into_any_element(),
@@ -3568,42 +3756,38 @@ impl Workspace {
                                 .v_flex()
                                 .gap_2()
                                 .child(crate::page::field_label(cx, "最近使用"))
-                                .child(
-                                    div()
-                                        .h_flex()
-                                        .gap_2()
-                                        .flex_wrap()
-                                        .children(recent.iter().map(|hex| {
-                                            let digits = hex.trim_start_matches('#');
-                                            let rgb = u32::from_str_radix(
-                                                digits.get(0..6).unwrap_or("FFFFFF"),
-                                                16,
+                                .child(div().h_flex().gap_2().flex_wrap().children(
+                                    recent.iter().map(|hex| {
+                                        let digits = hex.trim_start_matches('#');
+                                        let rgb = u32::from_str_radix(
+                                            digits.get(0..6).unwrap_or("FFFFFF"),
+                                            16,
+                                        )
+                                        .unwrap_or(0xFFFFFF);
+                                        let value = hex.clone();
+                                        let input = self.color_hex_input.clone();
+                                        Button::new(format!("color-recent-{hex}"))
+                                            .ghost()
+                                            .rounded(px(999.))
+                                            .small()
+                                            .px(px(8.))
+                                            .py(px(3.))
+                                            .tooltip(hex.clone())
+                                            .child(
+                                                div()
+                                                    .size(px(18.))
+                                                    .rounded(px(6.))
+                                                    .border_1()
+                                                    .border_color(p.border)
+                                                    .bg(gpui_kit::rgba((rgb << 8) | 0xFF)),
                                             )
-                                            .unwrap_or(0xFFFFFF);
-                                            let value = hex.clone();
-                                            let input = self.color_hex_input.clone();
-                                            Button::new(format!("color-recent-{hex}"))
-                                                .ghost()
-                                                .rounded(px(999.))
-                                                .small()
-                                                .px(px(8.))
-                                                .py(px(3.))
-                                                .tooltip(hex.clone())
-                                                .child(
-                                                    div()
-                                                        .size(px(18.))
-                                                        .rounded(px(6.))
-                                                        .border_1()
-                                                        .border_color(p.border)
-                                                        .bg(gpui_kit::rgba((rgb << 8) | 0xFF)),
-                                                )
-                                                .on_click(cx.listener(move |_, _, window, cx| {
-                                                    input.update(cx, |state, cx| {
-                                                        state.set_value(value.clone(), window, cx)
-                                                    });
-                                                }))
-                                        })),
-                                ),
+                                            .on_click(cx.listener(move |_, _, window, cx| {
+                                                input.update(cx, |state, cx| {
+                                                    state.set_value(value.clone(), window, cx)
+                                                });
+                                            }))
+                                    }),
+                                )),
                         )
                     })
                     .child(
@@ -3726,11 +3910,7 @@ impl Workspace {
                     return;
                 }
                 Some("app/updates") => {
-                    self.status = "正在检查更新…".into();
-                    self.dialog_call("updates", cx, |view, _, cx| {
-                        view.status = "已发出更新检查，结果会以提示卡显示".into();
-                        cx.notify();
-                    });
+                    self.open_updates(cx);
                     return;
                 }
                 Some("edit/font") => {
@@ -3873,20 +4053,17 @@ impl Workspace {
                     | "app/display/audio_subs"
                     | "app/display/full"),
                 ) => {
-                    // Which containers the workspace shows. Falls through so the
-                    // host still runs the command and its menu check stays right.
-                    self.show_audio =
-                        matches!(name, "app/display/audio_subs" | "app/display/full");
-                    self.show_video =
-                        matches!(name, "app/display/video_subs" | "app/display/full");
+                    // Container visibility and menu checks belong to this workspace.
+                    self.show_audio = matches!(name, "app/display/audio_subs" | "app/display/full");
+                    self.show_video = matches!(name, "app/display/video_subs" | "app/display/full");
+                    self.sync_display_mode(cx);
                     cx.notify();
+                    return;
                 }
                 Some(name)
                     if name.starts_with("audio/go_to") || name.starts_with("audio/scroll/") =>
                 {
-                    // These only move the waveform view. Jumping to the audio page
-                    // as well meant a stray "A" in the grid threw the workspace
-                    // over to 音频调时.
+                    // These commands only move the waveform within the workspace.
                     let state = &self.snapshot.audio;
                     let start = match name {
                         "audio/go_to/start" => state.start - self.audio.span / 2,
@@ -4598,7 +4775,13 @@ impl Workspace {
                         view.hotkeys.confirm_reset = false;
                         view.hotkeys.replace = false;
                         view.refresh_catalog(cx);
-                        view.status = "快捷键已同步".into();
+                        view.status = match (state.imported, state.skipped) {
+                            (Some(imported), Some(skipped)) if skipped > 0 => {
+                                format!("已导入 {imported} 条快捷键，跳过 {skipped} 条")
+                            }
+                            (Some(imported), _) => format!("已导入 {imported} 条快捷键"),
+                            _ => "快捷键已同步".into(),
+                        };
                     }
                     Err(error) => {
                         view.hotkeys.error = Some(error.to_string());
@@ -4610,6 +4793,25 @@ impl Workspace {
         })
         .detach();
         cx.notify();
+    }
+
+    fn hotkey_import(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+            let picked = rfd::AsyncFileDialog::new()
+                .set_title("导入旧版快捷键")
+                .add_filter("Aegisub 快捷键文件", &["json"])
+                .pick_file()
+                .await;
+            let Some(file) = picked else {
+                return;
+            };
+            let path = file.path().to_string_lossy().to_string();
+            let _ = weak.update(cx, |view, cx| {
+                view.hotkey_request(json!({"action":"import","path":path}), cx);
+            });
+        })
+        .detach();
     }
 
     fn pick_attachments(&mut self, kind: &'static str, cx: &mut Context<Self>) {
@@ -5559,6 +5761,19 @@ impl Workspace {
         self.invoke(json!({"op":"style", "action":"create", "source":self.document.style, "fields":{"name":name}}), cx);
     }
 
+    fn sync_display_mode(&mut self, cx: &mut Context<Self>) {
+        for command in &mut Arc::make_mut(&mut self.catalog).commands {
+            command.active = match command.name.as_str() {
+                "app/display/subs" => !self.show_audio && !self.show_video,
+                "app/display/audio_subs" => self.show_audio && !self.show_video,
+                "app/display/video_subs" => !self.show_audio && self.show_video,
+                "app/display/full" => self.show_audio && self.show_video,
+                _ => continue,
+            };
+        }
+        install_native_menus(&self.catalog, cx);
+    }
+
     fn refresh_catalog(&mut self, cx: &mut Context<Self>) {
         if self.catalog_loading {
             return;
@@ -5578,7 +5793,7 @@ impl Workspace {
                 match result {
                     Ok(catalog) => {
                         view.catalog = Arc::new(catalog);
-                        install_native_menus(&view.catalog, cx);
+                        view.sync_display_mode(cx);
                     }
                     Err(error) => view.status = format!("命令读取失败：{error}"),
                 }
@@ -5610,7 +5825,9 @@ impl Workspace {
                             value
                                 .trim()
                                 .parse::<i64>()
-                                .map(|frame| Value::from((frame as f64 * 1000. / fps).round() as i64))
+                                .map(|frame| {
+                                    Value::from((frame as f64 * 1000. / fps).round() as i64)
+                                })
                                 .context("请输入帧号")
                         }
                     } else {
@@ -5672,7 +5889,9 @@ impl Workspace {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(140))
                 .await;
-            let Some(view) = weak.upgrade() else { return; };
+            let Some(view) = weak.upgrade() else {
+                return;
+            };
             let current = view.read_with(cx, |view, cx| {
                 format!(
                     "{PREVIEW_WIDTH}x{PREVIEW_HEIGHT}{}",
@@ -5735,7 +5954,8 @@ impl Workspace {
                     )?;
                     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
                         .with_guessed_format()?;
-                    let rgba = image::DynamicImage::from_decoder(reader.into_decoder()?)?.into_rgba8();
+                    let rgba =
+                        image::DynamicImage::from_decoder(reader.into_decoder()?)?.into_rgba8();
                     let (width, height) = rgba.dimensions();
                     let mut bgra = rgba.into_raw();
                     for pixel in bgra.chunks_exact_mut(4) {
@@ -6168,7 +6388,6 @@ impl Workspace {
             KeyFocus::Audio => "Audio",
             KeyFocus::Video => "Video",
             KeyFocus::Grid => match self.active_panel {
-                Panel::Audio => "Audio",
                 Panel::Visual => "Video",
                 _ => "Subtitle Grid",
             },
@@ -6203,7 +6422,6 @@ impl Workspace {
         }
         match self.key_focus {
             KeyFocus::Grid => match self.active_panel {
-                Panel::Audio => KeyFocus::Audio,
                 Panel::Visual => KeyFocus::Video,
                 _ => KeyFocus::Grid,
             },
@@ -6525,7 +6743,7 @@ impl Workspace {
     /// narrower, no card chrome, and its own scroll.
     /// Height the stacked properties card reserves inside the editor section.
     fn properties_height(&self) -> f32 {
-        if self.properties_more { 92. } else { 56. }
+        if self.properties_more { 95. } else { 56. }
     }
 
     fn render_properties(&self, rail: Option<f32>, cx: &mut Context<Self>) -> impl IntoElement {
@@ -6572,8 +6790,16 @@ impl Workspace {
             .px(gpui_kit::px(9.))
             .py(gpui_kit::px(5.))
             .child(Icon::new(IconName::Settings2).size(px(15.)))
-            .accessibility_label(if more { "收起边距与图层" } else { "展开边距与图层" })
-            .tooltip(if more { "收起边距与图层" } else { "展开边距与图层" })
+            .accessibility_label(if more {
+                "收起边距与图层"
+            } else {
+                "展开边距与图层"
+            })
+            .tooltip(if more {
+                "收起边距与图层"
+            } else {
+                "展开边距与图层"
+            })
             .when(more, |button| button.bg(p.selected).text_color(p.accent))
             .ghost()
             .on_click(cx.listener(|view, _, _, cx| {
@@ -6656,7 +6882,7 @@ impl Workspace {
                     .bg(p.surface)
                     .shadow(crate::page::card_shadow(Theme::global(cx).is_dark()))
                     .p_2()
-                    .gap_1()
+                    .gap(px(7.))
             })
             .child(core)
             .children(more_row)
@@ -6717,9 +6943,6 @@ impl Workspace {
         if panel == Panel::Timing {
             self.shift_times_request("state", cx);
         }
-        if panel == Panel::Audio {
-            self.refresh_audio(cx);
-        }
         if panel == Panel::Translation {
             self.translation_action("start", cx);
         }
@@ -6758,12 +6981,7 @@ impl Workspace {
         for (group, panels) in [
             (
                 "工作区",
-                vec![
-                    Panel::Subtitles,
-                    Panel::Audio,
-                    Panel::Visual,
-                    Panel::Translation,
-                ],
+                vec![Panel::Subtitles, Panel::Visual, Panel::Translation],
             ),
             (
                 "字幕工具",
@@ -7043,9 +7261,8 @@ impl Workspace {
             self.video_preview_height.unwrap_or(view_height)
         };
         self.last_preview_height.set(view_height);
-        self.preview_width_px.set(
-            (view_height * aspect * window.scale_factor()).clamp(320., 1920.),
-        );
+        self.preview_width_px
+            .set((view_height * aspect * window.scale_factor()).clamp(320., 1920.));
         let image = self.frame_image.clone();
         let has_image = image.is_some();
         let overscan = self.snapshot.video && self.snapshot.video_overscan;
@@ -7728,7 +7945,16 @@ impl Workspace {
         // the current line used to require moving the pointer to the video panel.
         let mut playback_toolbar = div().h_flex().flex_wrap().gap_1().items_center();
         for (id, label, icon, name) in [
-            ("editor-play", "播放/暂停", if self.snapshot.playing { IconName::Pause } else { IconName::Play }, "video/play"),
+            (
+                "editor-play",
+                "播放/暂停",
+                if self.snapshot.playing {
+                    IconName::Pause
+                } else {
+                    IconName::Play
+                },
+                "video/play",
+            ),
             (
                 "editor-prev-frame",
                 "上一帧",
@@ -7813,7 +8039,12 @@ impl Workspace {
                                     format!("{}", (ms as f64 * fps / 1000.).round() as i64)
                                 } else {
                                     let centis = (ms as f64 / 10.).round() as i64;
-                                    format!("{}:{:02}.{:02}", centis / 6000, (centis / 100) % 60, centis % 100)
+                                    format!(
+                                        "{}:{:02}.{:02}",
+                                        centis / 6000,
+                                        (centis / 100) % 60,
+                                        centis % 100
+                                    )
                                 };
                                 view.property_inputs[key]
                                     .update(cx, |state, cx| state.set_value(shown, window, cx));
@@ -7846,9 +8077,9 @@ impl Workspace {
             rail.map(|width| self.render_properties(Some(width), cx).into_any_element());
         // Without the side rail the inspector stacks under the editor, and the
         // style/role/layer/effect row moves back into it.
-        let stacked_properties = rail.is_none().then(|| {
-            self.render_properties(None, cx).into_any_element()
-        });
+        let stacked_properties = rail
+            .is_none()
+            .then(|| self.render_properties(None, cx).into_any_element());
         let rail_handle = rail.map(|rail_width| {
             div()
                 .id("properties-rail-resize-handle")
@@ -8286,7 +8517,12 @@ impl Workspace {
             // the editor's toolbars and clips them.
             .child(
                 editor_section
-                    .h(px(editor_height + if rail.is_none() { self.properties_height() } else { 0. }))
+                    .h(px(editor_height
+                        + if rail.is_none() {
+                            self.properties_height()
+                        } else {
+                            0.
+                        }))
                     .flex_shrink_0(),
             )
             .child(
@@ -8301,7 +8537,13 @@ impl Workspace {
                     .justify_center()
                     .cursor_row_resize()
                     .bg(p.surface)
-                    .child(div().w(px(36.)).h(px(2.)).rounded(px(1.)).bg(p.muted.opacity(0.7)))
+                    .child(
+                        div()
+                            .w(px(36.))
+                            .h(px(2.))
+                            .rounded(px(1.))
+                            .bg(p.muted.opacity(0.7)),
+                    )
                     .on_mouse_down(
                         gpui_kit::MouseButton::Left,
                         cx.listener(|view, event: &gpui_kit::MouseDownEvent, _, cx| {
@@ -8518,6 +8760,7 @@ async fn invoke_weak(
                     let _ = view.update(cx, |view, cx| {
                         view.status = "已同步当前项目".into();
                         view.apply_snapshot(snapshot, cx);
+                        view.refresh_frame(cx);
                     });
                 }
                 true
@@ -8533,7 +8776,6 @@ async fn invoke_weak(
         }
     }
 }
-
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_area = self.focus_area(window, cx);
@@ -8580,21 +8822,27 @@ impl Render for Workspace {
                     let value = match *key {
                         "start" | "end" => {
                             let ms = if self.snapshot.audio.loaded {
-                                if *key == "start" { self.snapshot.audio.start } else { self.snapshot.audio.end }
+                                if *key == "start" {
+                                    self.snapshot.audio.start
+                                } else {
+                                    self.snapshot.audio.end
+                                }
                             } else if *key == "start" {
                                 line.start
                             } else {
                                 line.end
                             };
                             if self.time_in_frames {
-                                self.snapshot.fps.filter(|fps| *fps > 0.)
+                                self.snapshot
+                                    .fps
+                                    .filter(|fps| *fps > 0.)
                                     .map(|fps| (ms as f64 * fps / 1000.).round() as i64)
                                     .map(|frame| frame.to_string())
                                     .unwrap_or_else(|| format_time(ms))
                             } else {
                                 format_time(ms)
                             }
-                        },
+                        }
                         "layer" => line.layer.to_string(),
                         "style" => line.style.clone(),
                         "actor" => line.actor.clone(),
@@ -8686,14 +8934,6 @@ impl Render for Workspace {
                                     + f32::from(event.position.y - start_y))
                                     .clamp(60., 320.);
                             }
-                            WorkspaceResizeDrag::AudioPage {
-                                start_y,
-                                start_height,
-                            } => {
-                                view.audio_page_height = (start_height
-                                    + f32::from(event.position.y - start_y))
-                                    .clamp(120., 640.);
-                            }
                             WorkspaceResizeDrag::ColumnSplit {
                                 start_x,
                                 start_width,
@@ -8772,7 +9012,7 @@ impl Render for Workspace {
             .min_h_0()
             .overflow_hidden();
         if self.active_panel == Panel::Subtitles {
-            let side_by_side = f32::from(window.viewport_size().width) >= 900.;
+            let side_by_side = self.show_video && f32::from(window.viewport_size().width) >= 900.;
             let sidebar = if self
                 .sidebar_collapsed
                 .unwrap_or(f32::from(window.viewport_size().width) < 1150.)
@@ -8838,8 +9078,8 @@ impl Render for Workspace {
                         cx.notify();
                     }),
                 );
-            // Audio and video share the left column; the view commands hide
-            // either container, and hiding both hands the full width to the text.
+            // A visible video uses the left column on wide windows. Without video,
+            // audio sits above the full-width subtitle editor and list.
             let audio_strip = self
                 .audio
                 .render_compact(
@@ -8871,7 +9111,7 @@ impl Render for Workspace {
                 let mut left = div()
                     .v_flex()
                     .when(side_by_side, |column| column.w(px(column_width)).h_full())
-                    .when(!side_by_side, |column| column.flex_1())
+                    .when(!side_by_side, |column| column.w_full())
                     .flex_shrink_0()
                     .min_w_0()
                     .min_h_0()
@@ -8890,21 +9130,21 @@ impl Render for Workspace {
                 }
             }
             columns = columns.child({
-                    // The editor and the subtitle list are one region: they share
-                    // a single outline so the highlight says which area owns the
-                    // keyboard, not which card was clicked last.
-                    let p = crate::workspace_theme::Palette::current(cx);
-                    let focused = focus_area == KeyFocus::Grid;
-                    div()
-                        .v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .overflow_hidden()
-                        .rounded(px(crate::workspace_theme::RADIUS_LG))
-                        .border_1()
-                        .border_color(if focused { p.accent } else { p.border })
-                        .child(self.render_subtitle_panel(properties_rail, focused, cx))
+                // The editor and the subtitle list are one region: they share
+                // a single outline so the highlight says which area owns the
+                // keyboard, not which card was clicked last.
+                let p = crate::workspace_theme::Palette::current(cx);
+                let focused = focus_area == KeyFocus::Grid;
+                div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .rounded(px(crate::workspace_theme::RADIUS_LG))
+                    .border_1()
+                    .border_color(if focused { p.accent } else { p.border })
+                    .child(self.render_subtitle_panel(properties_rail, focused, cx))
             });
             if !side_by_side {
                 columns = columns.flex_col();
@@ -8932,14 +9172,6 @@ impl Render for Workspace {
             );
         } else if self.active_panel == Panel::Commands {
             body = body.child(self.render_commands(cx));
-        } else if self.active_panel == Panel::Audio {
-            body = body.child(self.audio.render(
-                &self.snapshot.audio,
-                self.snapshot.video,
-                &self.snapshot.appearance,
-                self.audio_page_height,
-                cx,
-            ));
         } else if self.active_panel == Panel::Styling {
             body = body.child(
                 self.styling
@@ -8983,9 +9215,7 @@ impl Render for Workspace {
         }
         // Pages with their own toolbars do not own the keyboard shortcuts.
         let hints = match self.active_panel {
-            Panel::Subtitles | Panel::Audio | Panel::Visual => {
-                self.shortcut_hints(self.key_context(window, cx))
-            }
+            Panel::Subtitles | Panel::Visual => self.shortcut_hints(self.key_context(window, cx)),
             _ => None,
         };
         let body = body.child(
@@ -9347,46 +9577,10 @@ impl Render for Workspace {
                                         .py(px(3.))
                                         .ghost()
                                         .on_click(cx.listener(|view, _, _, cx| {
-                                            view.invoke(json!({"op":"notice_choice","index":-1}), cx);
-                                            if !view.notices.is_empty() {
-                                                view.notices.remove(0);
-                                            }
-                                            cx.notify();
-                                        })),
-                                )
-                            })
-                            .when(notice.kind != "unsaved" && notice.kind != "linked" && notice.choices.is_empty() && !notice.suppress.is_empty(), |row| {
-                                let key = notice.suppress.clone();
-                                row.child(
-                                    Button::new("host-notice-suppress")
-                                        .label("下次不再提示")
-                                        .rounded(px(999.))
-                                        .px(px(13.))
-                                        .py(px(3.))
-                                        .ghost()
-                                        .selected(suppress_checked)
-                                        .on_click(cx.listener(|view, _, _, cx| {
-                                            view.notice_suppress = !view.notice_suppress;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(div().flex_1())
-                                .child(
-                                    Button::new("dismiss-host-notice")
-                                        .label("知道了")
-                                        .primary()
-                                        .rounded(px(999.))
-                                        .small()
-                                        .px(px(13.))
-                                        .py(px(3.))
-                                        .on_click(cx.listener(move |view, _, _, cx| {
-                                            if view.notice_suppress && !key.is_empty() {
-                                                view.invoke(
-                                                    json!({"op":"notice_suppress","key":key}),
-                                                    cx,
-                                                );
-                                            }
-                                            view.notice_suppress = false;
+                                            view.invoke(
+                                                json!({"op":"notice_choice","index":-1}),
+                                                cx,
+                                            );
                                             if !view.notices.is_empty() {
                                                 view.notices.remove(0);
                                             }
@@ -9398,25 +9592,71 @@ impl Render for Workspace {
                                 notice.kind != "unsaved"
                                     && notice.kind != "linked"
                                     && notice.choices.is_empty()
+                                    && !notice.suppress.is_empty(),
+                                |row| {
+                                    let key = notice.suppress.clone();
+                                    row.child(
+                                        Button::new("host-notice-suppress")
+                                            .label("下次不再提示")
+                                            .rounded(px(999.))
+                                            .px(px(13.))
+                                            .py(px(3.))
+                                            .ghost()
+                                            .selected(suppress_checked)
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.notice_suppress = !view.notice_suppress;
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(div().flex_1())
+                                    .child(
+                                        Button::new("dismiss-host-notice")
+                                            .label("知道了")
+                                            .primary()
+                                            .rounded(px(999.))
+                                            .small()
+                                            .px(px(13.))
+                                            .py(px(3.))
+                                            .on_click(cx.listener(move |view, _, _, cx| {
+                                                if view.notice_suppress && !key.is_empty() {
+                                                    view.invoke(
+                                                        json!({"op":"notice_suppress","key":key}),
+                                                        cx,
+                                                    );
+                                                }
+                                                view.notice_suppress = false;
+                                                if !view.notices.is_empty() {
+                                                    view.notices.remove(0);
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                },
+                            )
+                            .when(
+                                notice.kind != "unsaved"
+                                    && notice.kind != "linked"
+                                    && notice.choices.is_empty()
                                     && notice.suppress.is_empty(),
                                 |row| {
-                                row.child(
-                                    Button::new("dismiss-host-notice")
-                                        .label("知道了")
-                                        .primary()
-                                        .rounded(px(999.))
-                                        .small()
-                                        .px(px(13.))
-                                        .py(px(3.))
-                                        .on_click(cx.listener(|view, _, _, cx| {
-                                            view.notice_suppress = false;
-                                            if !view.notices.is_empty() {
-                                                view.notices.remove(0);
-                                            }
-                                            cx.notify();
-                                        })),
-                                )
-                            }),
+                                    row.child(
+                                        Button::new("dismiss-host-notice")
+                                            .label("知道了")
+                                            .primary()
+                                            .rounded(px(999.))
+                                            .small()
+                                            .px(px(13.))
+                                            .py(px(3.))
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.notice_suppress = false;
+                                                if !view.notices.is_empty() {
+                                                    view.notices.remove(0);
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                },
+                            ),
                     ),
             );
         layered
@@ -9444,7 +9684,6 @@ fn panel_window_size(panel: Panel) -> gpui_kit::Size<gpui_kit::Pixels> {
         Panel::Styles => (1100., 720.),
         Panel::Styling => (820., 520.),
         Panel::Project => (900., 620.),
-        Panel::Audio => (1080., 700.),
         Panel::Visual => (1100., 780.),
         Panel::Translation => (900., 600.),
         Panel::Timing => (860., 660.),

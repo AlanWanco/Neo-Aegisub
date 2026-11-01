@@ -27,26 +27,26 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#ifdef WITH_UPDATE_CHECKER
-
-#include "compat.h"
-#include "format.h"
-#include "gpui_bridge.h"
-#include "options.h"
+#include "dialogs.h"
+#include "release_manifest.h"
 #include "version.h"
 
-#include <libaegisub/ass/string_codec.h>
+#include <mutex>
+
+#ifdef WITH_UPDATE_CHECKER
+#include "compat.h"
+#include "gpui_bridge.h"
+#include "options.h"
+
+#include <libaegisub/cajun/reader.h>
 #include <libaegisub/dispatch.h>
-#include <libaegisub/exception.h>
-#include <libaegisub/line_iterator.h>
-#include <libaegisub/scoped_ptr.h>
-#include <libaegisub/split.h>
 
 #include <ctime>
 #include <curl/curl.h>
 #include <functional>
-#include <mutex>
+#include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 #include <wx/button.h>
 #include <wx/checkbox.h>
@@ -54,19 +54,20 @@
 #include <wx/event.h>
 #include <wx/hyperlink.h>
 #include <wx/intl.h>
-#include <wx/platinfo.h>
 #include <wx/sizer.h>
 #include <wx/statline.h>
 #include <wx/stattext.h>
 #include <wx/string.h>
 #include <wx/textctrl.h>
 
-#ifdef __APPLE__
-#include <CoreFoundation/CoreFoundation.h>
-#endif
 
 namespace {
 std::mutex VersionCheckLock;
+bool checking = false;
+bool interactive_check = false;
+std::string check_status = "idle";
+std::string check_message;
+std::optional<updates::Release> check_release;
 
 struct AegisubUpdateDescription {
 	std::string url;
@@ -75,7 +76,6 @@ struct AegisubUpdateDescription {
 };
 
 class VersionCheckerResultDialog final : public wxDialog {
-	void OnCloseButton(wxCommandEvent &evt);
 	void OnRemindMeLater(wxCommandEvent &evt);
 	void OnClose(wxCloseEvent &evt);
 
@@ -160,238 +160,127 @@ void VersionCheckerResultDialog::OnClose(wxCloseEvent &) {
 	Destroy();
 }
 
-DEFINE_EXCEPTION(VersionCheckError, agi::Exception);
-
-void PostErrorEvent(bool interactive, wxString const& error_text) {
-	if (interactive) {
-		agi::dispatch::Main().Async([=]{
-			if (gpui::FrontendAttached())
-				gpui::PushNotice("Check for Updates", from_wx(error_text));
-			else
-				new VersionCheckerResultDialog(error_text, {});
-		});
+size_t WriteResponse(char *contents, size_t size, size_t count, void *target) {
+	try {
+		static_cast<std::string *>(target)->append(contents, size * count);
+		return size * count;
 	}
+	catch (...) { return 0; }
 }
 
-static std::string GetOSShortName() {
-	int osver_maj, osver_min, osver_micro;
-	wxOperatingSystemId osid = wxGetOsVersion(&osver_maj, &osver_min, &osver_micro);
+std::optional<updates::Release> DoCheck() {
+	std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
+	if (!curl) throw std::runtime_error("Curl could not be initialized.");
+	std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers(
+		curl_slist_append(nullptr, "Accept: application/vnd.github+json"), curl_slist_free_all);
+	if (!headers) throw std::runtime_error("Could not allocate GitHub request headers.");
+	curl_easy_setopt(curl.get(), CURLOPT_URL, "https://api.github.com/repos/AlanWanco/Aegisub/releases?per_page=100");
+	curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
+	curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "Aegisub-update-checker/1.0");
+	curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+	curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 30L);
+	curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+	std::string response;
+	curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteResponse);
+	curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+	auto result = curl_easy_perform(curl.get());
+	if (result != CURLE_OK)
+		throw std::runtime_error(std::string("Checking for updates failed: ") + curl_easy_strerror(result));
+	long status = 0;
+	curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);
+	if (status < 200 || status >= 300)
+		throw std::runtime_error("GitHub releases request failed (HTTP " + std::to_string(status) + ").");
+	std::istringstream stream(response);
+	json::UnknownElement manifest;
+	json::Reader::Read(manifest, stream);
+	return updates::FindUpdate(static_cast<json::Array const&>(manifest), GetSVNRevision(), GetVersionNumbers());
+}
+}
 
-	if (osid & wxOS_WINDOWS_NT) {
-		if (osver_maj == 5 && osver_min == 0)
-			return "win2k";
-		else if (osver_maj == 5 && osver_min == 1)
-			return "winxp";
-		else if (osver_maj == 5 && osver_min == 2)
-			return "win2k3"; // this is also xp64
-		else if (osver_maj == 6 && osver_min == 0)
-			return "win60"; // vista and server 2008
-		else if (osver_maj == 6 && osver_min == 1)
-			return "win61"; // 7 and server 2008r2
-		else if (osver_maj == 6 && osver_min == 2)
-			return "win62"; // 8 and server 2012
-		else if (osver_maj == 6 && osver_min == 3)
-			return "win63"; // 8.1 and server 2012r2
-		else if (osver_maj == 10 && osver_min == 0 && osver_micro >= 22000)
-			return "win11"; // 11 and server 2025; micro is the build number
-		else if (osver_maj == 10 && osver_min == 0)
-			return "win10"; // 10 and server 2016/2019/2022
-		else
-			return "windows"; // future proofing? I doubt we run on nt4
+json::Object GetVersionCheckState() {
+	std::lock_guard lock(VersionCheckLock);
+	json::Object result;
+	result["enabled"] = true;
+	result["checking"] = checking;
+	result["status"] = check_status;
+	result["current_version"] = std::string(GetAegisubLongVersionString());
+	result["source"] = updates::releases_url;
+	result["message"] = check_message;
+	json::Array releases;
+	if (check_release) {
+		json::Object release;
+		release["name"] = check_release->name;
+		release["url"] = check_release->url;
+		release["description"] = check_release->description;
+		releases.emplace_back(std::move(release));
 	}
-	else if (osid & wxOS_MAC_OSX_DARWIN)
-		return agi::format("osx%d.%d", osver_maj, osver_min); // e.g. osx10.15, osx15.6
-	else if (osid & wxOS_UNIX_LINUX)
-		return "linux";
-	else if (osid & wxOS_UNIX_FREEBSD)
-		return "freebsd";
-	else if (osid & wxOS_UNIX_OPENBSD)
-		return "openbsd";
-	else if (osid & wxOS_UNIX_NETBSD)
-		return "netbsd";
-	else if (osid & wxOS_UNIX_SOLARIS)
-		return "solaris";
-	else if (osid & wxOS_UNIX_AIX)
-		return "aix";
-	else if (osid & wxOS_UNIX_HPUX)
-		return "hpux";
-	else if (osid & wxOS_UNIX)
-		return "unix";
-	else if (osid & wxOS_OS2)
-		return "os2";
-	else if (osid & wxOS_DOS)
-		return "dos";
-	else
-		return "unknown";
-}
-
-#ifdef WIN32
-typedef BOOL (WINAPI * PGetUserPreferredUILanguages)(DWORD dwFlags, PULONG pulNumLanguages, wchar_t *pwszLanguagesBuffer, PULONG pcchLanguagesBuffer);
-
-// Try using Win 6+ functions if available
-static wxString GetUILanguage() {
-	agi::scoped_holder<HMODULE, BOOL (__stdcall *)(HMODULE)> kernel32(LoadLibraryW(L"kernel32.dll"), FreeLibrary);
-	if (!kernel32) return "";
-
-	PGetUserPreferredUILanguages gupuil = (PGetUserPreferredUILanguages)GetProcAddress(kernel32, "GetUserPreferredUILanguages");
-	if (!gupuil) return "";
-
-	ULONG numlang = 0, output_len = 0;
-	if (gupuil(MUI_LANGUAGE_NAME, &numlang, 0, &output_len) != TRUE || !output_len)
-		return "";
-
-	std::vector<wchar_t> output(output_len);
-	if (!gupuil(MUI_LANGUAGE_NAME, &numlang, &output[0], &output_len) || numlang < 1)
-		return "";
-
-	// We got at least one language, just treat it as the only, and a null-terminated string
-	return &output[0];
-}
-
-static wxString GetSystemLanguage() {
-	wxString res = GetUILanguage();
-	if (!res)
-		// On an old version of Windows, let's just return the LANGID as a string
-		res = fmt_wx("x-win%04x", GetUserDefaultUILanguage());
-
-	return res;
-}
-#elif __APPLE__
-static wxString GetSystemLanguage() {
-	CFLocaleRef locale = CFLocaleCopyCurrent();
-	CFStringRef localeName = (CFStringRef)CFLocaleGetValue(locale, kCFLocaleIdentifier);
-
-	char buf[128] = { 0 };
-	CFStringGetCString(localeName, buf, sizeof buf, kCFStringEncodingUTF8);
-	CFRelease(locale);
-
-	return wxString::FromUTF8(buf);
-
-}
-#else
-static wxString GetSystemLanguage() {
-	return wxLocale::GetLanguageInfo(wxLocale::GetSystemLanguage())->CanonicalName;
-}
-#endif
-
-static wxString GetAegisubLanguage() {
-	return to_wx(OPT_GET("App/Language")->GetString());
-}
-
-size_t writeToStringCb(char *contents, size_t size, size_t nmemb, std::string *s) {
-	s->append(contents, size * nmemb);
-	return size * nmemb;
-}
-
-void DoCheck(bool interactive) {
-	CURL *curl;
-	CURLcode res_code;
-
-	curl = curl_easy_init();
-	if (!curl)
-		throw VersionCheckError(from_wx(_("Curl could not be initialized.")));
-
-	curl_easy_setopt(curl, CURLOPT_URL,
-		agi::format("%s%s?rev=%d&rel=%d&os=%s&lang=%s&aegilang=%s"
-			, UPDATE_CHECKER_SERVER
-			, UPDATE_CHECKER_BASE_URL
-			, GetSVNRevision()
-			, (GetIsOfficialRelease() ? 1 : 0)
-			, GetOSShortName()
-			, GetSystemLanguage()
-			, GetAegisubLanguage()
-		).c_str());
-	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-	curl_easy_setopt(curl, CURLOPT_USERAGENT, agi::format("Aegisub %s", GetAegisubLongVersionString()).c_str());
-
-	std::string result;
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeToStringCb);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result);
-
-	res_code = curl_easy_perform(curl);
-	curl_easy_cleanup(curl);
-	if (res_code != CURLE_OK) {
-		std::string err_msg = agi::format(_("Checking for updates failed: %s."), curl_easy_strerror(res_code));
-		throw VersionCheckError(err_msg);
-	}
-
-	std::stringstream ss(result);
-	std::vector<AegisubUpdateDescription> results;
-	for (auto const& line : agi::line_iterator<std::string>(ss)) {
-		if (line.empty()) continue;
-
-		std::vector<std::string> parsed;
-		agi::Split(parsed, line, '|');
-		if (parsed.size() != 6) continue;
-
-		if (atoi(parsed[1].c_str()) <= GetSVNRevision())
-			continue;
-
-		// 0 and 2 being things that never got used
-		results.push_back(AegisubUpdateDescription{
-			agi::ass::inline_string_decode(parsed[3]),
-			agi::ass::inline_string_decode(parsed[4]),
-			agi::ass::inline_string_decode(parsed[5])
-		});
-	}
-
-	if (!results.empty() || interactive) {
-		agi::dispatch::Main().Async([=]{
-			wxString text;
-			if (results.size() == 1)
-				text = _("An update to Aegisub was found.");
-			else if (results.size() > 1)
-				text = _("Several possible updates to Aegisub were found.");
-			else
-				text = _("There are no updates to Aegisub.");
-
-			if (gpui::FrontendAttached()) {
-				std::string body = from_wx(text);
-				for (auto const& update : results)
-					body += "\n\n" + update.friendly_name + "\n" + update.description + "\n" + update.url;
-				gpui::PushNotice("Check for Updates", body);
-			}
-			else
-				new VersionCheckerResultDialog(text, results);
-		});
-	}
-}
+	result["releases"] = std::move(releases);
+	return result;
 }
 
 void PerformVersionCheck(bool interactive) {
-	agi::dispatch::Background().Async([=]{
-		if (!interactive) {
-			// Automatic checking enabled?
-			if (!OPT_GET("App/Auto/Check For Updates")->GetBool())
-				return;
-
-			// Is it actually time for a check?
-			time_t next_check = OPT_GET("Version/Next Check")->GetInt();
-			if (next_check > time(nullptr))
-				return;
-		}
-
-		if (!VersionCheckLock.try_lock()) return;
-
+	if (!interactive && (!OPT_GET("App/Auto/Check For Updates")->GetBool() ||
+	    OPT_GET("Version/Next Check")->GetInt() > time(nullptr))) return;
+	{
+		std::lock_guard lock(VersionCheckLock);
+		interactive_check = interactive_check || interactive;
+		if (checking) return;
+		checking = true;
+		check_status = "checking";
+		check_message = "Checking GitHub releases…";
+		check_release.reset();
+	}
+	agi::dispatch::Background().Async([] {
+		std::vector<AegisubUpdateDescription> results;
+		std::string status;
+		std::string message;
+		std::optional<updates::Release> release;
 		try {
-			DoCheck(interactive);
+			release = DoCheck();
+			status = release ? "available" : "current";
+			message = from_wx(release ? _("An update to Aegisub was found.") : _("There are no updates to Aegisub."));
+			if (release) {
+				results.push_back({release->url, release->name, release->description});
+			}
 		}
-		catch (const agi::Exception &e) {
-			PostErrorEvent(interactive, fmt_tl(
-				"There was an error checking for updates to Aegisub:\n%s\n\nIf other applications can access the Internet fine, this is probably a temporary server problem on our end.",
-				e.GetMessage()));
+		catch (std::exception const& error) {
+			status = "error";
+			message = std::string("There was an error checking for updates to Aegisub: ") + error.what();
 		}
 		catch (...) {
-			PostErrorEvent(interactive, _("An unknown error occurred while checking for updates to Aegisub."));
+			status = "error";
+			message = "An unknown error occurred while checking for updates to Aegisub.";
 		}
-
-		VersionCheckLock.unlock();
-
-		agi::dispatch::Main().Async([]{
-			time_t new_next_check_time = time(nullptr) + 60*60; // in one hour
-			OPT_SET("Version/Next Check")->SetInt(new_next_check_time);
+		bool show;
+		{
+			std::lock_guard lock(VersionCheckLock);
+			check_status = status;
+			check_message = message;
+			check_release = std::move(release);
+			checking = false;
+			show = interactive_check || !results.empty();
+			interactive_check = false;
+		}
+		agi::dispatch::Main().Async([show, message = std::move(message), results = std::move(results)] {
+			OPT_SET("Version/Next Check")->SetInt(time(nullptr) + 60*60);
+			if (show && !gpui::FrontendAttached())
+				new VersionCheckerResultDialog(to_wx(message), results);
 		});
 	});
 }
 
+#else
+void PerformVersionCheck(bool) { }
+
+json::Object GetVersionCheckState() {
+	json::Object result;
+	result["enabled"] = false;
+	result["checking"] = false;
+	result["status"] = "disabled";
+	result["current_version"] = std::string(GetAegisubLongVersionString());
+	result["source"] = updates::releases_url;
+	result["message"] = "Update checking is disabled in this build.";
+	result["releases"] = json::Array{};
+	return result;
+}
 #endif

@@ -130,10 +130,6 @@ if get_option('official_release')
     conf.set('AEGI_OFFICIAL_RELEASE', 1)
 endif
 conf.set('WITH_UPDATE_CHECKER', get_option('enable_update_checker'))
-if get_option('enable_update_checker')
-    conf.set_quoted('UPDATE_CHECKER_SERVER', get_option('update_server'))
-    conf.set_quoted('UPDATE_CHECKER_BASE_URL', get_option('update_url'))
-endif
 
 deps = []
 

@@ -38,6 +38,7 @@ tests_src = [
     'tests/mru.cpp',
     'tests/option.cpp',
     'tests/path.cpp',
+    'tests/release_manifest.cpp',
     'tests/signals.cpp',
     'tests/split.cpp',
     'tests/syntax_highlight.cpp',

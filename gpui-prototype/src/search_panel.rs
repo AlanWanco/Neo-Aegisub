@@ -435,11 +435,21 @@ impl SearchPanel {
                                         .text_color(p.muted)
                                         .child(format!("{:03}", item.row)),
                                 )
-                                .child(div().text_xs().text_color(p.muted).child(item.style.clone())),
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(p.muted)
+                                        .child(item.style.clone()),
+                                ),
                         )
                         .child(div().text_sm().child(item.text.clone()))
                         .when(changed, |card| {
-                            card.child(div().text_sm().text_color(p.accent).child(item.after.clone()))
+                            card.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(p.accent)
+                                    .child(item.after.clone()),
+                            )
                         }),
                 );
             }

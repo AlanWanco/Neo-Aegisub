@@ -138,9 +138,9 @@ impl TranslationPanel {
                 .tooltip("把整行原文插入到译文")
                 .ghost()
                 .disabled(!self.state.available || self.loading)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.translation_action("insert_original", cx)
-                }))
+                .on_click(
+                    cx.listener(|view, _, _, cx| view.translation_action("insert_original", cx)),
+                )
                 .into_any_element(),
             pill("translation-seek")
                 .icon(IconName::Crosshair)
@@ -197,9 +197,27 @@ impl TranslationPanel {
             separator(),
         ];
         for (id, icon, label, command, enabled) in [
-            ("translation-video", IconName::Video, "播放当前行视频", "video/play/line", video),
-            ("translation-audio", IconName::AudioLines, "播放当前行音频", "audio/play/selection", audio),
-            ("translation-undo", IconName::Undo2, "撤销", "edit/undo", true),
+            (
+                "translation-video",
+                IconName::Video,
+                "播放当前行视频",
+                "video/play/line",
+                video,
+            ),
+            (
+                "translation-audio",
+                IconName::AudioLines,
+                "播放当前行音频",
+                "audio/play/selection",
+                audio,
+            ),
+            (
+                "translation-undo",
+                IconName::Undo2,
+                "撤销",
+                "edit/undo",
+                true,
+            ),
         ] {
             icons.push(
                 icon_pill(id)

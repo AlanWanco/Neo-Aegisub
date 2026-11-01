@@ -333,6 +333,10 @@ void FrameMain::StatusTimeout(wxString text,int ms) {
 }
 
 bool FrameMain::LaunchGpui() {
+	// The workspace command can fire while the frontend from startup is still
+	// running; spawning another one would leave two windows on the same bridge.
+	if (gpuiPid)
+		return true;
 	if (!gpuiBridge)
 		gpuiBridge = std::make_unique<GpuiBridge>(context.get());
 	if (!gpuiBridge->Start()) {

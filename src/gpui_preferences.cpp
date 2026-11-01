@@ -60,17 +60,43 @@ void backup(const char *filename) {
 	if (agi::fs::FileExists(path)) agi::fs::Copy(path, path.string() + ".backup-before-gpui");
 }
 
-bool valid_hotkey(std::string const& key) {
-	// Use the same names and modifier order as the wx keyboard handler.
-	for (int mask = 0; mask < 8; ++mask) {
-		int modifiers = (mask & 1 ? wxMOD_CMD : 0) | (mask & 2 ? wxMOD_ALT : 0) | (mask & 4 ? wxMOD_SHIFT : 0);
-		for (int code = 8; code <= WXK_SPECIAL20; ++code) {
-			if (code == WXK_SHIFT || code == WXK_ALT || code == WXK_CONTROL || (code >= 'a' && code <= 'z')) continue;
-			auto candidate = hotkey::keypress_to_str(code, modifiers);
-			if (!candidate.empty() && candidate == key && !hotkey::keypress_to_str(code, wxMOD_NONE).empty()) return true;
+std::set<std::string, std::less<>> const& valid_hotkeys() {
+	static std::set<std::string, std::less<>> const keys = [] {
+		std::set<std::string, std::less<>> keys;
+		// Use the same names and modifier order as the wx keyboard handler.
+		for (int mask = 0; mask < 8; ++mask) {
+			int modifiers = (mask & 1 ? wxMOD_CMD : 0) | (mask & 2 ? wxMOD_ALT : 0) | (mask & 4 ? wxMOD_SHIFT : 0);
+			for (int code = 8; code <= WXK_SPECIAL20; ++code) {
+				if (code == WXK_SHIFT || code == WXK_ALT || code == WXK_CONTROL || (code >= 'a' && code <= 'z')) continue;
+				auto candidate = hotkey::keypress_to_str(code, modifiers);
+				if (!candidate.empty() && !hotkey::keypress_to_str(code, wxMOD_NONE).empty()) keys.insert(candidate);
+			}
 		}
+		return keys;
+	}();
+	return keys;
+}
+
+bool valid_hotkey(std::string const& key) {
+	return valid_hotkeys().count(key) != 0;
+}
+
+/// Read a hotkey configuration file in either the current or the pre-3.1 format.
+agi::hotkey::Hotkey::HotkeyMap load_hotkey_map(std::string const& path) {
+	auto stream = agi::io::Open(agi::fs::path(path));
+	json::UnknownElement root;
+	try {
+		json::Reader::Read(root, *stream);
 	}
-	return false;
+	catch (json::Exception const& error) {
+		throw std::invalid_argument(std::string("不是有效的 JSON 快捷键文件：") + error.what());
+	}
+	try {
+		return agi::hotkey::ParseHotkeyMap(static_cast<json::Object const&>(root));
+	}
+	catch (std::bad_cast const&) {
+		throw std::invalid_argument("不是快捷键配置文件：应为“上下文 → 命令 → 快捷键列表”的对象");
+	}
 }
 
 std::vector<std::string> choices(std::string const& name) {
@@ -362,11 +388,35 @@ std::string Preferences(json::Object const& request) {
 
 std::string Hotkeys(json::Object const& request) {
 	std::string const& action = request.at("action");
+	int64_t imported = 0, skipped = 0;
 	if (action != "state") {
 		auto map = hotkey::inst->GetHotkeyMap();
 		if (action == "reset") {
 			agi::hotkey::Hotkey defaults("", GET_DEFAULT_CONFIG(default_hotkey));
 			map = defaults.GetHotkeyMap();
+		}
+		else if (action == "import") {
+			std::set<std::string_view, std::less<>> known;
+			for (auto name : cmd::get_registered_commands()) known.insert(name);
+			for (auto const& [command, combo] : load_hotkey_map(request.at("path"))) {
+				if (known.count(command) == 0 || combo.Context().empty() || !valid_hotkey(std::string(combo.Str()))) {
+					++skipped;
+					continue;
+				}
+				auto same_slot = [&](auto const& item) {
+					return item.second.Context() == combo.Context() && item.second.Str() == combo.Str();
+				};
+				if (std::any_of(map.begin(), map.end(), [&](auto const& item) { return same_slot(item) && item.first == command; })) {
+					++skipped;
+					continue;
+				}
+				for (auto it = map.begin(); it != map.end();) {
+					if (same_slot(*it)) it = map.erase(it);
+					else ++it;
+				}
+				map.emplace(command, combo);
+				++imported;
+			}
 		}
 		else {
 			std::string const& context = request.at("context"), key = request.at("key"), command = request.at("command");
@@ -404,6 +454,10 @@ std::string Hotkeys(json::Object const& request) {
 	}
 	json::Object result;
 	result["ok"] = true;
+	if (action == "import") {
+		result["imported"] = imported;
+		result["skipped"] = skipped;
+	}
 	result["bindings"] = std::move(bindings);
 	return encode(std::move(result));
 }

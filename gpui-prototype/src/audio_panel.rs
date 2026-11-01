@@ -50,7 +50,6 @@ pub struct AudioState {
     #[serde(default)]
     pub end: i64,
     #[serde(default)]
-    #[allow(dead_code)] // Rendered by the full audio page only.
     pub rate: f64,
     #[serde(default)]
     pub volume: i64,
@@ -134,16 +133,15 @@ impl AudioPanel {
             .clamp(0, state.duration.max(0))
     }
 
-
-    pub fn render(
-        &self,
-        state: &AudioState,
-        video: bool,
-        appearance: &crate::Appearance,
-        height: f32,
-        cx: &mut Context<Workspace>,
-    ) -> impl IntoElement {
-        self.render_inner(state, video, appearance, cx, true, height, true)
+    fn zoom_at(&mut self, span: i64, fraction: f64, duration: i64) {
+        let span = span.clamp(250, 600000);
+        if span == self.span {
+            return;
+        }
+        let anchor = self.view_start as f64 + self.span as f64 * fraction;
+        self.view_start =
+            ((anchor - span as f64 * fraction).round() as i64).clamp(0, (duration - span).max(0));
+        self.span = span;
     }
 
     pub fn render_compact(
@@ -155,153 +153,8 @@ impl AudioPanel {
         focused: bool,
         cx: &mut Context<Workspace>,
     ) -> impl IntoElement {
-        self.render_inner(state, video, appearance, cx, false, height, focused)
-    }
-
-    fn render_inner(
-        &self,
-        state: &AudioState,
-        video: bool,
-        appearance: &crate::Appearance,
-        cx: &mut Context<Workspace>,
-        full_controls: bool,
-        graph_height: f32,
-        focused: bool,
-    ) -> impl IntoElement {
-        // Three groups with different weights: file actions, playback and
-        // commit (one primary), then the view/option toggles as quiet pills.
-        let separator = Theme::global(cx).border;
-        // File, playback and commit actions live in the page toolbar; the row
-        // under the waveform only holds view and behaviour options.
-        let toolbar = crate::page::toolbar([
-            Button::new("open-audio")
-                .icon(IconName::FolderOpen)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("打开音频")
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"audio/open"}), cx)
-                }))
-                .into_any_element(),
-            Button::new("audio-from-video")
-                .icon(IconName::Video)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("从视频载入")
-                .disabled(!video)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"audio/open/video"}), cx)
-                }))
-                .into_any_element(),
-            div()
-                .w(px(1.))
-                .h(px(18.))
-                .mx_1()
-                .bg(separator)
-                .into_any_element(),
-            Button::new("audio-play")
-                .icon(IconName::Play)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("播放选区")
-                .disabled(!state.loaded)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"audio/play/selection"}), cx)
-                }))
-                .into_any_element(),
-            Button::new("audio-stop")
-                .icon(IconName::Pause)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("停止")
-                .disabled(!state.loaded)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"audio/stop"}), cx)
-                }))
-                .into_any_element(),
-            Button::new("audio-save-clip")
-                .icon(IconName::ExternalLink)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("导出音频剪辑…")
-                .ghost()
-                .disabled(!state.loaded)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"audio/save/clip"}), cx)
-                }))
-                .into_any_element(),
-            div()
-                .w(px(1.))
-                .h(px(18.))
-                .mx_1()
-                .bg(separator)
-                .into_any_element(),
-            Button::new("audio-commit")
-                .icon(IconName::Check)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("提交并前进")
-                .primary()
-                .disabled(!state.loaded)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"audio/commit/next"}), cx)
-                }))
-                .into_any_element(),
-            Button::new("audio-commit-stay")
-                .icon(IconName::Check)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("提交")
-                .disabled(!state.loaded)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"audio/commit/stay"}), cx)
-                }))
-                .into_any_element(),
-            Button::new("audio-revert")
-                .icon(IconName::Undo2)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("还原时间")
-                .ghost()
-                .disabled(!state.loaded)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"edit/revert"}), cx)
-                }))
-                .into_any_element(),
-            div().flex_1().into_any_element(),
-            Button::new("close-audio")
-                .icon(IconName::Close)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .label("关闭音频")
-                .ghost()
-                .disabled(!state.loaded)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":"audio/close"}), cx)
-                }))
-                .into_any_element(),
-        ]);
         let mut controls = div().h_flex().flex_wrap().gap_2().items_center();
-        // 波形/频谱 是视图控件，紧凑条把它挪到第一行；完整页保持原顺序。
-        let mut mode_seg = Some(crate::page::segmented(
+        let mode_seg = crate::page::segmented(
             cx,
             [
                 ("waveform", "波形", self.mode == "waveform", false),
@@ -321,43 +174,34 @@ impl AudioPanel {
                 view.refresh_audio(cx);
                 cx.notify();
             },
-        ));
-        if full_controls {
-            controls = controls.child(mode_seg.take().unwrap());
-        }
-        // The workspace strip is one dense toolbar, so it gets the short labels;
-        // the full 音频调时 page keeps the descriptive ones.
-        let short = |long: &'static str, brief: &'static str| {
-            if full_controls { long } else { brief }
-        };
+        );
         for (id, label, command, active, tip) in [
             (
                 "audio-auto-commit",
-                short("自动提交", "自动"),
+                "自动",
                 "audio/opt/autocommit",
                 state.autocommit,
                 "自动提交：改动时间后立即写入字幕",
             ),
             (
                 "audio-auto-next",
-                short("提交后前进", "前进"),
+                "前进",
                 "audio/opt/autonext",
                 state.autonext,
                 "提交后前进：提交一行后自动选中下一行",
             ),
             (
                 "audio-auto-scroll",
-                short("跟随当前句", "跟随"),
+                "跟随",
                 "audio/opt/autoscroll",
                 state.autoscroll,
                 "跟随当前句：波形随播放自动滚动",
             ),
         ] {
-            let chip = crate::page::toggle_chip(cx, id, label, active, false).on_click(
-                cx.listener(move |view, _, _, cx| {
-                    view.invoke(json!({"op":"command", "name":command}), cx)
-                }),
-            );
+            let chip =
+                crate::page::toggle_chip(cx, id, label, active, false).on_click(cx.listener(
+                    move |view, _, _, cx| view.invoke(json!({"op":"command", "name":command}), cx),
+                ));
             controls = controls.child(crate::page::with_tooltip(chip, tip));
         }
         controls = controls.child(crate::page::with_tooltip(
@@ -376,7 +220,7 @@ impl AudioPanel {
             crate::page::toggle_chip(
                 cx,
                 "audio-karaoke-mode",
-                short("卡拉 OK", "卡拉OK"),
+                "卡拉OK",
                 state.karaoke,
                 !state.loaded,
             )
@@ -389,15 +233,16 @@ impl AudioPanel {
             "卡拉 OK 模式：按音节切分时间",
         ));
         controls = controls.child(crate::page::with_tooltip(
-            crate::page::toggle_chip(cx, "audio-medusa", "美杜莎", state.medusa, false)
-                .on_click(cx.listener(|view, _, _, cx| {
+            crate::page::toggle_chip(cx, "audio-medusa", "美杜莎", state.medusa, false).on_click(
+                cx.listener(|view, _, _, cx| {
                     // Medusa mode swaps the global timing hotkeys for the
                     // audio-editing ones; the app command owns that option.
                     view.invoke(
                         json!({"op":"command", "name":"app/toggle/global_hotkeys"}),
                         cx,
                     )
-                })),
+                }),
+            ),
             "美杜莎模式：把全局时间热键换成音频编辑热键",
         ));
         let bounds = self.bounds.clone();
@@ -412,7 +257,7 @@ impl AudioPanel {
             .id("audio-graph")
             .relative()
             .w_full()
-            .h(px(graph_height))
+            .h(px(height))
             .flex_shrink_0()
             .rounded(gpui_kit::px(crate::workspace_theme::RADIUS_MD))
             .bg(graph_bg)
@@ -518,6 +363,31 @@ impl AudioPanel {
             );
         }
         let graph = graph
+            .on_scroll_wheel(
+                cx.listener(|view, event: &gpui_kit::ScrollWheelEvent, _, cx| {
+                    if !view.snapshot.audio.loaded || view.audio.dragging {
+                        return;
+                    }
+                    let delta = match event.delta {
+                        gpui_kit::ScrollDelta::Pixels(delta) => f32::from(delta.y) / 40.,
+                        gpui_kit::ScrollDelta::Lines(delta) => delta.y,
+                    };
+                    if delta == 0. {
+                        return;
+                    }
+                    let bounds = *view.audio.bounds.borrow();
+                    let fraction = (f64::from(f32::from(event.position.x - bounds.left()))
+                        / f64::from(f32::from(bounds.size.width).max(1.)))
+                    .clamp(0., 1.);
+                    let span =
+                        (view.audio.span as f64 * 1.25_f64.powf(-f64::from(delta))).round() as i64;
+                    view.audio
+                        .zoom_at(span, fraction, view.snapshot.audio.duration);
+                    view.refresh_audio(cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
             .on_any_mouse_down(
                 cx.listener(|view, event: &gpui_kit::MouseDownEvent, window, cx| {
                     if !view.snapshot.audio.loaded
@@ -588,187 +458,36 @@ impl AudioPanel {
                     view.flush_audio_drag(cx);
                 }),
             );
-        // Navigation, zoom and gain are icon buttons with tooltips; the zoom
-        // presets below are a segmented control so the current level is visible.
-        let icon_button = |id: &'static str, icon: IconName, label: &'static str| {
-            Button::new(id)
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .child(gpui_kit::component::Icon::new(icon).size(gpui_kit::px(15.)))
-                .accessibility_label(label)
-                .tooltip(label)
-                .ghost()
-                .disabled(!state.loaded)
-        };
-        let viewport = div()
-            .h_flex()
-            .flex_wrap()
-            .gap_1()
-            .items_center()
-            .child(
-                icon_button("audio-left", IconName::ChevronLeft, "向前").on_click(cx.listener(
-                    |view, _, _, cx| {
-                        view.audio.view_start =
-                            (view.audio.view_start - view.audio.span / 2).max(0);
-                        view.refresh_audio(cx);
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                icon_button("audio-right", IconName::ChevronRight, "向后").on_click(cx.listener(
-                    |view, _, _, cx| {
-                        let duration = view.snapshot.audio.duration;
-                        view.audio.view_start = (view.audio.view_start + view.audio.span / 2)
-                            .min((duration - view.audio.span).max(0));
-                        view.refresh_audio(cx);
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                div()
-                    .w(px(1.))
-                    .h(px(18.))
-                    .mx_1()
-                    .bg(Theme::global(cx).border),
-            )
-            .child(
-                icon_button("audio-zoom-out", IconName::ZoomOut, "缩小波形").on_click(cx.listener(
-                    |view, _, _, cx| {
-                        view.audio.span = (view.audio.span * 2).min(600000);
-                        view.refresh_audio(cx);
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                icon_button("audio-zoom-in", IconName::ZoomIn, "放大波形").on_click(cx.listener(
-                    |view, _, _, cx| {
-                        view.audio.span = (view.audio.span / 2).max(250);
-                        view.refresh_audio(cx);
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                Button::new("audio-fit-line")
-                    .rounded(gpui_kit::px(999.))
-                    .small()
-                    .px(gpui_kit::px(13.))
-                    .py(gpui_kit::px(3.))
-                    .icon(IconName::Crosshair)
-                    .label("定位当前句")
-                    .tooltip("缩放到当前句的时间范围")
-                    .ghost()
-                    .disabled(!state.loaded)
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.audio.view_start = (view.snapshot.audio.start - 1000).max(0);
-                        view.audio.span = (view.snapshot.audio.end - view.snapshot.audio.start
-                            + 2000)
-                            .clamp(1000, 600000);
-                        view.refresh_audio(cx);
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .w(px(1.))
-                    .h(px(18.))
-                    .mx_1()
-                    .bg(Theme::global(cx).border),
-            )
-            .child(
-                icon_button("audio-gain-down", IconName::Volume1, "增益 −").on_click(cx.listener(
-                    |view, _, _, cx| {
-                        view.audio.gain = (view.audio.gain / 2).max(10);
-                        view.refresh_audio(cx);
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(Theme::global(cx).muted_foreground)
-                    .child(format!("{}%", self.gain)),
-            )
-            .child(
-                icon_button("audio-gain-up", IconName::Volume2, "增益 +").on_click(cx.listener(
-                    |view, _, _, cx| {
-                        view.audio.gain = (view.audio.gain * 2).min(1000);
-                        view.refresh_audio(cx);
-                        cx.notify();
-                    },
-                )),
-            );
-        // Playback rate is a segmented control so the active speed is visible at
-        // a glance; volume uses icon buttons plus its current value.
         let p = Theme::global(cx);
-        let mut rates = div()
+        let rate_steps = [("0.5×", 50), ("1×", 100), ("1.5×", 150), ("2×", 200)];
+        let current = rate_steps
+            .iter()
+            .position(|(_, rate)| (state.rate - *rate as f64).abs() < 0.5)
+            .unwrap_or(1);
+        let next = rate_steps[(current + 1) % rate_steps.len()];
+        let rates = div()
             .h_flex()
             .items_center()
             .gap_0p5()
             .p_0p5()
             .rounded_full()
-            .bg(p.muted);
-        let rate_steps = [
-            ("audio-rate-50", "0.5×", 50),
-            ("audio-rate-100", "1×", 100),
-            ("audio-rate-150", "1.5×", 150),
-            ("audio-rate-200", "2×", 200),
-        ];
-        // Four chips cost a third of the strip; the workspace cycles one instead.
-        let rate_list: &[(&str, &str, i32)] = if full_controls {
-            &rate_steps
-        } else {
-            &[]
-        };
-        if !full_controls {
-            let current = rate_steps
-                .iter()
-                .position(|(_, _, rate)| (state.rate - *rate as f64).abs() < 0.5)
-                .unwrap_or(1);
-            let next = rate_steps[(current + 1) % rate_steps.len()];
-            rates = rates.child(
+            .bg(p.muted)
+            .child(
                 Button::new("audio-rate-cycle")
                     .rounded(gpui_kit::px(999.))
                     .small()
                     .px(gpui_kit::px(9.))
                     .py(gpui_kit::px(3.))
-                    .label(rate_steps[current].1)
+                    .label(rate_steps[current].0)
                     .tooltip("点击切换播放倍速")
                     .ghost()
                     .on_click(cx.listener(move |view, _, _, cx| {
                         view.invoke(
-                            json!({"op":"audio_action", "action":"rate", "value":next.2}),
+                            json!({"op":"audio_action", "action":"rate", "value":next.1}),
                             cx,
                         )
                     })),
             );
-        }
-        for (id, label, rate) in rate_list.iter().copied() {
-            rates = rates.child(
-                Button::new(id)
-                    .rounded(gpui_kit::px(999.))
-                    .small()
-                    .px(gpui_kit::px(13.))
-                    .py(gpui_kit::px(3.))
-                    .label(label)
-                    .ghost()
-                    .when((state.rate - rate as f64).abs() < 0.5, |button| {
-                        button.primary()
-                    })
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.invoke(
-                            json!({"op":"audio_action", "action":"rate", "value":rate}),
-                            cx,
-                        )
-                    })),
-            );
-        }
         let sound = div()
             .h_flex()
             .flex_wrap()
@@ -794,16 +513,18 @@ impl AudioPanel {
                         );
                     })),
             )
-            .child(
+            .child(crate::page::with_tooltip(
                 div()
+                    .id("audio-volume-value")
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
                     .text_sm()
                     .text_color(p.muted_foreground)
-                    .child(if full_controls {
-                        format!("音量 {}%", state.volume)
-                    } else {
-                        format!("{}%", state.volume)
-                    }),
-            )
+                    .child(Icon::new(IconName::Volume2).size(px(15.)))
+                    .child(format!("{}%", state.volume)),
+                "播放音量",
+            ))
             .child(
                 Button::new("audio-volume-up")
                     .rounded(gpui_kit::px(999.))
@@ -933,38 +654,34 @@ impl AudioPanel {
                 format_time(state.end),
                 format_time(state.duration)
             )
-        } else if full_controls {
-            "加载视频音轨后可使用波形调时和卡拉 OK 工具".to_owned()
         } else {
             // The strip is only 40px tall in the workspace; a permanent sentence
             // here costs a whole line of waveform.
             String::new()
         };
-        let mut title_row = div().h_flex().items_center().gap_2();
-        if !full_controls {
-            title_row = title_row
-                .child(Icon::new(IconName::AudioLines).size(px(14.)))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_sm()
-                        .font_semibold()
-                        .child("音频波形"),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .text_size(px(11.))
-                        .text_color(Theme::global(cx).muted_foreground)
-                        .child(hint),
-                );
-        } else {
-            title_row = title_row.child(div().flex_1());
-        }
+        let title_row = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(Icon::new(IconName::AudioLines).size(px(14.)))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_sm()
+                    .font_semibold()
+                    .child("音频波形"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(px(11.))
+                    .text_color(Theme::global(cx).muted_foreground)
+                    .child(hint),
+            );
         let palette = crate::workspace_theme::Palette::new(Theme::global(cx).is_dark());
         let mut panel = div()
             .v_flex()
@@ -990,156 +707,163 @@ impl AudioPanel {
                 }),
             )
             .p_3()
-            .child(title_row.when(!full_controls && !state.loaded, |row| row.child(load_audio)))
+            .child(title_row.when(!state.loaded, |row| row.child(load_audio)))
             .child(graph);
-        if full_controls {
-            let divider = Theme::global(cx).border;
-            panel = panel
-                .child(div().v_flex().gap_2().child(viewport).child(sound).child(karaoke))
-                .child(
-                    div()
-                        .id("audio-page-resize-handle")
-                        .aria_label("调整音频波形高度")
-                        .role(gpui_kit::Role::Splitter)
-                        .h(px(6.))
-                        .w_full()
-                        .flex_shrink_0()
-                        .h_flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_row_resize()
-                        .child(div().w(px(48.)).h(px(3.)).rounded(px(2.)).bg(divider))
-                        .on_mouse_down(
-                            gpui_kit::MouseButton::Left,
-                            cx.listener(|view, event: &gpui_kit::MouseDownEvent, _, cx| {
-                                view.layout_drag = Some(crate::WorkspaceResizeDrag::AudioPage {
-                                    start_y: event.position.y,
-                                    start_height: view.audio_page_height,
-                                });
-                                cx.stop_propagation();
-                                cx.notify();
-                            }),
-                        ),
-                )
-                .child(controls)
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(Theme::global(cx).muted_foreground)
-                        .child("左键设置开始并拖动结束，右键设置结束；Ctrl/⌘ 拖动重合标记，Alt 拖动整句。时间修改遵循原有自动提交与吸附设置。"),
-                )
-;
-            crate::page::page(cx, "audio-panel")
-                .child(toolbar)
-                .child(panel)
-                .into_any_element()
-        } else {
-            let compact_viewport = div()
-                .h_flex()
-                .flex_wrap()
-                .gap_1()
-                .items_center()
-                .child(
-                    Button::new("audio-gain-down")
-                        .child(Icon::new(IconName::Minus).size(px(15.)))
-                        .rounded(gpui_kit::px(999.))
-                        .small()
-                        .px(gpui_kit::px(9.))
-                        .py(gpui_kit::px(3.))
-                        
-                        .tooltip("降低波形增益（÷2）")
-                        .disabled(!state.loaded)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.audio.gain = (view.audio.gain / 2).max(10);
-                            view.refresh_audio(cx);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(Theme::global(cx).muted_foreground)
-                        .child(format!("{}%", self.gain)),
-                )
-                .child(
-                    Button::new("audio-gain-up")
-                        .child(Icon::new(IconName::Plus).size(px(15.)))
-                        .rounded(gpui_kit::px(999.))
-                        .small()
-                        .px(gpui_kit::px(9.))
-                        .py(gpui_kit::px(3.))
-                        
-                        .tooltip("提高波形增益（×2）")
-                        .disabled(!state.loaded)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.audio.gain = (view.audio.gain * 2).min(1000);
-                            view.refresh_audio(cx);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("audio-fit-line")
-                        .child(Icon::new(IconName::Locate).size(px(15.)))
-                        .rounded(gpui_kit::px(999.))
-                        .small()
-                        .px(gpui_kit::px(9.))
-                        .py(gpui_kit::px(3.))
-                        
-                        .disabled(!state.loaded)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.audio.view_start = (view.snapshot.audio.start - 1000).max(0);
-                            view.audio.span = (view.snapshot.audio.end - view.snapshot.audio.start
-                                + 2000)
-                                .clamp(1000, 600000);
-                            view.refresh_audio(cx);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("audio-zoom-in")
-                        .child(Icon::new(IconName::ZoomIn).size(px(15.)))
-                        .rounded(gpui_kit::px(999.))
-                        .small()
-                        .px(gpui_kit::px(9.))
-                        .py(gpui_kit::px(3.))
-                        
-                        .disabled(!state.loaded)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.audio.span = (view.audio.span / 2).max(250);
-                            view.refresh_audio(cx);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("audio-zoom-out")
-                        .child(Icon::new(IconName::ZoomOut).size(px(15.)))
-                        .rounded(gpui_kit::px(999.))
-                        .small()
-                        .px(gpui_kit::px(9.))
-                        .py(gpui_kit::px(3.))
-                        
-                        .disabled(!state.loaded)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.audio.span = (view.audio.span * 2).min(600000);
-                            view.refresh_audio(cx);
-                            cx.notify();
-                        })),
-                );
-            // Two rows by construction: view/playback above, behaviour and modes below.
-            panel = panel
-                .child(
-                    div()
-                        .h_flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_1()
-                        .child(mode_seg.take().unwrap())
-                        .child(compact_viewport)
-                        .child(sound),
-                )
-                .child(controls)
-                .child(karaoke.when(state.karaoke, |row| row));
-            panel.into_any_element()
-        }
+        let compact_viewport = div()
+            .h_flex()
+            .flex_wrap()
+            .gap_1()
+            .items_center()
+            .child(
+                Button::new("audio-gain-down")
+                    .child(Icon::new(IconName::Minus).size(px(15.)))
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(9.))
+                    .py(gpui_kit::px(3.))
+                    .tooltip("降低波形增益（÷2）")
+                    .disabled(!state.loaded)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.audio.gain = (view.audio.gain / 2).max(10);
+                        view.refresh_audio(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(crate::page::with_tooltip(
+                div()
+                    .id("audio-gain-value")
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(Theme::global(cx).muted_foreground)
+                    .child(Icon::new(IconName::AudioLines).size(px(15.)))
+                    .child(format!("{}%", self.gain)),
+                "波形显示增益：只改变画面幅度，不改变播放音量",
+            ))
+            .child(
+                Button::new("audio-gain-up")
+                    .child(Icon::new(IconName::Plus).size(px(15.)))
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(9.))
+                    .py(gpui_kit::px(3.))
+                    .tooltip("提高波形增益（×2）")
+                    .disabled(!state.loaded)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.audio.gain = (view.audio.gain * 2).min(1000);
+                        view.refresh_audio(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("audio-fit-line")
+                    .child(Icon::new(IconName::Locate).size(px(15.)))
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(9.))
+                    .py(gpui_kit::px(3.))
+                    .accessibility_label("定位当前句")
+                    .tooltip("缩放到当前句的时间范围；在波形上滚轮缩放，以鼠标位置为中心")
+                    .disabled(!state.loaded)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.audio.view_start = (view.snapshot.audio.start - 1000).max(0);
+                        view.audio.span = (view.snapshot.audio.end - view.snapshot.audio.start
+                            + 2000)
+                            .clamp(1000, 600000);
+                        view.refresh_audio(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("audio-zoom-out")
+                    .child(Icon::new(IconName::ZoomOut).size(px(15.)))
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(9.))
+                    .py(gpui_kit::px(3.))
+                    .accessibility_label("缩小波形")
+                    .tooltip("缩小波形时间轴")
+                    .disabled(!state.loaded)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.audio
+                            .zoom_at(view.audio.span * 2, 0.5, view.snapshot.audio.duration);
+                        view.refresh_audio(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("audio-zoom-in")
+                    .child(Icon::new(IconName::ZoomIn).size(px(15.)))
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(9.))
+                    .py(gpui_kit::px(3.))
+                    .accessibility_label("放大波形")
+                    .tooltip("放大波形时间轴")
+                    .disabled(!state.loaded)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.audio
+                            .zoom_at(view.audio.span / 2, 0.5, view.snapshot.audio.duration);
+                        view.refresh_audio(cx);
+                        cx.notify();
+                    })),
+            );
+        // View/playback above, behaviour and modes below.
+        panel = panel
+            .child(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_1()
+                    .child(mode_seg)
+                    .child(compact_viewport)
+                    .child(sound),
+            )
+            .child(controls)
+            .child(karaoke.when(state.karaoke, |row| row));
+        panel.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AudioPanel;
+
+    #[test]
+    fn zoom_preserves_time_under_pointer() {
+        let mut panel = AudioPanel::new();
+        panel.view_start = 10000;
+        panel.zoom_at(6000, 0.75, 60000);
+        assert_eq!((panel.view_start, panel.span), (14500, 6000));
+        panel.zoom_at(12000, 0.75, 60000);
+        assert_eq!((panel.view_start, panel.span), (10000, 12000));
+    }
+
+    #[test]
+    fn zoom_stays_within_media_bounds() {
+        let mut panel = AudioPanel::new();
+        panel.zoom_at(24000, 0.75, 60000);
+        assert_eq!(panel.view_start, 0);
+        panel.view_start = 48000;
+        panel.span = 12000;
+        panel.zoom_at(24000, 0.25, 60000);
+        assert_eq!(panel.view_start, 36000);
+        panel.zoom_at(60000, 0.5, 18000);
+        assert_eq!(panel.view_start, 0);
+    }
+
+    #[test]
+    fn zoom_limits_do_not_shift_time_at_same_scale() {
+        let mut panel = AudioPanel::new();
+        panel.view_start = 10000;
+        panel.zoom_at(1, 0.75, 900000);
+        assert_eq!(panel.span, 250);
+        let start = panel.view_start;
+        panel.zoom_at(1, 0.25, 900000);
+        assert_eq!(panel.view_start, start);
+        panel.zoom_at(i64::MAX, 0.5, 900000);
+        assert_eq!(panel.span, 600000);
     }
 }

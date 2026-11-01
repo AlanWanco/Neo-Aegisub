@@ -17,6 +17,7 @@
 #pragma once
 
 #include <libaegisub/color.h>
+#include <libaegisub/cajun/elements.h>
 
 #include <functional>
 #include <string>
@@ -41,12 +42,13 @@ bool GetColorFromUser(wxWindow *parent, agi::Color original, bool alpha, std::fu
 /// Ask the user to pick an autosaved file to open
 /// @return Path to file or empty string if canceled
 std::string PickAutosaveFile(wxWindow *parent);
-
-/// @brief Check whether a newer version is available and report to the user if there is
-/// @param interactive If true, always check and report all results, both success and failure.
-///                    If false, only check if auto-checking is enabled, and only report if a
-///                    new version actually exists.
+/// Check the AlanWanco/Aegisub GitHub releases, sharing any check already in progress.
+/// Interactive checks bypass automatic preferences and scheduling. wx displays the
+/// result; GPUI reads GetVersionCheckState(). Automatic checks only display updates.
 void PerformVersionCheck(bool interactive);
+/// Thread-safe snapshot: enabled, checking, status, current_version, source,
+/// message, and releases (name/url/description). Available in disabled builds too.
+json::Object GetVersionCheckState();
 
 /// Ask the user to pick settings for a script resampling
 /// @return Does the user want to proceed with the resampling?

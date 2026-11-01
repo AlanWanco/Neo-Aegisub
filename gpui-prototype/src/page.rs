@@ -370,13 +370,11 @@ pub fn toggle_chip(
         .when(!disabled, |chip| chip.cursor_pointer())
         // Only a selected chip gets a leading mark; an unselected one reserves no
         // room for it, so the label sits centred instead of shifted right.
-        .children(
-            on.then(|| {
-                Icon::new(IconName::Check)
-                    .size(px(13.))
-                    .text_color(p.accent)
-            }),
-        )
+        .children(on.then(|| {
+            Icon::new(IconName::Check)
+                .size(px(13.))
+                .text_color(p.accent)
+        }))
         .child(label)
 }
 

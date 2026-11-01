@@ -51,6 +51,7 @@ json::Object about() {
 
 json::Array log_entries() {
 	json::Array entries;
+	static char const* const severity[] = {"exception", "assert", "warning", "info", "debug"};
 	auto const messages = agi::log::log->GetMessages();
 	// Newest last, but bounded: the log keeps the whole session.
 	size_t const begin = messages.size() > 400 ? messages.size() - 400 : 0;
@@ -59,7 +60,7 @@ json::Array log_entries() {
 		json::Object entry;
 		entry["section"] = message.section ? message.section : "";
 		entry["message"] = message.message;
-		entry["severity"] = agi::log::Severity_ID[static_cast<int>(message.severity)];
+		entry["severity"] = json::String(severity[static_cast<int>(message.severity)]);
 		push(entries, std::move(entry));
 	}
 	return entries;
@@ -227,10 +228,13 @@ std::string Dialog(agi::Context *context, json::Object const& request) {
 		result["restart"] = code != wxGetApp().locale.GetActiveLanguage();
 	}
 	else if (action == "updates") {
-		// The check reports back through the notice channel, so nothing to wait for.
 		PerformVersionCheck(true);
+		result = GetVersionCheckState();
 		result["ok"] = true;
-		result["pending"] = true;
+	}
+	else if (action == "update_state") {
+		result = GetVersionCheckState();
+		result["ok"] = true;
 	}
 	else if (action == "fonts") {
 		result["fonts"] = fonts();

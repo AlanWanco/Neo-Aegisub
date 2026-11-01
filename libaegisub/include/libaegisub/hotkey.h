@@ -69,11 +69,6 @@ private:
 	const agi::fs::path config_file;    ///< Default user config location.
 	bool backup_config_file = false;
 
-	/// Build hotkey map.
-	/// @param context Context being parsed.
-	/// @param object  json::Object holding items for context being parsed.
-	void BuildHotkey(std::string_view context, const json::Object& object);
-
 	/// Write active Hotkey configuration to disk.
 	void Flush();
 
@@ -116,5 +111,11 @@ public:
 
 	DEFINE_SIGNAL_ADDERS(HotkeysChanged, AddHotkeyChangeListener)
 };
+
+/// Convert a parsed hotkey configuration object into a map.
+/// Accepts both the current string form and the pre-3.1 {modifiers, key} form.
+/// @param root Object of context -> command -> array of shortcuts
+/// @return The commands and their shortcuts, in file order
+Hotkey::HotkeyMap ParseHotkeyMap(json::Object const& root);
 
 } // namespace agi::hotkey
