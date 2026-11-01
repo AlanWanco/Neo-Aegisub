@@ -112,6 +112,10 @@ macOS 个人词典属于系统状态，隔离 profile 不能隔离学习词。�
 
 2026-11-01 帮助窗口与旧版快捷键导入：帮助菜单的检查更新、关于、日志改为 GPUI 原生卡片窗口，点击遮罩或关闭按钮退出；更新检查改用 fork `AlanWanco/Aegisub` 的 releases，按修订号与语义版本取最新，跳过草稿和仅源码发布，预览版与正式版一并比较，结果含来源地址、当前版本和发布页链接，窗口关闭后轮询停止。快捷键页新增“导入旧版快捷键…”，同时接受旧版 `{modifiers,key}` 与现行字符串格式，同一上下文与按键以文件中靠后者为准，未知命令、无效按键与完全重复计入跳过数。修复启动后再次执行“GPUI 工作台”命令会开出第二个前端窗口的问题。macOS 实际窗口核对三个窗口的标题、内容、链接与遮罩关闭，导入实测 2 条、跳过 2 条并核对写入的 `hotkey.json`；前端 release 构建、11 项 Rust 测试与 Meson `gtest main` 通过；本轮未实测 Windows/Linux。
 
+2026-11-01 语言目录补齐：从当前源码重新生成 `po/aegisub.pot`（新增 47 条、移除 9 条旧更新检查文案），并用 `po/update_po.sh` 合并进全部 33 个 `.po`，使每个语言文件都含当前全部 msgid。`po/zh_CN.po` 补齐新增与 fuzzy 条目后 1716 条全部翻译，无 fuzzy、无未翻译。新增 `po/build_catalogs.sh` 与 meson `catalogs` 目标，把各语言编译到 `<build>/po/<lang>/LC_MESSAGES/aegisub.mo`；`tools/preview-ui.sh` 启动前编译并导出 `AEGISUB_LOCALE_DIR`，构建树运行不再回退英文。macOS 实际窗口确认日志输出 `[locale] zh_CN catalog loaded`，wx 菜单与 GPUI 菜单（帮助：网站/Bug跟踪系统/IRC 频道/检查更新/关于/日志窗口；视图：四种视图与标签显示）全部中文，检查更新窗口显示“Aegisub 无可用更新。”。`msgfmt -c` 报 `po/be.po` 七条复数条目格式说明符不匹配（既有翻译缺陷，已记录未改），故目录编译不带 `-c`，避免该语言整体丢失目录。wxWidgets 自带的 Window 菜单（Minimize All/Zoom All/Fill/Center/Enter Full Screen）仍需 `wxstd.mo`，Homebrew 的 wx 3.3 未附带，本轮未处理。
+
+2026-11-01 语言选择器收口：`WITH_GPUI_DEFAULT` 构建启动时把 `App/Language` 固定为 `zh_CN`，所以“界面语言”里另外 32 种目录只是死选项——选中后要重启，重启又被覆盖回中文。`src/gpui_dialogs.cpp` 的 `languages()` 在该宏下只返回当前生效语言并附 `note` 说明，前端把 `note` 显示为窗口副标题；非 GPUI 构建仍返回完整列表。macOS 实际窗口确认语言窗口只剩“中文（中国）”与说明文字，点击遮罩可关闭；前端 release 构建、`fmt --check`、11 项 Rust 测试与 Meson `gtest main` 通过。
+
 打开字幕时询问关联媒体、未保存确认、加载关联脚本的信任提示，以及未移植的对话框仍可能进入 wx 原生模态循环；桥接等待此时不等于程序崩溃。输入法、Windows 栈溢出和跨平台运行仍为未验证项。
 
 ## 提交边界

@@ -494,6 +494,7 @@ enum HostDialog {
         items: Vec<LanguageItem>,
         active: String,
         restart: bool,
+        note: Option<String>,
     },
     Font {
         faces: Vec<String>,
@@ -2038,6 +2039,7 @@ impl Workspace {
                 items,
                 active: value["active"].as_str().unwrap_or("").to_owned(),
                 restart: false,
+                note: value["note"].as_str().map(str::to_owned),
             });
         });
     }
@@ -2712,6 +2714,7 @@ impl Workspace {
                 items,
                 active,
                 restart,
+                note,
             } => {
                 let mut list = div()
                     .id("host-dialog-language")
@@ -2742,7 +2745,9 @@ impl Workspace {
                 }
                 (
                     "界面语言".into(),
-                    if *restart {
+                    if let Some(note) = note {
+                        note.clone().into()
+                    } else if *restart {
                         "已保存，重启后生效".into()
                     } else {
                         "选择界面显示语言".into()

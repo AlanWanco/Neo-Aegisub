@@ -18,6 +18,17 @@ if [ ! -x "$APP_EXECUTABLE" ]; then
     exit 1
 fi
 
+# `i18n.gettext` only compiles catalogs on install, so a build tree has none
+# and every wxWidgets string would fall back to English next to a Chinese
+# GPUI workspace. Compile them here and point the app at them.
+if command -v meson >/dev/null 2>&1; then
+    meson compile -C "$BUILD_DIR" catalogs >/dev/null 2>&1 ||
+        echo "warning: could not build the message catalogs; wxWidgets strings stay English" >&2
+fi
+if [ -d "${BUILD_DIR}/po/zh_CN/LC_MESSAGES" ]; then
+    export AEGISUB_LOCALE_DIR="${BUILD_DIR}/po"
+fi
+
 PREVIEW_HOME=${AEGISUB_UI_PREVIEW_HOME:-"${BUILD_DIR}/preview-home"}
 mkdir -p "$PREVIEW_HOME"
 PREVIEW_HOME=$(CDPATH= cd -- "$PREVIEW_HOME" && pwd)

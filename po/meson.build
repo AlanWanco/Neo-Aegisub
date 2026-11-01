@@ -14,3 +14,12 @@ i18n.gettext('aegisub',
                 '--sort-by-file'
              ],
              install_dir: localedir)
+
+# `i18n.gettext` only compiles catalogs while installing, so a plain build
+# tree has no .mo files and every wx string falls back to English. This
+# target writes <build>/po/<lang>/LC_MESSAGES/aegisub.mo for launchers that
+# export AEGISUB_LOCALE_DIR, so a build-tree run matches an installed build.
+run_target('catalogs',
+           command: [find_program('build_catalogs.sh'),
+                     meson.current_build_dir(),
+                     meson.current_source_dir()])

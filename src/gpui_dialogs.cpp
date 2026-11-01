@@ -195,7 +195,17 @@ json::Object font_collection(agi::Context *context) {
 json::Object languages() {
 	json::Object result;
 	json::Array items;
-	for (auto const& [code, name] : wxGetApp().locale.GetAvailableLanguages()) {
+	auto languages = wxGetApp().locale.GetAvailableLanguages();
+#ifdef WITH_GPUI_DEFAULT
+	// Startup pins the language to zh_CN because the GPUI workspace only ships
+	// Chinese strings, so offering the other catalogs would be dead UI: picking
+	// one only reverts on the next start.
+	std::string const active = wxGetApp().locale.GetActiveLanguage();
+	languages.erase(std::remove_if(languages.begin(), languages.end(),
+		[&](auto const& language) { return language.first != active; }), languages.end());
+	result["note"] = "GPUI 工作台目前只有中文界面，语言切换暂不可用。";
+#endif
+	for (auto const& [code, name] : languages) {
 		json::Object item;
 		item["code"] = code;
 		item["name"] = name;
