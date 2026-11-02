@@ -463,7 +463,7 @@ struct FontState {
     underline: bool,
 }
 
-const FORK_RELEASES_URL: &str = "https://github.com/AlanWanco/Aegisub/releases";
+const FORK_RELEASES_URL: &str = "https://github.com/AlanWanco/Neo-Aegisub/releases";
 
 #[derive(Default, Deserialize)]
 struct UpdateState {
@@ -2591,7 +2591,7 @@ impl Workspace {
                 );
                 (
                     "检查更新".into(),
-                    "AlanWanco/Aegisub · 正式版与预览版".into(),
+                    "AlanWanco/Neo-Aegisub · 正式版与预览版".into(),
                     body.into_any_element(),
                     div().into_any_element(),
                 )

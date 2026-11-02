@@ -12,7 +12,8 @@
 #include <string_view>
 
 namespace updates {
-inline constexpr char releases_url[] = "https://github.com/AlanWanco/Aegisub/releases";
+inline constexpr char releases_url[] = "https://github.com/AlanWanco/Neo-Aegisub/releases";
+inline constexpr std::string_view asset_prefix = "Neo-Aegisub-";
 
 struct Release {
 	std::string name;
@@ -48,7 +49,7 @@ inline std::optional<Release> FindUpdate(json::Array const& releases, int revisi
 		Release release;
 		release.name = static_cast<std::string const&>(item.at("name"));
 		release.url = static_cast<std::string const&>(item.at("html_url"));
-		if (!release.url.starts_with("https://github.com/AlanWanco/Aegisub/releases/tag/"))
+		if (!release.url.starts_with("https://github.com/AlanWanco/Neo-Aegisub/releases/tag/"))
 			continue;
 		if (auto body = item.find("body"); body != item.end()) {
 			try { release.description = static_cast<std::string const&>(body->second); }
@@ -63,8 +64,8 @@ inline std::optional<Release> FindUpdate(json::Array const& releases, int revisi
 			    !(name.ends_with(".dmg") || name.ends_with(".exe") || name.ends_with(".zip") ||
 			      name.ends_with(".AppImage") || name.ends_with(".deb") || name.ends_with(".rpm") ||
 			      name.ends_with(".tar.gz") || name.ends_with(".tar.xz"))) continue;
-			if (!name.starts_with("Neo-Aegisub-")) continue;
-			name.remove_prefix(8);
+			if (!name.starts_with(asset_prefix)) continue;
+			name.remove_prefix(asset_prefix.size());
 			int number = 0;
 			auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), number);
 			if (error == std::errc{} && number > 0 && end != name.data() + name.size() && *end == '-') {

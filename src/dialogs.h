@@ -42,7 +42,7 @@ bool GetColorFromUser(wxWindow *parent, agi::Color original, bool alpha, std::fu
 /// Ask the user to pick an autosaved file to open
 /// @return Path to file or empty string if canceled
 std::string PickAutosaveFile(wxWindow *parent);
-/// Check the AlanWanco/Aegisub GitHub releases, sharing any check already in progress.
+/// Check the AlanWanco/Neo-Aegisub GitHub releases, sharing any check already in progress.
 /// Interactive checks bypass automatic preferences and scheduling. wx displays the
 /// result; GPUI reads GetVersionCheckState(). Automatic checks only display updates.
 void PerformVersionCheck(bool interactive);

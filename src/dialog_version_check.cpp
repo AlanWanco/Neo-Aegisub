@@ -174,12 +174,15 @@ std::optional<updates::Release> DoCheck() {
 	std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers(
 		curl_slist_append(nullptr, "Accept: application/vnd.github+json"), curl_slist_free_all);
 	if (!headers) throw std::runtime_error("Could not allocate GitHub request headers.");
-	curl_easy_setopt(curl.get(), CURLOPT_URL, "https://api.github.com/repos/AlanWanco/Aegisub/releases?per_page=100");
+	curl_easy_setopt(curl.get(), CURLOPT_URL, "https://api.github.com/repos/AlanWanco/Neo-Aegisub/releases?per_page=100");
 	curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
 	curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "Neo Aegisub-update-checker/1.0");
 	curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
 	curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 30L);
 	curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+	// GitHub answers the pre-rename repository path with a 301 to the renamed
+	// one; builds shipped before the rename still hard-code that old path.
+	curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
 	std::string response;
 	curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteResponse);
 	curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
