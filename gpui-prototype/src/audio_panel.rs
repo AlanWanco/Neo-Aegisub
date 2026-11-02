@@ -141,6 +141,10 @@ pub struct TileKey {
     pub span: i64,
     /// Slice number, so `index * span` is where it starts.
     pub index: i64,
+    /// Pixel height the host rendered the slice at. A bitmap taller or shorter
+    /// than the track would be scaled by its own aspect ratio, so the track
+    /// height is part of the identity instead of a fixed constant.
+    pub height: i64,
 }
 
 impl TileKey {
@@ -232,7 +236,7 @@ impl AudioPanel {
         scale * 10
     }
 
-    pub fn tile_key(&self, index: i64, epoch: u64, revision: u64) -> TileKey {
+    pub fn tile_key(&self, index: i64, epoch: u64, revision: u64, height: i64) -> TileKey {
         TileKey {
             epoch,
             revision,
@@ -240,13 +244,20 @@ impl AudioPanel {
             gain: self.gain,
             span: self.tile_span(),
             index,
+            height,
         }
     }
 
     /// Slices the view shows, plus one either side so a small pan is already
     /// decoded by the time the gesture starts. Clamped to the media: a slice
     /// before zero or past the end would only render silence.
-    pub fn wanted_tiles(&self, epoch: u64, revision: u64, duration: i64) -> Vec<TileKey> {
+    pub fn wanted_tiles(
+        &self,
+        epoch: u64,
+        revision: u64,
+        duration: i64,
+        height: i64,
+    ) -> Vec<TileKey> {
         let span = self.tile_span();
         // The last slice starts before the final sample, not at the end.
         let media_last = (duration.max(1) - 1).div_euclid(span).max(0);
@@ -255,7 +266,7 @@ impl AudioPanel {
             .min(media_last)
             .max(first);
         (first..=last)
-            .map(|index| self.tile_key(index, epoch, revision))
+            .map(|index| self.tile_key(index, epoch, revision, height))
             .collect()
     }
 
@@ -294,7 +305,8 @@ impl AudioPanel {
                         || cached.revision != key.revision
                         || cached.mode != key.mode
                         || cached.gain != key.gain
-                        || cached.span != key.span;
+                        || cached.span != key.span
+                        || cached.height != key.height;
                     let distance = (tile.start + cached.span / 2 - center).abs();
                     (!stale, distance)
                 })
@@ -482,6 +494,11 @@ impl AudioPanel {
                 .size_full(),
             );
         let width = f32::from(self.bounds.borrow().size.width).max(1.);
+        // The container's measured height is what the host was asked to render
+        // for, so slices are matched against it rather than against the height
+        // the layout requested: flex compression can make the two differ, and
+        // using the requested one would leave the track permanently blank.
+        let measured_height = f32::from(self.bounds.borrow().size.height);
         // Every cached slice is drawn over the time range it was rendered for,
         // so panning and zooming stay in step with the gesture instead of
         // freezing on the previous render until a new whole view lands. Slices
@@ -489,30 +506,61 @@ impl AudioPanel {
         // few milliseconds rather than a blank waveform.
         let (epoch, revision) = (state.epoch, state.render_revision);
         let tile_span = self.tile_span();
+        let track_height = track_pixels(if measured_height > 0.5 {
+            measured_height
+        } else {
+            height
+        });
+        let container_height = if measured_height > 0.5 {
+            measured_height
+        } else {
+            height
+        };
+        let (tiles, mode, gain, view_span) = (&self.tiles, self.mode, self.gain, self.span);
         let mut drawn = false;
-        for tile in &self.tiles {
-            let key = tile.key;
-            if key.epoch != epoch
-                || key.revision != revision
-                || key.mode != self.mode
-                || key.gain != self.gain
-                || key.span != tile_span
-            {
-                continue;
+        // Exact slices first; a slice rendered for another height is only a
+        // stand-in while a resize settles, so it never hides a matching one.
+        for exact in [true, false] {
+            if drawn {
+                break;
             }
-            if tile.start + key.span <= self.view_start || tile.start >= self.view_start + self.span
-            {
-                continue;
+            for tile in tiles {
+                let key = tile.key;
+                if key.epoch != epoch
+                    || key.revision != revision
+                    || key.mode != mode
+                    || key.gain != gain
+                    || key.span != tile_span
+                    || (key.height == track_height) != exact
+                {
+                    continue;
+                }
+                if tile.start + key.span <= self.view_start
+                    || tile.start >= self.view_start + view_span
+                {
+                    continue;
+                }
+                drawn = true;
+                // The slice lands on the container's own rect: 1:1 when the host
+                // could render at its height, and scaled when the track is
+                // squeezed below the host's smallest renderable height or while a
+                // resize has not landed yet, so the whole frequency range stays
+                // visible instead of being clipped or blanked.
+                let layer_height = if exact && key.height as f32 <= container_height {
+                    key.height as f32
+                } else {
+                    container_height
+                };
+                graph = graph.child(audio_image_layer(
+                    tile.image.clone(),
+                    tile.start,
+                    key.span,
+                    self.view_start,
+                    view_span,
+                    width,
+                    layer_height,
+                ));
             }
-            drawn = true;
-            graph = graph.child(audio_image_layer(
-                tile.image.clone(),
-                tile.start,
-                key.span,
-                self.view_start,
-                self.span,
-                width,
-            ));
         }
         if !drawn {
             graph = graph.child(
@@ -1301,6 +1349,14 @@ impl AudioPanel {
     }
 }
 
+/// Pixel height the host renders a slice at: the track's own height, inside the
+/// width the render request accepts. A bitmap rendered at a different height
+/// than the track is scaled by its aspect ratio, which made the spectrum look
+/// taller as the track got wider.
+pub fn track_pixels(height: f32) -> i64 {
+    (height.round() as i64).clamp(64, 512)
+}
+
 /// Places one waveform bitmap over the time range it was rendered for.
 fn audio_image_layer(
     image: Arc<Image>,
@@ -1309,16 +1365,20 @@ fn audio_image_layer(
     view_start: i64,
     view_span: i64,
     width: f32,
+    height: f32,
 ) -> impl IntoElement {
     let left = (start - view_start) as f32 / view_span.max(1) as f32;
     let image_width = span.max(1) as f32 / view_span.max(1) as f32;
-    div()
+    // Both axes are pinned to the track instead of leaving either one to the
+    // bitmap's intrinsic size: an auto height follows the rendered width, so
+    // the spectrum grew taller whenever the track got wider.
+    img(image)
         .absolute()
         .top_0()
-        .bottom_0()
+        .h(px(height))
         .left(px(width * left))
         .w(px(width * image_width))
-        .child(img(image).size_full().object_fit(ObjectFit::Fill))
+        .object_fit(ObjectFit::Fill)
 }
 
 /// Spacing between ruler labels: the smallest step that still leaves room for
@@ -1447,7 +1507,7 @@ mod tests {
     fn wanted_tiles_cover_the_view_with_one_spare_each_side() {
         let mut panel = AudioPanel::new();
         panel.span = 12_000;
-        let keys = panel.wanted_tiles(3, 7, 60_000);
+        let keys = panel.wanted_tiles(3, 7, 60_000, 200);
         let indices: Vec<i64> = keys.iter().map(|key| key.index).collect();
         assert_eq!(indices, vec![0, 1, 2, 3], "0..10 s, 10..15 s, 15..20 s");
         assert!(keys.iter().all(|key| key.span == 5_000 && key.epoch == 3));
@@ -1456,7 +1516,7 @@ mod tests {
         // already decoded are the ones next to the view, not a new grid.
         panel.view_start = 31_000;
         let indices: Vec<i64> = panel
-            .wanted_tiles(3, 7, 600_000)
+            .wanted_tiles(3, 7, 600_000, 200)
             .iter()
             .map(|key| key.index)
             .collect();
@@ -1468,10 +1528,23 @@ mod tests {
         panel.view_start = 18_000;
         panel.span = 2_000;
         let indices: Vec<i64> = panel
-            .wanted_tiles(3, 7, 20_000)
+            .wanted_tiles(3, 7, 20_000, 200)
             .iter()
             .map(|key| key.index)
             .collect();
         assert_eq!(indices, vec![35, 36, 37, 38, 39]);
+    }
+
+    #[test]
+    fn a_taller_track_is_a_different_slice() {
+        // The bitmap is rendered at the track's height. Reusing a slice from a
+        // shorter track would scale it by its own aspect ratio, which is how
+        // the spectrum came to look taller as the track got wider.
+        let panel = AudioPanel::new();
+        let short = panel.wanted_tiles(3, 7, 60_000, 64);
+        let tall = panel.wanted_tiles(3, 7, 60_000, 240);
+        assert_eq!(short.len(), tall.len());
+        assert!(short.iter().zip(&tall).all(|(a, b)| a != b));
+        assert!(tall.iter().all(|key| key.height == 240));
     }
 }

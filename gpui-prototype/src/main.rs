@@ -4371,11 +4371,22 @@ impl Workspace {
             self.snapshot.audio.epoch,
             self.snapshot.audio.render_revision,
         );
+        // The slice bitmap is rendered at the track's own measured height, so the
+        // spectrum fills the container exactly instead of taking on the bitmap's
+        // own aspect ratio, and a taller track is re-rendered rather than scaled.
+        let bounds = *self.audio.bounds.borrow();
+        let track = f32::from(bounds.size.height);
+        if track <= 0.5 {
+            // The track has not been laid out yet; the first paint records its
+            // height and the next snapshot asks for slices at that size.
+            return;
+        }
+        let height = audio_panel::track_pixels(track);
+        let width = f32::from(bounds.size.width).max(1.);
+        let view_span = self.audio.span.max(1);
         let wanted = self
             .audio
-            .wanted_tiles(epoch, revision, self.snapshot.audio.duration);
-        let view_span = self.audio.span.max(1);
-        let width = f32::from(self.audio.bounds.borrow().size.width).max(1.);
+            .wanted_tiles(epoch, revision, self.snapshot.audio.duration, height);
         let missing: Vec<_> = wanted
             .into_iter()
             .filter(|key| self.audio.cached_tile(key).is_none())
@@ -4389,7 +4400,7 @@ impl Workspace {
             let bridge = self.bridge.clone();
             let weak = cx.weak_entity();
             cx.spawn(async move |_, cx| {
-                let result = bridge.call(json!({"op":"audio_render", "start":key.start(), "span":key.span, "mode":key.mode, "gain":key.gain, "width":pixels, "height":260})).await
+                let result = bridge.call(json!({"op":"audio_render", "start":key.start(), "span":key.span, "mode":key.mode, "gain":key.gain, "width":pixels, "height":key.height})).await
                     .and_then(|value| serde_json::from_value::<AudioImage>(value).context("invalid audio display"));
                 let result = result.and_then(|reply| {
                     let image = reply.image.map(|encoded| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)).transpose()?;
@@ -8463,7 +8474,7 @@ impl Workspace {
                                     .absolute()
                                     .top_0()
                                     .bottom_0()
-                                    .right_0()
+                                    .right(px(-3.))
                                     .w(px(7.))
                                     .cursor_col_resize()
                                     .hover(|grip| grip.bg(muted.opacity(0.12)))
@@ -8483,19 +8494,7 @@ impl Workspace {
                                         ),
                                     ),
                             )
-                            // A header separator is a short tick, not a
-                            // full-height rule: the grid below draws its own
-                            // lines in the grid colour, and matching them made
-                            // the header read as one more subtitle row.
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top(px(8.))
-                                    .bottom(px(8.))
-                                    .right_0()
-                                    .w(px(1.))
-                                    .bg(muted.opacity(0.28)),
-                            )
+                            .child(column_rule(muted.opacity(0.28)))
                     }))
                     .child(
                         div()
@@ -8630,7 +8629,7 @@ impl Workspace {
                                                 time_font.clone(),
                                                 muted,
                                                 accent,
-                                                muted.opacity(0.45),
+                                                accent.opacity(0.28),
                                                 frame_rate,
                                             )
                                         }))
@@ -8743,13 +8742,12 @@ impl Workspace {
     }
 }
 
-// The header cell doubles as the resize handle, so every column boundary needs
-// a visible hairline; without it the drag target is invisible.
+// Header and body ticks share geometry so each column boundary stays aligned.
 fn column_rule(colour: gpui_kit::Hsla) -> gpui_kit::Div {
     div()
         .absolute()
-        .top_0()
-        .bottom_0()
+        .top(px(8.))
+        .bottom(px(8.))
         .right_0()
         .w(px(1.))
         .bg(colour)
@@ -9164,7 +9162,7 @@ impl Render for Workspace {
                             } => {
                                 view.audio_panel_height = (start_height
                                     + f32::from(event.position.y - start_y))
-                                    .clamp(60., 320.);
+                                    .clamp(64., 320.);
                             }
                             WorkspaceResizeDrag::ColumnSplit {
                                 start_x,
