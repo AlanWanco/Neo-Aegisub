@@ -8,15 +8,21 @@
 //! * sections rendered as bordered cards with their own header,
 //! * consistent 8/12/16/24 spacing.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use gpui_kit::assets::IconName;
-use gpui_kit::base::Disableable;
+use gpui_kit::base::{Disableable, ElementExt};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::{
     Icon, StyledExt, Theme,
     button::{Button, ButtonVariants},
     scroll::{Scrollable, ScrollableElement},
 };
-use gpui_kit::{IntoElement, ParentElement, Styled, div, prelude::*, px};
+use gpui_kit::{
+    AnimationExt, Bounds, IntoElement, ParentElement, Pixels, SharedString, SpringConfig, Styled,
+    div, prelude::*, px,
+};
 
 use crate::workspace_theme::Palette;
 
@@ -187,8 +193,42 @@ pub fn badge(cx: &gpui_kit::App, text: impl Into<gpui_kit::SharedString>) -> gpu
         .child(text.into())
 }
 
+/// Where each segment of a segmented control landed, recorded during prepaint
+/// and read back by the next render.
+///
+/// A render pass cannot ask the layout engine where its own children are: their
+/// bounds only exist once layout has run. So the sliding pill reads the
+/// geometry the previous frame recorded. Keyed by workspace entity as well as
+/// control, because a panel detached into its own window has the same control
+/// ids as the main window and must keep its own geometry.
+#[derive(Default)]
+pub struct SegmentBounds(RefCell<HashMap<(gpui_kit::EntityId, SharedString), Vec<Bounds<Pixels>>>>);
+
+impl gpui_kit::Global for SegmentBounds {}
+
+/// The motion tokens' `spring_move` (280 ms response, 0.85 damping) expressed
+/// as the physical parameters the spring integrator takes.
+const SEGMENT_SPRING: SpringConfig = SpringConfig::new(503.6, 38.15, 1.0);
+
+/// Interpolates the pill between segments as `at` travels from one index to the
+/// next, so its width morphs with it instead of snapping at the midpoint.
+fn segment_at(geometry: &[Bounds<Pixels>], origin: Pixels, at: f32) -> (Pixels, Pixels) {
+    let last = geometry.len().saturating_sub(1);
+    let at = at.clamp(0., last as f32);
+    let lower = (at.floor() as usize).min(last);
+    let upper = (lower + 1).min(last);
+    let frac = at - lower as f32;
+    let (from, to) = (geometry[lower], geometry[upper]);
+    (
+        from.origin.x - origin + (to.origin.x - from.origin.x) * frac,
+        from.size.width + (to.size.width - from.size.width) * frac,
+    )
+}
+
 /// Mutually exclusive options rendered as one pill group, so the current
-/// choice is obvious and the row reads as a single control.
+/// choice is obvious and the row reads as a single control. The active segment
+/// is one pill that slides between positions instead of a chip that blinks from
+/// one segment to the next.
 pub fn segmented(
     cx: &mut gpui_kit::Context<crate::Workspace>,
     segments: Vec<(String, &'static str, bool, bool)>,
@@ -201,6 +241,54 @@ pub fn segmented(
 ) -> gpui_kit::Div {
     let handler = std::rc::Rc::new(on_select);
     let p = Palette::current(cx);
+    let selected = segments
+        .iter()
+        .position(|(_, _, selected, _)| *selected)
+        .unwrap_or(0);
+    let key: SharedString = segments
+        .first()
+        .map(|(id, ..)| id.clone())
+        .unwrap_or_else(|| "segmented".to_owned())
+        .into();
+    let owner = (cx.entity_id(), key.clone());
+    let mut geometry = cx
+        .global::<SegmentBounds>()
+        .0
+        .borrow()
+        .get(&owner)
+        .cloned()
+        .unwrap_or_default();
+    // A control that lost a segment must not slide toward the stale slot.
+    geometry.truncate(segments.len());
+    // Until the segments have been measured there is no geometry to place a
+    // pill on; the active segment wears its own chip for that first frame so
+    // nothing flashes.
+    let pill = geometry
+        .first()
+        .map(|first| first.origin.x)
+        .filter(|_| {
+            geometry
+                .get(selected)
+                .is_some_and(|bounds| bounds.size.width > px(0.))
+        })
+        .map(|origin| {
+            let geometry = geometry.clone();
+            div()
+                .absolute()
+                .top_0()
+                .h(px(26.))
+                .rounded_full()
+                .bg(p.surface)
+                .shadow(card_shadow(Theme::global(cx).is_dark()))
+                .with_spring(
+                    gpui_kit::ElementId::from(format!("{key}-pill")),
+                    gpui_kit::SpringAnimation::new(SEGMENT_SPRING).to(selected as f32),
+                    move |pill, at| {
+                        let (left, width) = segment_at(&geometry, origin, at);
+                        pill.left(left).w(width)
+                    },
+                )
+        });
     // The track hugs its items: a full-width inset bar reads as an empty field.
     let mut row = div()
         .h_flex()
@@ -211,36 +299,52 @@ pub fn segmented(
         .border_1()
         .border_color(p.border)
         .bg(p.inset);
+    let mut pill = pill;
     for (index, (id, label, selected, disabled)) in segments.into_iter().enumerate() {
         let handler = handler.clone();
-        row = row.child(
-            div()
-                .id(id)
-                .h(px(26.))
-                .px_3()
-                .h_flex()
-                .items_center()
-                .rounded_full()
-                .text_sm()
-                .whitespace_nowrap()
-                .role(gpui_kit::Role::Button)
-                .aria_label(label)
-                // The active segment lifts off the track as a surface chip with an
-                // accent label: legible on the light track and on the dark one.
-                .when(selected, |item| {
-                    item.bg(p.surface)
-                        .text_color(p.accent)
-                        .font_medium()
-                        .shadow(card_shadow(Theme::global(cx).is_dark()))
-                })
-                .when(!selected && !disabled, |item| {
-                    item.text_color(p.text).hover(|item| item.bg(p.raised))
-                })
-                .when(disabled, |item| item.text_color(p.muted).opacity(0.5))
-                .when(!disabled, |item| item.cursor_pointer())
-                .on_click(cx.listener(move |view, _, window, cx| handler(view, index, window, cx)))
-                .child(label),
-        );
+        let owner = owner.clone();
+        let item = div()
+            .id(id)
+            .h(px(26.))
+            .px_3()
+            .h_flex()
+            .items_center()
+            .rounded_full()
+            .text_sm()
+            .whitespace_nowrap()
+            .role(gpui_kit::Role::Button)
+            .aria_label(label)
+            // The pill carries the chip; the label only carries the accent.
+            .when(selected && pill.is_none(), |item| {
+                item.bg(p.surface)
+                    .shadow(card_shadow(Theme::global(cx).is_dark()))
+            })
+            .when(selected, |item| item.text_color(p.accent).font_medium())
+            .when(!selected && !disabled, |item| {
+                item.text_color(p.text).hover(|item| item.bg(p.raised))
+            })
+            .when(disabled, |item| item.text_color(p.muted).opacity(0.5))
+            .when(!disabled, |item| item.cursor_pointer())
+            .on_click(cx.listener(move |view, _, window, cx| handler(view, index, window, cx)))
+            .child(label);
+        // The wrapper is the pill's positioning context: its origin is the
+        // first segment's origin, so the pill travels in row-local pixels.
+        let mut wrapper = div()
+            .relative()
+            .flex_shrink_0()
+            .on_prepaint(move |bounds, _, cx| {
+                let global = cx.global_mut::<SegmentBounds>();
+                let mut geometry = global.0.borrow_mut();
+                let geometry = geometry.entry(owner.clone()).or_default();
+                geometry.resize(index + 1, Bounds::default());
+                geometry[index] = bounds;
+            });
+        if index == 0 {
+            if let Some(pill) = pill.take() {
+                wrapper = wrapper.child(pill);
+            }
+        }
+        row = row.child(wrapper.child(item));
     }
     // Not full width: a wrapping row of controls must be able to sit beside it.
     div().h_flex().flex_shrink_0().child(row)
@@ -468,4 +572,30 @@ pub fn check_row(
                 }),
         )
         .child(div().flex_1().min_w_0().truncate().child(label.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bounds(x: f32, width: f32) -> Bounds<Pixels> {
+        Bounds {
+            origin: gpui_kit::point(px(x), px(0.)),
+            size: gpui_kit::size(px(width), px(26.)),
+        }
+    }
+
+    #[test]
+    fn the_pill_travels_and_morphs_between_segments() {
+        let geometry = [bounds(100., 60.), bounds(200., 90.)];
+        // The track's own origin is the first segment's, so the pill starts at 0.
+        assert_eq!(segment_at(&geometry, px(100.), 0.), (px(0.), px(60.)));
+        assert_eq!(segment_at(&geometry, px(100.), 1.), (px(100.), px(90.)));
+        // Halfway through the spring it is halfway between both segments, not
+        // parked on either: this is what makes the pill slide instead of jump.
+        assert_eq!(segment_at(&geometry, px(100.), 0.5), (px(50.), px(75.)));
+        // A spring can overshoot its target; the pill must not leave the track.
+        assert_eq!(segment_at(&geometry, px(100.), 4.), (px(100.), px(90.)));
+        assert_eq!(segment_at(&geometry, px(100.), -2.), (px(0.), px(60.)));
+    }
 }

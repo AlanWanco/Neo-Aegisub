@@ -8430,11 +8430,8 @@ impl Workspace {
                         let width = *width;
                         div()
                             .h_flex()
-                            // The whole header cell is the resize handle: a
-                            // narrow grip inside it never received the drag.
                             .h_full()
                             .items_center()
-                            .justify_between()
                             .relative()
                             .w(px(width))
                             .flex_shrink_0()
@@ -8442,25 +8439,45 @@ impl Workspace {
                             .text_size(px(secondary_size))
                             .text_color(muted)
                             .child(column.label())
-                            .child(column_rule(muted.opacity(0.45)))
-                            .cursor_col_resize()
-                            // Painting the strip colour keeps a full-cell
-                            // hitbox: a bare div only reacts over its text.
-                            .bg(header_bg)
-                            .on_mouse_down(
-                                gpui_kit::MouseButton::Left,
-                                cx.listener(
-                                    move |view, event: &gpui_kit::MouseDownEvent, _, cx| {
-                                        view.layout_drag =
-                                            Some(WorkspaceResizeDrag::SubtitleColumn {
-                                                column,
-                                                start_x: event.position.x,
-                                                start_width: width,
-                                            });
-                                        cx.stop_propagation();
-                                        cx.notify();
-                                    },
-                                ),
+                            // Only the divider resizes the column: the label
+                            // keeps the normal cursor and its full hit area.
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .right_0()
+                                    .w(px(7.))
+                                    .cursor_col_resize()
+                                    .hover(|grip| grip.bg(muted.opacity(0.12)))
+                                    .on_mouse_down(
+                                        gpui_kit::MouseButton::Left,
+                                        cx.listener(
+                                            move |view, event: &gpui_kit::MouseDownEvent, _, cx| {
+                                                view.layout_drag =
+                                                    Some(WorkspaceResizeDrag::SubtitleColumn {
+                                                        column,
+                                                        start_x: event.position.x,
+                                                        start_width: width,
+                                                    });
+                                                cx.stop_propagation();
+                                                cx.notify();
+                                            },
+                                        ),
+                                    ),
+                            )
+                            // A header separator is a short tick, not a
+                            // full-height rule: the grid below draws its own
+                            // lines in the grid colour, and matching them made
+                            // the header read as one more subtitle row.
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(8.))
+                                    .bottom(px(8.))
+                                    .right_0()
+                                    .w(px(1.))
+                                    .bg(muted.opacity(0.28)),
                             )
                     }))
                     .child(
@@ -8470,7 +8487,7 @@ impl Workspace {
                             .text_size(px(secondary_size))
                             .text_color(muted)
                             .child("字幕文本"),
-                    ),
+                    )
             )
             .child(
                 div()
@@ -10076,6 +10093,7 @@ fn run(endpoint: String, token: String) -> Result<()> {
         .with_assets(workspace_theme::StudioAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
+            cx.set_global(crate::page::SegmentBounds::default());
             Theme::change(ThemeMode::Dark, None, cx);
             workspace_theme::apply(cx);
             cx.on_window_closed(|cx, _| {
