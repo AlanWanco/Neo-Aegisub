@@ -6521,7 +6521,7 @@ impl Workspace {
         };
         div()
             .h_flex()
-            .h(px(58.))
+            .h(px(42.))
             .flex_shrink_0()
             .gap_2()
             .px_4()
