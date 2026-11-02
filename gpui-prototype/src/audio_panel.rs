@@ -128,25 +128,59 @@ pub struct PanDrag {
     shaft: f32,
 }
 
+/// Identity of one cached waveform bitmap: every input the host's render
+/// depends on, plus the slice of absolute time it covers. Slices sit on a fixed
+/// time grid, so panning reuses them instead of invalidating the whole view.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TileKey {
+    pub epoch: u64,
+    pub revision: u64,
+    pub mode: &'static str,
+    pub gain: i64,
+    /// Length of the slice in milliseconds: the grid step.
+    pub span: i64,
+    /// Slice number, so `index * span` is where it starts.
+    pub index: i64,
+}
+
+impl TileKey {
+    pub fn start(&self) -> i64 {
+        self.index.saturating_mul(self.span)
+    }
+}
+
+/// One decoded slice, placed where the host actually started it. The render
+/// rounds its start to its own pixel grid, which is a fraction of a pixel at
+/// view scale but would leave a seam between neighbours if ignored.
+pub struct AudioTile {
+    pub key: TileKey,
+    pub image: Arc<Image>,
+    pub start: i64,
+}
+
+/// Slices kept decoded at once. A tile is about a quarter of the viewport, so
+/// this holds several screens of scrolling in both directions while staying in
+/// the tens of megabytes of RGBA at worst.
+pub const TILE_CACHE_LIMIT: usize = 48;
+/// Concurrent render requests. Each costs a few milliseconds on the host, so
+/// piling them up only delays the slice the user is actually looking at.
+pub const TILE_INFLIGHT_LIMIT: usize = 3;
+
 pub struct AudioPanel {
     pub mode: &'static str,
     pub view_start: i64,
     pub span: i64,
     pub gain: i64,
-    pub image: Option<Arc<Image>>,
-    /// Previous render, kept underneath the current one until the replacement
-    /// has finished loading. A new bitmap is decoded asynchronously, so drawing
-    /// it alone leaves a blank frame — that blank frame is the flicker seen
-    /// while scrolling.
-    pub fallback: Option<(Arc<Image>, i64, i64)>,
-    /// Time range the current image was rendered for, so it can be shown at the
-    /// right place while a sharper render for the new zoom is still in flight.
-    pub image_start: i64,
-    pub image_span: i64,
-    pub loading: bool,
+    /// Waveform bitmaps, each covering a fixed slice of absolute time. Panning
+    /// reuses the ones already decoded instead of asking the host to redraw the
+    /// whole view: one tile is a fraction of the viewport and a fraction of the
+    /// cost, so a long recording scrolls without a full render per step.
+    pub tiles: Vec<AudioTile>,
+    /// Tiles whose render is already in flight, so a burst of mouse moves does
+    /// not queue the same slice twice.
+    pub tile_inflight: Vec<TileKey>,
     /// Bumped on every gesture step so only the last one schedules a render.
     pub render_generation: u64,
-    pub requested: Option<(u64, i64, i64, &'static str, i64, i64, u64)>,
     pub bounds: Rc<RefCell<Bounds<Pixels>>>,
     pub gesture: Option<u64>,
     pub dragging: bool,
@@ -166,13 +200,9 @@ impl AudioPanel {
             view_start: 0,
             span: 12000,
             gain: 800,
-            image: None,
-            fallback: None,
-            image_start: 0,
-            image_span: 1,
-            loading: false,
+            tiles: Vec::new(),
+            tile_inflight: Vec::new(),
             render_generation: 0,
-            requested: None,
             bounds: Rc::new(RefCell::new(Bounds::default())),
             gesture: None,
             dragging: false,
@@ -184,6 +214,103 @@ impl AudioPanel {
             snap_inverted: false,
             pan_drag: None,
         }
+    }
+    /// Length of one slice: a quarter of the viewport, snapped to a 1-2-5 step
+    /// so the grid stays put across small zoom changes instead of sliding with
+    /// every wheel tick and throwing the cache away.
+    pub fn tile_span(&self) -> i64 {
+        let quarter = (self.span / 4).max(50);
+        let mut scale = 1;
+        while scale * 10 <= quarter {
+            scale *= 10;
+        }
+        for step in [1, 2, 5] {
+            if step * scale >= quarter {
+                return step * scale;
+            }
+        }
+        scale * 10
+    }
+
+    pub fn tile_key(&self, index: i64, epoch: u64, revision: u64) -> TileKey {
+        TileKey {
+            epoch,
+            revision,
+            mode: self.mode,
+            gain: self.gain,
+            span: self.tile_span(),
+            index,
+        }
+    }
+
+    /// Slices the view shows, plus one either side so a small pan is already
+    /// decoded by the time the gesture starts. Clamped to the media: a slice
+    /// before zero or past the end would only render silence.
+    pub fn wanted_tiles(&self, epoch: u64, revision: u64, duration: i64) -> Vec<TileKey> {
+        let span = self.tile_span();
+        // The last slice starts before the final sample, not at the end.
+        let media_last = (duration.max(1) - 1).div_euclid(span).max(0);
+        let first = (self.view_start.div_euclid(span) - 1).max(0);
+        let last = ((self.view_start + self.span).div_euclid(span) + 1)
+            .min(media_last)
+            .max(first);
+        (first..=last)
+            .map(|index| self.tile_key(index, epoch, revision))
+            .collect()
+    }
+
+    pub fn cached_tile(&self, key: &TileKey) -> Option<&Arc<Image>> {
+        self.tiles
+            .iter()
+            .find(|tile| tile.key == *key)
+            .map(|tile| &tile.image)
+    }
+
+    /// Keeps a freshly rendered slice and, once the cache is over its limit,
+    /// drops the least useful bitmaps first: stale generations, then the slices
+    /// furthest from what is on screen.
+    pub fn store_tile(
+        &mut self,
+        key: TileKey,
+        start: i64,
+        image: Arc<Image>,
+        cx: &mut Context<Workspace>,
+    ) {
+        if let Some(slot) = self.tiles.iter_mut().find(|tile| tile.key == key) {
+            slot.image = image;
+            slot.start = start;
+            return;
+        }
+        self.tiles.push(AudioTile { key, image, start });
+        let center = self.view_start + self.span / 2;
+        while self.tiles.len() > TILE_CACHE_LIMIT {
+            let worst = self
+                .tiles
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, tile)| {
+                    let cached = &tile.key;
+                    let stale = cached.epoch != key.epoch
+                        || cached.revision != key.revision
+                        || cached.mode != key.mode
+                        || cached.gain != key.gain
+                        || cached.span != key.span;
+                    let distance = (tile.start + cached.span / 2 - center).abs();
+                    (!stale, distance)
+                })
+                .map(|(index, _)| index);
+            let Some(index) = worst else { break };
+            let dropped = self.tiles.remove(index);
+            dropped.image.remove_asset(cx);
+        }
+    }
+
+    /// Drops every cached slice, for when the audio itself is replaced.
+    pub fn clear_tiles(&mut self, cx: &mut Context<Workspace>) {
+        for tile in self.tiles.drain(..) {
+            tile.image.remove_asset(cx);
+        }
+        self.tile_inflight.clear();
     }
 
     pub fn time_at(&self, x: Pixels, state: &AudioState) -> i64 {
@@ -230,7 +357,12 @@ impl AudioPanel {
         focused: bool,
         cx: &mut Context<Workspace>,
     ) -> impl IntoElement {
-        let mut controls = div().h_flex().flex_wrap().gap_2().items_center();
+        let mut controls = div()
+            .h_flex()
+            .flex_wrap()
+            .gap_2()
+            .items_center()
+            .flex_shrink_0();
         let mode_seg = crate::page::segmented(
             cx,
             [
@@ -335,7 +467,7 @@ impl AudioPanel {
             .relative()
             .w_full()
             .h(px(height))
-            .flex_shrink_0()
+            .min_h(px(28.))
             .rounded(gpui_kit::px(crate::workspace_theme::RADIUS_MD))
             .bg(graph_bg)
             .overflow_hidden()
@@ -350,31 +482,39 @@ impl AudioPanel {
                 .size_full(),
             );
         let width = f32::from(self.bounds.borrow().size.width).max(1.);
-        // The previous render stays underneath until the replacement has been
-        // decoded, otherwise every swap shows one blank frame.
-        if let Some((fallback, start, span)) = &self.fallback {
+        // Every cached slice is drawn over the time range it was rendered for,
+        // so panning and zooming stay in step with the gesture instead of
+        // freezing on the previous render until a new whole view lands. Slices
+        // are independent, so a missing one costs a quarter of the view for a
+        // few milliseconds rather than a blank waveform.
+        let (epoch, revision) = (state.epoch, state.render_revision);
+        let tile_span = self.tile_span();
+        let mut drawn = false;
+        for tile in &self.tiles {
+            let key = tile.key;
+            if key.epoch != epoch
+                || key.revision != revision
+                || key.mode != self.mode
+                || key.gain != self.gain
+                || key.span != tile_span
+            {
+                continue;
+            }
+            if tile.start + key.span <= self.view_start || tile.start >= self.view_start + self.span
+            {
+                continue;
+            }
+            drawn = true;
             graph = graph.child(audio_image_layer(
-                fallback.clone(),
-                *start,
-                *span,
+                tile.image.clone(),
+                tile.start,
+                key.span,
                 self.view_start,
                 self.span,
                 width,
             ));
         }
-        if let Some(image) = &self.image {
-            // Draw the image over the time range it was rendered for, so zooming
-            // and panning stay in step with the gesture instead of freezing on
-            // the previous render until the next one lands.
-            graph = graph.child(audio_image_layer(
-                image.clone(),
-                self.image_start,
-                self.image_span,
-                self.view_start,
-                self.span,
-                width,
-            ));
-        } else {
+        if !drawn {
             graph = graph.child(
                 div()
                     .p_4()
@@ -665,7 +805,7 @@ impl AudioPanel {
                         );
                     })),
             );
-        let mut karaoke = div().v_flex().gap_2();
+        let mut karaoke = div().v_flex().gap_2().flex_shrink_0();
         if state.karaoke {
             let mut syllables = div().flex().flex_wrap().gap_2();
             for (index, syllable) in state.syllables.iter().enumerate() {
@@ -785,6 +925,7 @@ impl AudioPanel {
             .h_flex()
             .items_center()
             .gap_2()
+            .flex_shrink_0()
             .child(Icon::new(IconName::AudioLines).size(px(14.)))
             .child(
                 div()
@@ -848,7 +989,11 @@ impl AudioPanel {
                             width,
                             view.snapshot.audio.duration,
                         );
-                        view.schedule_audio_render(cx);
+                        // Slices are fetched while the drag runs: each one is
+                        // cheap and lands in its own stretch of time, so the
+                        // waveform fills in behind the pointer instead of
+                        // waiting for the gesture to end.
+                        view.refresh_audio(cx);
                         cx.notify();
                     }),
                 )
@@ -942,7 +1087,11 @@ impl AudioPanel {
                             width,
                             view.snapshot.audio.duration,
                         );
-                        view.schedule_audio_render(cx);
+                        // Slices are fetched while the drag runs: each one is
+                        // cheap and lands in its own stretch of time, so the
+                        // waveform fills in behind the thumb instead of waiting
+                        // for the gesture to end.
+                        view.refresh_audio(cx);
                         cx.notify();
                     }),
                 )
@@ -999,6 +1148,7 @@ impl AudioPanel {
             .v_flex()
             .w_full()
             .min_w_0()
+            .min_h_0()
             .gap_3()
             // The waveform strip is a card like every other workspace pane, so the
             // workspace reads as one set of surfaces instead of a bare canvas.
@@ -1028,6 +1178,7 @@ impl AudioPanel {
                     .v_flex()
                     .w_full()
                     .min_w_0()
+                    .min_h_0()
                     .child(graph)
                     .child(scrollbar),
             );
@@ -1139,6 +1290,7 @@ impl AudioPanel {
                     .flex_wrap()
                     .items_center()
                     .gap_1()
+                    .flex_shrink_0()
                     .child(mode_seg)
                     .child(compact_viewport)
                     .child(sound),
@@ -1274,5 +1426,52 @@ mod tests {
         // A very wide view keeps the 28 px minimum grab width.
         let (_, width) = thumb_fractions(800., 6_000, 600_000, 0);
         assert!((width - 28. / 800.).abs() < 1e-5, "{width}");
+    }
+
+    #[test]
+    fn tile_span_snaps_to_a_stable_grid() {
+        // A quarter of the viewport, rounded up to a 1-2-5 step, so a few zoom
+        // ticks in a row keep the same grid instead of invalidating the cache.
+        let mut panel = AudioPanel::new();
+        panel.span = 12_000;
+        assert_eq!(panel.tile_span(), 5_000);
+        panel.span = 10_000;
+        assert_eq!(panel.tile_span(), 5_000, "same grid one zoom step away");
+        panel.span = 600_000;
+        assert_eq!(panel.tile_span(), 200_000);
+        panel.span = 250;
+        assert_eq!(panel.tile_span(), 100);
+    }
+
+    #[test]
+    fn wanted_tiles_cover_the_view_with_one_spare_each_side() {
+        let mut panel = AudioPanel::new();
+        panel.span = 12_000;
+        let keys = panel.wanted_tiles(3, 7, 60_000);
+        let indices: Vec<i64> = keys.iter().map(|key| key.index).collect();
+        assert_eq!(indices, vec![0, 1, 2, 3], "0..10 s, 10..15 s, 15..20 s");
+        assert!(keys.iter().all(|key| key.span == 5_000 && key.epoch == 3));
+
+        // In the middle of a recording the grid stays absolute, so the slices
+        // already decoded are the ones next to the view, not a new grid.
+        panel.view_start = 31_000;
+        let indices: Vec<i64> = panel
+            .wanted_tiles(3, 7, 600_000)
+            .iter()
+            .map(|key| key.index)
+            .collect();
+        assert_eq!(indices, vec![5, 6, 7, 8, 9]);
+
+        // At the end of the media the request stops at the last slice that
+        // holds samples instead of rendering silence past it: a 2 s view is a
+        // 500 ms grid, so 18..20 s is slices 36..39 plus one either side.
+        panel.view_start = 18_000;
+        panel.span = 2_000;
+        let indices: Vec<i64> = panel
+            .wanted_tiles(3, 7, 20_000)
+            .iter()
+            .map(|key| key.index)
+            .collect();
+        assert_eq!(indices, vec![35, 36, 37, 38, 39]);
     }
 }

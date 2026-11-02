@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::Workspace;
+use crate::colour_picker::{format_hex_colour, parse_hex_colour};
 
 #[derive(Clone, Deserialize)]
 pub struct PreferenceOption {
@@ -39,38 +40,6 @@ pub struct PreferenceOption {
 #[derive(Deserialize)]
 pub struct PreferenceState {
     pub options: Vec<PreferenceOption>,
-}
-
-/// Colours travel to and from the host as `#rrggbb` or `#rrggbbaa`.
-///
-/// The host's alpha byte is Aegisub's transparency byte, not CSS opacity:
-/// `agi::Color::a` counts transparency, so `00` is opaque (`src/compat.cpp`
-/// builds `wxColour(r, g, b, 255 - color.a)`). Invert it on the way in and out
-/// so the picker previews the colour the grid and audio panel actually draw.
-fn parse_hex_colour(value: &str) -> Option<gpui_kit::Hsla> {
-    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    if hex.len() != 6 && hex.len() != 8 {
-        return None;
-    }
-    let digits = u32::from_str_radix(hex, 16).ok()?;
-    let rgba = if hex.len() == 6 {
-        (digits << 8) | 0xff
-    } else {
-        (digits & 0xffff_ff00) | (0xff - (digits & 0xff))
-    };
-    Some(gpui_kit::rgba(rgba).into())
-}
-
-fn format_hex_colour(colour: gpui_kit::Hsla) -> String {
-    let rgba: gpui_kit::Rgba = colour.into();
-    let byte = |channel: f32| (channel.clamp(0., 1.) * 255.).round() as u32;
-    format!(
-        "#{:02x}{:02x}{:02x}{:02x}",
-        byte(rgba.r),
-        byte(rgba.g),
-        byte(rgba.b),
-        0xff - byte(rgba.a)
-    )
 }
 
 pub struct PreferencesPanel {

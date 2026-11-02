@@ -14,9 +14,10 @@ mod audio_panel;
 use attachment_panel::{AttachmentPanel, AttachmentState};
 mod automation_panel;
 use automation_panel::{AutomationPanel, AutomationState};
+mod colour_picker;
 mod command_catalog;
 
-use audio_panel::{AudioImage, AudioPanel, AudioState};
+use audio_panel::{AudioImage, AudioPanel, AudioState, TILE_INFLIGHT_LIMIT};
 mod document_panels;
 mod hotkey_panel;
 mod paste_panel;
@@ -59,7 +60,10 @@ use std::{
     collections::BTreeMap,
     net::SocketAddr,
     ops::Range,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -76,6 +80,7 @@ use gpui_kit::{
     component::{
         Icon, Root, StyledExt, Theme, ThemeMode, WindowExt,
         button::{Button, ButtonVariants},
+        color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
         menu::{DropdownMenu, PopupMenuItem},
         scroll::ScrollableElement,
@@ -84,7 +89,6 @@ use gpui_kit::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, PartialEq)]
 struct RunCommand {
@@ -548,9 +552,9 @@ struct FontEntry {
 struct ColorDialog {
     title: &'static str,
     hint: &'static str,
-    /// Values the inputs still have to receive; they can only be set while a
+    /// The colour the picker still has to receive; it can only be set while a
     /// window is at hand, which is render time.
-    pending: Option<(String, String)>,
+    pending: Option<gpui_kit::Hsla>,
     error: Option<String>,
     loading: bool,
     /// Recently applied colours, newest first. The host keeps the list in the
@@ -1073,6 +1077,24 @@ enum WorkspaceResizeDrag {
     },
 }
 
+/// Shared playback frame state. The pump loop reads it without touching the
+/// UI thread, so a request is already pending when the host produces its next
+/// frame.
+#[derive(Default)]
+struct FramePump {
+    /// A pump loop owns the frame request slot while this is set.
+    running: AtomicBool,
+    /// Identity of the current pump; replies from an older one are dropped.
+    id: AtomicU64,
+    /// Sequence of the newest applied reply.
+    applied: AtomicU64,
+    playing: AtomicBool,
+    epoch: AtomicU64,
+    frame: AtomicI64,
+    max_width: AtomicI64,
+    revision: AtomicU64,
+}
+
 struct Workspace {
     bridge: Bridge,
     focus_handle: gpui_kit::FocusHandle,
@@ -1089,6 +1111,10 @@ struct Workspace {
     preview_width_px: std::cell::Cell<f32>,
     frame_request_inflight: bool,
     frame_request_generation: u64,
+    /// Playback fetches frames from a background loop instead of the UI thread:
+    /// the host only hands a frame to a client that is already waiting, so the
+    /// next request has to leave the moment the previous answer lands.
+    frame_pump: Arc<FramePump>,
     video_epoch: u64,
     list_scroll_handle: gpui_kit::UniformListScrollHandle,
     subtitle_filter_cache: Option<(u64, String, String, Arc<Vec<Line>>)>,
@@ -1162,8 +1188,7 @@ struct Workspace {
     /// Ticked "do not show again" on the notice card currently on screen.
     notice_suppress: bool,
     color_dialog: Option<ColorDialog>,
-    color_hex_input: Entity<InputState>,
-    color_alpha_input: Entity<InputState>,
+    color_picker: Entity<ColorPickerState>,
     _color_events: Vec<Subscription>,
     host_dialog: Option<HostDialog>,
     font_filter: Entity<InputState>,
@@ -1201,25 +1226,11 @@ impl Workspace {
     }
 
     fn clear_audio_image(&mut self, cx: &mut Context<Self>) {
-        if let Some((fallback, _, _)) = self.audio.fallback.take() {
-            fallback.remove_asset(cx);
-        }
-        if let Some(image) = self.audio.image.take() {
-            image.remove_asset(cx);
-        }
+        self.audio.clear_tiles(cx);
     }
 
     fn new(bridge: Bridge, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let color_hex_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value("#FFFFFF")
-                .placeholder("#RRGGBB")
-        });
-        let color_alpha_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value("100")
-                .placeholder("100")
-        });
+        let color_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let font_filter = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value("")
@@ -1238,17 +1249,15 @@ impl Workspace {
                 }
             }));
         }
-        let mut color_events = Vec::new();
-        for input in [&color_hex_input, &color_alpha_input] {
-            color_events.push(cx.subscribe(input, |view, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
+        let color_events =
+            vec![
+                cx.subscribe(&color_picker, |view, _, _: &ColorPickerEvent, cx| {
                     if let Some(dialog) = view.color_dialog.as_mut() {
                         dialog.error = None;
                     }
                     cx.notify();
-                }
-            }));
-        }
+                }),
+            ];
         let editor = cx.new(|cx| TextareaState::new(window, cx));
         editor.update(cx, |state, cx| state.set_submit_on_enter(true, cx));
         let editor_for_events = editor.clone();
@@ -1434,6 +1443,7 @@ impl Workspace {
             preview_width_px: std::cell::Cell::new(0.),
             frame_request_inflight: false,
             frame_request_generation: 0,
+            frame_pump: Arc::new(FramePump::default()),
             video_epoch: 0,
             list_scroll_handle: gpui_kit::UniformListScrollHandle::new(),
             subtitle_filter_cache: None,
@@ -1500,8 +1510,7 @@ impl Workspace {
             notices: Vec::new(),
             notice_suppress: false,
             color_dialog: None,
-            color_hex_input,
-            color_alpha_input,
+            color_picker,
             _color_events: color_events,
             host_dialog: None,
             font_filter,
@@ -1551,13 +1560,13 @@ impl Workspace {
             self.properties_dirty = false;
         }
         if snapshot.audio.render_revision != self.snapshot.audio.render_revision {
-            self.audio.requested = None;
+            self.audio.tile_inflight.clear();
         }
         if snapshot.audio.epoch != self.snapshot.audio.epoch
             || snapshot.audio.loaded != self.snapshot.audio.loaded
         {
             self.clear_audio_image(cx);
-            self.audio.requested = None;
+            self.audio.tile_inflight.clear();
             self.audio.gesture = None;
             self.audio.dragging = false;
         }
@@ -1580,11 +1589,12 @@ impl Workspace {
         let media_changed = snapshot.video_epoch != self.video_epoch
             || snapshot.video != self.snapshot.video
             || snapshot.aspect != self.snapshot.aspect;
-        if media_changed || snapshot.video_window_zoom != self.snapshot.video_window_zoom {
+        // Fitting the preview to its pane is the default for every newly
+        // loaded video; zooming away from it is a deliberate act that has to
+        // survive the snapshot that reports the new zoom back to us.
+        if media_changed {
             self.cancel_visual_drag(cx);
             self.visual.reset_zoom();
-            // Fitting the preview to its pane is the default for every newly
-            // loaded video; zooming away from it is a deliberate act.
             self.visual.fit_video = true;
         }
         if active_changed {
@@ -3441,12 +3451,12 @@ impl Workspace {
             _ => ("主色", "设置当前位置的 \\c 主填充颜色"),
         };
         // ASS stores alpha inverted: &H00& is opaque and &HFF& is clear.
-        let (r, g, b, a) = parse_color(hex).unwrap_or((255, 255, 255, 0));
-        let percent = ((1. - a as f32 / 255.) * 100.).round() as i64;
+        let colour = crate::colour_picker::parse_hex_colour(hex)
+            .unwrap_or_else(|| gpui_kit::rgba(0xffff_ffff).into());
         self.color_dialog = Some(ColorDialog {
             title,
             hint,
-            pending: Some((format!("#{r:02X}{g:02X}{b:02X}"), percent.to_string())),
+            pending: Some(colour),
             error: None,
             loading: false,
             recent,
@@ -3458,21 +3468,12 @@ impl Workspace {
         let Some(dialog) = self.color_dialog.as_mut() else {
             return;
         };
-        let hex_text = self.color_hex_input.read(cx).value().to_string();
-        let alpha_text = self.color_alpha_input.read(cx).value().to_string();
-        let Some((r, g, b, _)) = parse_color(&hex_text) else {
-            dialog.error = Some("请输入 #RRGGBB 形式的颜色".into());
+        let Some(picked) = self.color_picker.read(cx).value() else {
+            dialog.error = Some("请先选择颜色".into());
             cx.notify();
             return;
         };
-        let percent = alpha_text
-            .trim()
-            .trim_end_matches('%')
-            .parse::<f32>()
-            .unwrap_or(100.)
-            .clamp(0., 100.);
-        let alpha = ((100. - percent) / 100. * 255.).round() as u8;
-        let color = format!("#{r:02X}{g:02X}{b:02X}{alpha:02X}");
+        let color = crate::colour_picker::format_hex_colour(picked).to_uppercase();
         dialog.loading = true;
         let bridge = self.bridge.clone();
         let weak = cx.weak_entity();
@@ -3642,37 +3643,29 @@ impl Workspace {
         let Some(dialog) = self.color_dialog.as_mut() else {
             return None;
         };
-        if let Some((hex, alpha)) = dialog.pending.take() {
-            self.color_hex_input
-                .update(cx, |state, cx| state.set_value(hex, window, cx));
-            self.color_alpha_input
-                .update(cx, |state, cx| state.set_value(alpha, window, cx));
+        if let Some(colour) = dialog.pending.take() {
+            self.color_picker
+                .update(cx, |state, cx| state.set_value(colour, window, cx));
         }
-        let (pr, pg, pb, pa) = parse_color(self.color_hex_input.read(cx).value().as_ref())
-            .unwrap_or((255, 255, 255, 0));
-        let base =
-            gpui_kit::rgba(u32::from(pr) << 24 | u32::from(pg) << 16 | u32::from(pb) << 8 | 0xFF);
-        let base: gpui_kit::Hsla = base.into();
-        let current = gpui_kit::hsla(base.h, base.s, base.l, 1. - f32::from(pa) / 255.);
-        let opacity = ((1. - f32::from(pa) / 255.) * 100.).round() as i32;
-        let preview_label = format!("#{pr:02X}{pg:02X}{pb:02X} · {opacity}%");
+        let current = self
+            .color_picker
+            .read(cx)
+            .value()
+            .unwrap_or_else(|| gpui_kit::rgba(0xffff_ffff).into());
+        let preview_label = {
+            let hex = crate::colour_picker::format_hex_rgb(current).to_uppercase();
+            let opacity = (current.a * 100.).round() as i32;
+            format!("{hex} · {opacity}%")
+        };
         let title = dialog.title;
         let hint = dialog.hint;
         let error = dialog.error.clone();
         let loading = dialog.loading;
         let recent = dialog.recent.clone();
-        let presets: [(&str, u32); 10] = [
-            ("白", 0xFFFFFF),
-            ("黑", 0x000000),
-            ("红", 0xFF3B30),
-            ("橙", 0xFF9500),
-            ("黄", 0xFFCC00),
-            ("绿", 0x34C759),
-            ("青", 0x32ADE6),
-            ("蓝", 0x0A84FF),
-            ("紫", 0xBF5AF2),
-            ("灰", 0x8E8E93),
-        ];
+        let featured: Vec<gpui_kit::Hsla> = recent
+            .iter()
+            .filter_map(|hex| crate::colour_picker::parse_hex_colour(hex))
+            .collect();
         let card = div()
             .id("color-dialog")
             .w(px(480.))
@@ -3749,98 +3742,20 @@ impl Workspace {
                         div()
                             .h_flex()
                             .gap_3()
-                            .items_end()
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .gap_1()
-                                    .flex_1()
-                                    .child(crate::page::field_label(cx, "颜色"))
-                                    .child(Input::new(&self.color_hex_input)),
-                            )
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .gap_1()
-                                    .w(px(120.))
-                                    .child(crate::page::field_label(cx, "不透明度 %"))
-                                    .child(Input::new(&self.color_alpha_input)),
-                            ),
-                    )
-                    .when(!recent.is_empty(), |card| {
-                        card.child(
-                            div()
-                                .v_flex()
-                                .gap_2()
-                                .child(crate::page::field_label(cx, "最近使用"))
-                                .child(div().h_flex().gap_2().flex_wrap().children(
-                                    recent.iter().map(|hex| {
-                                        let digits = hex.trim_start_matches('#');
-                                        let rgb = u32::from_str_radix(
-                                            digits.get(0..6).unwrap_or("FFFFFF"),
-                                            16,
-                                        )
-                                        .unwrap_or(0xFFFFFF);
-                                        let value = hex.clone();
-                                        let input = self.color_hex_input.clone();
-                                        Button::new(format!("color-recent-{hex}"))
-                                            .ghost()
-                                            .rounded(px(999.))
-                                            .small()
-                                            .px(px(8.))
-                                            .py(px(3.))
-                                            .tooltip(hex.clone())
-                                            .child(
-                                                div()
-                                                    .size(px(18.))
-                                                    .rounded(px(6.))
-                                                    .border_1()
-                                                    .border_color(p.border)
-                                                    .bg(gpui_kit::rgba((rgb << 8) | 0xFF)),
-                                            )
-                                            .on_click(cx.listener(move |_, _, window, cx| {
-                                                input.update(cx, |state, cx| {
-                                                    state.set_value(value.clone(), window, cx)
-                                                });
-                                            }))
-                                    }),
-                                )),
-                        )
-                    })
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .flex_wrap()
-                            .children(presets.iter().map(|(name, rgb)| {
-                                let hex = format!(
-                                    "#{:02X}{:02X}{:02X}",
-                                    (rgb >> 16) & 0xFF,
-                                    (rgb >> 8) & 0xFF,
-                                    rgb & 0xFF
-                                );
-                                let input = self.color_hex_input.clone();
-                                Button::new(format!("color-preset-{name}"))
-                                    .ghost()
-                                    .rounded(px(999.))
-                                    .small()
-                                    .px(px(13.))
-                                    .py(px(3.))
-                                    .child(
-                                        div()
-                                            .size(px(10.))
-                                            .rounded(px(999.))
-                                            .border_1()
-                                            .border_color(p.border)
-                                            .bg(gpui_kit::rgba((rgb << 8) | 0xFF)),
-                                    )
-                                    .child(div().text_sm().child(*name))
-                                    .on_click(cx.listener(move |_, _, window, cx| {
-                                        input.update(cx, |state, cx| {
-                                            state.set_value(hex.clone(), window, cx)
-                                        });
-                                    }))
-                            })),
+                            .items_center()
+                            .child(crate::page::field_label(cx, "颜色"))
+                            .child({
+                                // The same picker as the settings page; the
+                                // host's recent colours ride along as its
+                                // featured row.
+                                let mut picker = ColorPicker::new(&self.color_picker)
+                                    .anchor(gpui_kit::Anchor::TopLeft)
+                                    .accessibility_label(title);
+                                if !featured.is_empty() {
+                                    picker = picker.featured_colors(featured);
+                                }
+                                picker
+                            }),
                     )
                     .when_some(error, |v, error| {
                         v.child(
@@ -4436,77 +4351,76 @@ impl Workspace {
         .detach();
     }
 
+    /// Asks the host for the waveform slices the view is missing, at most a few
+    /// at a time. Each slice is a fraction of the viewport and is kept once
+    /// decoded, so scrolling a long recording reuses everything already seen
+    /// instead of re-rendering the whole width on every step.
     fn refresh_audio(&mut self, cx: &mut Context<Self>) {
-        if !self.snapshot.audio.loaded || self.audio.loading {
+        if !self.snapshot.audio.loaded {
             return;
         }
-        let request = self.audio_request();
-        if self.audio.requested == Some(request) {
+        let cached = &self.audio.tiles;
+        self.audio
+            .tile_inflight
+            .retain(|key| !cached.iter().any(|tile| tile.key == *key));
+        let sent = self.audio.tile_inflight.len();
+        if sent >= TILE_INFLIGHT_LIMIT {
             return;
         }
-        self.audio.loading = true;
-        self.audio.requested = Some(request);
-        let bridge = self.bridge.clone();
-        let weak = cx.weak_entity();
-        cx.spawn(async move |_, cx| {
-            let result = bridge.call(json!({"op":"audio_render", "start":request.1, "span":request.2, "mode":request.3, "gain":request.4, "width":1400, "height":260})).await
-                .and_then(|value| serde_json::from_value::<AudioImage>(value).context("invalid audio display"));
-            let result = result.and_then(|reply| {
-                let image = reply.image.map(|encoded| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)).transpose()?;
-                Ok((reply.state, reply.view_start, image.map(|bytes| Arc::new(Image::from_bytes(gpui_kit::ImageFormat::Png, bytes)))))
-            });
-            let _ = weak.update(cx, |view, cx| {
-                view.audio.loading = false;
-                match result {
-                    // Accept a render even when the view has moved on: it is
-                    // drawn over its own time range, so the waveform follows the
-                    // gesture instead of waiting for a render that matches it.
-                    Ok((state, start, image)) if state.epoch == view.snapshot.audio.epoch
-                        && state.render_revision == view.snapshot.audio.render_revision => {
-                        if let Some(image) = image {
-                            // Drop the render from two swaps ago, keep the one on
-                            // screen as the fallback layer: the new bitmap is
-                            // decoded asynchronously and would show as a blank
-                            // frame until it is ready.
-                            if let Some((older, _, _)) = view.audio.fallback.take() {
-                                older.remove_asset(cx);
-                            }
-                            let previous = view.audio.image.replace(image);
-                            let (previous_start, previous_span) =
-                                (view.audio.image_start, view.audio.image_span);
-                            if let Some(previous) = previous {
-                                view.audio.fallback =
-                                    Some((previous, previous_start, previous_span));
-                            }
-                            view.audio.image_start = start.round() as i64;
-                            view.audio.image_span = request.2;
-                        }
-                    }
-                    Ok(_) => {},
-                    Err(error) => { view.status = format!("音频画面生成失败：{error}"); view.audio.requested = None; }
-                }
-                // Wait for the gesture to settle before asking for the next
-                // render; re-requesting on every reply is what made scrolling
-                // flicker through one bitmap swap per wheel tick.
-                if view.audio.requested != Some(view.audio_request()) {
-                    view.schedule_audio_render(cx);
-                }
-                cx.notify();
-            });
-        }).detach();
-    }
-
-    /// Everything that decides which waveform the host has to render.
-    fn audio_request(&self) -> (u64, i64, i64, &'static str, i64, i64, u64) {
-        (
+        let (epoch, revision) = (
             self.snapshot.audio.epoch,
-            self.audio.view_start,
-            self.audio.span,
-            self.audio.mode,
-            self.audio.gain,
-            self.snapshot.audio.decoded,
             self.snapshot.audio.render_revision,
-        )
+        );
+        let wanted = self
+            .audio
+            .wanted_tiles(epoch, revision, self.snapshot.audio.duration);
+        let view_span = self.audio.span.max(1);
+        let width = f32::from(self.audio.bounds.borrow().size.width).max(1.);
+        let missing: Vec<_> = wanted
+            .into_iter()
+            .filter(|key| self.audio.cached_tile(key).is_none())
+            .filter(|key| !self.audio.tile_inflight.contains(key))
+            .take(TILE_INFLIGHT_LIMIT - sent)
+            .collect();
+        for key in missing {
+            let pixels = (width * key.span as f32 / view_span as f32).round();
+            let pixels = (pixels as i64).clamp(16, 2048);
+            self.audio.tile_inflight.push(key);
+            let bridge = self.bridge.clone();
+            let weak = cx.weak_entity();
+            cx.spawn(async move |_, cx| {
+                let result = bridge.call(json!({"op":"audio_render", "start":key.start(), "span":key.span, "mode":key.mode, "gain":key.gain, "width":pixels, "height":260})).await
+                    .and_then(|value| serde_json::from_value::<AudioImage>(value).context("invalid audio display"));
+                let result = result.and_then(|reply| {
+                    let image = reply.image.map(|encoded| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)).transpose()?;
+                    Ok((reply.state, reply.view_start, image.map(|bytes| Arc::new(Image::from_bytes(gpui_kit::ImageFormat::Png, bytes)))))
+                });
+                let _ = weak.update(cx, |view, cx| {
+                    view.audio.tile_inflight.retain(|pending| *pending != key);
+                    match result {
+                        // A slice is drawn where the host actually started it,
+                        // so one that lands after the view moved on is still
+                        // useful the next time that stretch of time shows up.
+                        Ok((state, start, image))
+                            if state.epoch == view.snapshot.audio.epoch
+                                && state.render_revision
+                                    == view.snapshot.audio.render_revision =>
+                        {
+                            if let Some(image) = image {
+                                view.audio.store_tile(key, start.round() as i64, image, cx);
+                            }
+                        }
+                        Ok(_) => {},
+                        Err(error) => { view.status = format!("音频画面生成失败：{error}"); }
+                    }
+                    // Chain the next slice as soon as one lands; the cap above
+                    // keeps the queue short enough that the slice on screen is
+                    // never stuck behind a dozen others.
+                    view.refresh_audio(cx);
+                    cx.notify();
+                });
+            }).detach();
+        }
     }
 
     /// Debounced render request for view changes that arrive in a burst, such as
@@ -4798,7 +4712,7 @@ impl Workspace {
                         }
                         view.preferences.receive(state, &sent);
                         view.preferences.confirm_reset = false;
-                        view.audio.requested = None;
+                        view.audio.gesture = None;
                         view.visual.drawn = None;
                         view.apply_snapshot(snapshot, cx);
                         view.refresh_catalog(cx);
@@ -6050,16 +5964,33 @@ impl Workspace {
             self.clear_frame_image(cx);
             self.frame_request_inflight = false;
             self.frame_request_generation += 1;
+            self.frame_pump.running.store(false, Ordering::Release);
+            return;
+        }
+        self.frame_pump.max_width.store(
+            self.preview_width_px.get().round() as i64,
+            Ordering::Relaxed,
+        );
+        self.frame_pump
+            .playing
+            .store(self.snapshot.playing, Ordering::Relaxed);
+        self.frame_pump
+            .epoch
+            .store(self.video_epoch, Ordering::Relaxed);
+        self.frame_pump
+            .frame
+            .store(self.snapshot.frame, Ordering::Relaxed);
+        self.frame_pump
+            .revision
+            .store(self.snapshot.revision, Ordering::Relaxed);
+        if self.snapshot.playing {
+            self.start_frame_pump(cx);
             return;
         }
         // Keeping the previous image up while the replacement is fetched stops
         // visual drags from flashing the placeholder on every step.
-        // During playback a request has to stay pending: the host only renders
-        // into a waiting client, so a gap between requests drops the frames the
-        // controller produced in the meantime.
         if self.frame_request_inflight
-            || (!self.snapshot.playing
-                && self.frame_image_frame == self.snapshot.frame
+            || (self.frame_image_frame == self.snapshot.frame
                 && self.frame_image_revision == self.snapshot.revision)
         {
             return;
@@ -6126,56 +6057,7 @@ impl Workspace {
                         }
                         return;
                     };
-                    // Release the request slot and ask for the next frame before
-                    // decoding this one: the JPEG decode and upload cost more than
-                    // a frame interval, and the host only renders into a client
-                    // that is already waiting, so decoding first drops every other
-                    // frame during playback.
-                    let mut apply = false;
-                    if let Some(view) = weak.upgrade() {
-                        let _ = view.update(cx, |view, cx| {
-                            if view.frame_request_generation != generation { return; }
-                            view.frame_request_inflight = false;
-                            apply = view.snapshot.video && view.video_epoch == request_epoch;
-                            if apply && view.snapshot.playing {
-                                view.refresh_frame(cx);
-                            }
-                        });
-                    }
-                    if !apply {
-                        if let Some(view) = weak.upgrade() {
-                            let _ = view.update(cx, |view, cx| view.refresh_frame(cx));
-                        }
-                        return;
-                    }
-                    let bytes = match cx.background_executor().spawn(async move {
-                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-                    }).await {
-                        Ok(bytes) => bytes,
-                        Err(error) => {
-                            if let Some(view) = weak.upgrade() { let _ = view.update(cx, |view, cx| { view.status = format!("视频帧解码失败：{error}"); cx.notify(); }); }
-                            return;
-                        }
-                    };
-                    let decoded = cx.background_executor().spawn(async move {
-                        let decoder = image::ImageReader::with_format(
-                            std::io::Cursor::new(bytes),
-                            image::ImageFormat::Jpeg,
-                        )
-                        .into_decoder()?;
-                        let rgba = image::DynamicImage::from_decoder(decoder)?.into_rgba8();
-                        let (width, height) = rgba.dimensions();
-                        let mut bgra = rgba.into_raw();
-                        for pixel in bgra.chunks_exact_mut(4) {
-                            pixel.swap(0, 2);
-                        }
-                        let image = image::RgbaImage::from_raw(width, height, bgra)
-                            .context("video frame dimensions do not match its pixel data")?;
-                        Ok::<_, anyhow::Error>(Arc::new(gpui_kit::RenderImage::new(vec![
-                            VideoImageFrame::new(image),
-                        ])))
-                    }).await;
-                    let image = match decoded {
+                    let image = match decode_frame_image(encoded, cx).await {
                         Ok(image) => image,
                         Err(error) => {
                             if let Some(view) = weak.upgrade() {
@@ -6207,6 +6089,131 @@ impl Workspace {
         }).detach();
     }
 
+    /// Keeps one frame request pending for a whole playback session. The host
+    /// only hands a frame to a client that is already waiting, so the next
+    /// request has to leave the moment the previous answer lands — a round trip
+    /// through the UI thread costs most of a frame interval and drops every
+    /// fifth frame of a 30 fps video.
+    fn start_frame_pump(&mut self, cx: &mut Context<Self>) {
+        if self.frame_pump.running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.frame_request_inflight = true;
+        self.frame_request_generation += 1;
+        let pump = self.frame_pump.clone();
+        let id = pump.id.fetch_add(1, Ordering::AcqRel) + 1;
+        let bridge = self.bridge.clone();
+        let weak = cx.weak_entity();
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |_, cx| {
+            let mut sequence = 0u64;
+            loop {
+                if !pump.playing.load(Ordering::Relaxed) {
+                    break;
+                }
+                let request_frame = pump.frame.load(Ordering::Relaxed);
+                let epoch = pump.epoch.load(Ordering::Relaxed);
+                let max_width = pump.max_width.load(Ordering::Relaxed);
+                let revision = pump.revision.load(Ordering::Relaxed);
+                let call = bridge.call(json!({"op":"frame", "frame":request_frame, "request":sequence, "epoch":epoch, "max_width":max_width}));
+                let cancelled = {
+                    let pump = pump.clone();
+                    let executor = executor.clone();
+                    async move {
+                        loop {
+                            executor.timer(Duration::from_millis(40)).await;
+                            if !pump.playing.load(Ordering::Relaxed) {
+                                break Err::<Value, _>(anyhow!("playback stopped"));
+                            }
+                        }
+                    }
+                };
+                let response = futures_lite::future::or(call, cancelled).await;
+                sequence += 1;
+                let reply = match response {
+                    Ok(value) => match serde_json::from_value::<FrameReply>(value) {
+                        Ok(reply) => reply,
+                        Err(error) => {
+                            if let Some(view) = weak.upgrade() {
+                                let _ = view.update(cx, |view, cx| {
+                                    if view.frame_pump.id.load(Ordering::Relaxed) == id {
+                                        view.status = format!("帧数据格式错误：{error}");
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                            continue;
+                        }
+                    },
+                    Err(error) => {
+                        if pump.playing.load(Ordering::Relaxed) {
+                            if let Some(view) = weak.upgrade() {
+                                let _ = view.update(cx, |view, cx| {
+                                    if view.frame_pump.id.load(Ordering::Relaxed) == id {
+                                        view.status = format!("获取视频帧失败：{error}");
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                            break;
+                        }
+                        break;
+                    }
+                };
+                let frame = reply.frame.unwrap_or(-1);
+                let video_gone = reply.video == Some(false);
+                let Some(encoded) = reply.image else {
+                    if video_gone {
+                        if let Some(view) = weak.upgrade() {
+                            let _ = view.update(cx, |view, cx| {
+                                view.apply_snapshot(Snapshot { video: false, ..view.snapshot.clone() }, cx);
+                            });
+                        }
+                        break;
+                    }
+                    continue;
+                };
+                let sequence_now = sequence - 1;
+                let weak_decode = weak.clone();
+                cx.spawn(async move |cx| {
+                    let image = match decode_frame_image(encoded, cx).await {
+                        Ok(image) => image,
+                        Err(error) => {
+                            if let Some(view) = weak_decode.upgrade() {
+                                let _ = view.update(cx, |view, cx| {
+                                    view.status = format!("视频帧解码失败：{error}");
+                                    cx.notify();
+                                });
+                            }
+                            return;
+                        }
+                    };
+                    if let Some(view) = weak_decode.upgrade() {
+                        let _ = view.update(cx, |view, cx| {
+                            if view.frame_pump.id.load(Ordering::Relaxed) != id { return; }
+                            if !view.snapshot.video || view.video_epoch != epoch { return; }
+                            if view.frame_pump.applied.load(Ordering::Acquire) >= sequence_now {
+                                return;
+                            }
+                            view.frame_pump.applied.store(sequence_now, Ordering::Release);
+                            view.frame_image_generation = view.frame_image_generation.max(sequence_now + 1);
+                            view.replace_frame_image(cx, image, frame, revision);
+                            cx.notify();
+                        });
+                    }
+                }).detach();
+            }
+            pump.running.store(false, Ordering::Release);
+            if let Some(view) = weak.upgrade() {
+                let _ = view.update(cx, |view, cx| {
+                    if view.frame_pump.id.load(Ordering::Relaxed) == id {
+                        view.frame_request_inflight = false;
+                    }
+                    view.refresh_frame(cx);
+                });
+            }
+        }).detach();
+    }
     /// Aegisub stores line breaks as `\N` (or `\n` for soft breaks); a literal
     /// newline inside a Dialogue field would corrupt the file.
     fn editor_text(&self, cx: &mut Context<Self>) -> String {
@@ -8197,25 +8204,34 @@ impl Workspace {
         // The four line-text actions of the classic edit box, directly under the
         // text they rewrite; they used to be reachable only from the palette.
         let mut text_actions = div().h_flex().gap_1().items_center();
-        for (id, label, tip, name) in [
+        for (id, label, tip, name, icon) in [
             (
                 "text-revert",
                 "还原",
                 "恢复到载入本行时的原文",
                 "edit/revert",
+                IconName::Undo2,
             ),
-            ("text-clear", "清除", "清空整行文本", "edit/clear"),
+            (
+                "text-clear",
+                "清除",
+                "清空整行文本",
+                "edit/clear",
+                IconName::Eraser,
+            ),
             (
                 "text-clear-text",
                 "清除文本",
                 "清除文本，保留特效标签",
                 "edit/clear/text",
+                IconName::Delete,
             ),
             (
                 "text-insert-original",
                 "插入原文",
                 "在光标处插入原文",
                 "edit/insert_original",
+                IconName::TextCursorInput,
             ),
         ] {
             let enabled = self
@@ -8228,6 +8244,7 @@ impl Workspace {
                     .small()
                     .px(gpui_kit::px(13.))
                     .py(gpui_kit::px(3.))
+                    .icon(icon)
                     .label(label)
                     .tooltip(tip)
                     .ghost()
@@ -8866,21 +8883,6 @@ fn font_flag_button(
         .into_any_element()
 }
 
-fn parse_color(text: &str) -> Option<(u8, u8, u8, u8)> {
-    let digits: String = text
-        .trim()
-        .trim_start_matches('#')
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .collect();
-    let byte = |index: usize| u8::from_str_radix(&digits[index..index + 2], 16).ok();
-    match digits.len() {
-        6 => Some((byte(0)?, byte(2)?, byte(4)?, 0)),
-        8 => Some((byte(0)?, byte(2)?, byte(4)?, byte(6)?)),
-        _ => None,
-    }
-}
-
 fn format_time(ms: i64) -> String {
     let total = ms.max(0);
     format!(
@@ -8928,6 +8930,40 @@ fn parse_time(value: &str) -> Result<i64> {
         .and_then(|total| total.checked_add(min * 60000 + sec * 1000 + ms))
         .filter(|total| *total <= i32::MAX as i64 - 10)
         .ok_or_else(|| anyhow!("时间码超出范围"))
+}
+
+/// Decodes one base64 JPEG preview frame into a paintable image, off the UI
+/// thread: the decode plus channel swap costs more than a frame interval.
+async fn decode_frame_image(
+    encoded: String,
+    cx: &mut gpui_kit::AsyncApp,
+) -> Result<Arc<gpui_kit::RenderImage>> {
+    let bytes = cx
+        .background_executor()
+        .spawn(async move {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+        })
+        .await?;
+    cx.background_executor()
+        .spawn(async move {
+            let decoder = image::ImageReader::with_format(
+                std::io::Cursor::new(bytes),
+                image::ImageFormat::Jpeg,
+            )
+            .into_decoder()?;
+            let rgba = image::DynamicImage::from_decoder(decoder)?.into_rgba8();
+            let (width, height) = rgba.dimensions();
+            let mut bgra = rgba.into_raw();
+            for pixel in bgra.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+            let image = image::RgbaImage::from_raw(width, height, bgra)
+                .context("video frame dimensions do not match its pixel data")?;
+            Ok::<_, anyhow::Error>(Arc::new(gpui_kit::RenderImage::new(vec![
+                VideoImageFrame::new(image),
+            ])))
+        })
+        .await
 }
 
 fn set_status(
@@ -9306,9 +9342,10 @@ impl Render for Workspace {
             if self.show_audio || self.show_video {
                 let mut left = div()
                     .v_flex()
-                    .when(side_by_side, |column| column.w(px(column_width)).h_full())
+                    .when(side_by_side, |column| {
+                        column.w(px(column_width)).h_full().flex_shrink_0()
+                    })
                     .when(!side_by_side, |column| column.w_full())
-                    .flex_shrink_0()
                     .min_w_0()
                     .min_h_0()
                     .gap_0p5();

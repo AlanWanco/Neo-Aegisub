@@ -6,13 +6,16 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::{
     StyledExt, Theme,
     button::{Button, ButtonVariants},
+    color_picker::ColorPicker,
     input::{Input, InputEvent, InputState},
 };
 use gpui_kit::{
-    App, AppContext, Context, Entity, IntoElement, Subscription, Window, div, prelude::*, px,
+    Anchor, App, AppContext, Context, Entity, IntoElement, Subscription, Window, div, prelude::*,
+    px,
 };
 use serde::Deserialize;
 
+use crate::colour_picker::LinkedPicker;
 use crate::{Workspace, format_time};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -58,6 +61,8 @@ pub struct VideoSettingsPanel {
     pub loading: bool,
     pub error: Option<String>,
     pending_values: BTreeMap<&'static str, String>,
+    /// The dummy video colour is `#RRGGBB`; the picker edits that same text.
+    color_picker: LinkedPicker,
     _events: Vec<Subscription>,
 }
 
@@ -88,6 +93,10 @@ impl VideoSettingsPanel {
             );
             inputs.insert(key, input);
         }
+        let color_picker = LinkedPicker::new(&inputs["color"], false, window, cx, |view, cx| {
+            view.video_settings.error = None;
+            cx.notify();
+        });
         Self {
             state: VideoSettings::default(),
             page: VideoPage::Details,
@@ -97,6 +106,7 @@ impl VideoSettingsPanel {
             loading: false,
             error: None,
             pending_values: BTreeMap::new(),
+            color_picker,
             _events: events,
         }
     }
@@ -122,6 +132,9 @@ impl VideoSettingsPanel {
     pub fn sync(&mut self, window: &mut Window, cx: &mut App) {
         for (key, value) in std::mem::take(&mut self.pending_values) {
             self.inputs[key].update(cx, |state, cx| state.set_value(value, window, cx));
+            if key == "color" {
+                self.color_picker.pull(&self.inputs[key], window, cx);
+            }
         }
     }
 
@@ -181,9 +194,26 @@ impl VideoSettingsPanel {
                         .gap_1()
                         .w(px(280.))
                         .child(crate::page::field_label(cx, label))
-                        .child(Input::new(&self.inputs[key]).disabled(
-                            disabled || (self.page != VideoPage::Dummy && !self.state.loaded),
-                        )),
+                        .child({
+                            let input = Input::new(&self.inputs[key]).disabled(
+                                disabled || (self.page != VideoPage::Dummy && !self.state.loaded),
+                            );
+                            if key == "color" {
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        ColorPicker::new(&self.color_picker.picker)
+                                            .anchor(Anchor::TopLeft)
+                                            .accessibility_label(label),
+                                    )
+                                    .child(input)
+                                    .into_any_element()
+                            } else {
+                                input.into_any_element()
+                            }
+                        }),
                 );
             }
             let action = match self.page {

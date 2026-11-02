@@ -6,17 +6,19 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     Icon, StyledExt, Theme,
     button::{Button, ButtonVariants},
+    color_picker::ColorPicker,
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement,
 };
 use gpui_kit::{
-    App, AppContext, Context, Div, Entity, IntoElement, MouseButton, MouseDownEvent, ObjectFit,
-    Subscription, Window, div, img, prelude::*, px,
+    Anchor, App, AppContext, Context, Div, Entity, IntoElement, MouseButton, MouseDownEvent,
+    ObjectFit, Subscription, Window, div, img, prelude::*, px,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::Workspace;
+use crate::colour_picker::LinkedPicker;
 
 /// Style fields are grouped by what they affect so the editor reads as
 /// sections instead of one 23-row grid.
@@ -167,6 +169,9 @@ fn style_preview(
 pub struct Form {
     pub inputs: BTreeMap<&'static str, Entity<InputState>>,
     pub dirty: BTreeSet<&'static str>,
+    /// Style colours are edited with the workspace colour picker; the text
+    /// field stays the stored value so the patch sent to the host is unchanged.
+    pickers: BTreeMap<&'static str, LinkedPicker>,
     _events: Vec<Subscription>,
 }
 
@@ -208,9 +213,22 @@ impl Form {
             );
             inputs.insert(key, input);
         }
+        let mut pickers = BTreeMap::new();
+        if style {
+            for &(key, _) in STYLE_COLORS {
+                pickers.insert(
+                    key,
+                    LinkedPicker::new(&inputs[key], true, window, cx, move |view, cx| {
+                        view.document.style_form.dirty.insert(key);
+                        cx.notify();
+                    }),
+                );
+            }
+        }
         Self {
             inputs,
             dirty: BTreeSet::new(),
+            pickers,
             _events: events,
         }
     }
@@ -223,6 +241,9 @@ impl Form {
             let value = fields.get(key).cloned().unwrap_or_default();
             if input.read(cx).value().as_ref() != value {
                 input.update(cx, |state, cx| state.set_value(value, window, cx));
+                if let Some(linked) = self.pickers.get(key) {
+                    linked.pull(input, window, cx);
+                }
             }
         }
     }
@@ -1071,30 +1092,20 @@ fn style_section(
         .child(rows)
 }
 
-/// Colour rows carry a swatch previewing the ASS colour next to the hex value.
+/// Colour rows pair the workspace colour picker with the hex text it edits.
 fn style_color_section(cx: &mut Context<Workspace>, form: &Form) -> Div {
     let mut rows = div().v_flex().w_full().min_w_0().gap_2();
     for chunk in STYLE_COLORS.chunks(2) {
         let mut row = div().h_flex().items_start().w_full().min_w_0().gap_3();
         for &(key, label) in chunk {
-            let value = form.inputs[key].read(cx).value().to_string();
-            let swatch = parse_ass_color(&value)
-                .map(|color| {
-                    div()
-                        .w(px(18.))
-                        .h(px(18.))
-                        .rounded(px(4.))
-                        .bg(color)
-                        .border_1()
-                })
-                .unwrap_or_else(|| {
-                    div()
-                        .w(px(18.))
-                        .h(px(18.))
-                        .rounded(px(4.))
-                        .border_1()
-                        .border_color(crate::workspace_theme::Palette::current(cx).border)
-                });
+            let mut field = div().h_flex().items_center().gap_2();
+            if let Some(linked) = form.pickers.get(key) {
+                field = field.child(
+                    ColorPicker::new(&linked.picker)
+                        .anchor(Anchor::TopLeft)
+                        .accessibility_label(label),
+                );
+            }
             row = row.child(
                 div()
                     .v_flex()
@@ -1103,7 +1114,7 @@ fn style_color_section(cx: &mut Context<Workspace>, form: &Form) -> Div {
                     .gap_1()
                     .child(style_label(cx, label))
                     .child(
-                        div().h_flex().items_center().gap_2().child(swatch).child(
+                        field.child(
                             Input::new(&form.inputs[key])
                                 .id(format!("style-colors-{key}"))
                                 .w_full(),
@@ -1123,17 +1134,6 @@ fn style_color_section(cx: &mut Context<Workspace>, form: &Form) -> Div {
         .gap_2()
         .child(style_group_title(cx, "颜色"))
         .child(rows)
-}
-
-fn parse_ass_color(value: &str) -> Option<gpui_kit::Hsla> {
-    let hex = value.trim().trim_start_matches('#');
-    if hex.len() < 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(gpui_kit::rgb((r as u32) << 16 | (g as u32) << 8 | b as u32).into())
 }
 
 /// Bold/italic/underline/strikeout are switches, not free-text numbers.

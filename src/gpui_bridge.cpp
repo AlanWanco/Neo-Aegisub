@@ -161,17 +161,23 @@ std::string to_base64_jpeg(VideoFrame const& frame, double aspect, int max_width
 	int display_width = std::max(1, static_cast<int>(std::round(image.GetHeight() * aspect)));
 	// The preview is a few hundred pixels wide, so shipping a full 1080p frame
 	// only makes the frontend decode and upload nine times the pixels it shows.
+	// A preview frame is fetched, encoded and decoded again inside one video
+	// frame interval, so the resampler has to stay cheap: box averaging is the
+	// fast path for shrinking, and bilinear is what the rare upscale needs.
+	wxImageResizeQuality const shrink_quality = max_width > 0 && display_width > max_width
+		? wxIMAGE_QUALITY_BOX_AVERAGE
+		: wxIMAGE_QUALITY_BILINEAR;
 	if (max_width > 0 && display_width > max_width) {
 		int const scaled_height = std::max(1, static_cast<int>(std::round(image.GetHeight() * (double(max_width) / display_width))));
-		image.Rescale(max_width, scaled_height, wxIMAGE_QUALITY_HIGH);
+		image.Rescale(max_width, scaled_height, shrink_quality);
 		display_width = max_width;
 	}
 	else if (display_width != image.GetWidth()) {
-		image.Rescale(display_width, image.GetHeight(), wxIMAGE_QUALITY_HIGH);
+		image.Rescale(display_width, image.GetHeight(), shrink_quality);
 	}
 	width = image.GetWidth();
 	height = image.GetHeight();
-	image.SetOption(wxIMAGE_OPTION_QUALITY, 82);
+	image.SetOption(wxIMAGE_OPTION_QUALITY, 72);
 	wxMemoryOutputStream stream;
 	if (!image.SaveFile(stream, wxBITMAP_TYPE_JPEG))
 		return {};

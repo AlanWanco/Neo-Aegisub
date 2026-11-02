@@ -34,6 +34,9 @@ gpui_kit::assets::icon_assets!(
         Volume2,
         Locate,
         Target,
+        Eraser,
+        Delete,
+        TextCursorInput,
     ]
 );
 
