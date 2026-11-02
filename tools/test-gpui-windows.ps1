@@ -165,7 +165,7 @@ try {
     [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
     Start-Sleep -Milliseconds 750
     Press-Control '时间平移'
-    Switch-ToToolWindow 'Aegisub · 时间平移'
+    Switch-ToToolWindow 'Neo Aegisub · 时间平移'
     $input = Find-Control '平移时长' -Kind Edit
     $initialBounds = $input.Current.BoundingRectangle
     if ($input.Current.IsOffscreen -or $initialBounds.Height -lt 15) { throw 'Shift input is clipped or offscreen' }
@@ -214,7 +214,7 @@ try {
     }
     Switch-ToMainWindow
     Press-Control '时间平移'
-    Switch-ToToolWindow 'Aegisub · 时间平移'
+    Switch-ToToolWindow 'Neo Aegisub · 时间平移'
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 800, 600, 0x0040)
     Start-Sleep -Milliseconds 350
     # The compact window stacks both cards: the parameter field stays visible and
