@@ -209,7 +209,7 @@ try {
     foreach ($name in @('时间后处理', '重采样', '查找替换', '样式管理')) {
         Switch-ToMainWindow
         Press-Control $name
-        Switch-ToToolWindow "Aegisub · $name"
+        Switch-ToToolWindow "Neo Aegisub · $name"
         Save-Screenshot ("tool-" + $name)
     }
     Switch-ToMainWindow

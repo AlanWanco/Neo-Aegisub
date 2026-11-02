@@ -29,4 +29,4 @@ case "${APP_ARCHS}" in
   *) PKG_ARCH="$(printf '%s' "${APP_ARCHS}" | tr ' ' '-')" ;;
 esac
 
-printf 'Aegisub-%s-%s\n' "${SAFE_AEGI_VER}" "${PKG_ARCH}"
+printf 'Neo-Aegisub-%s-%s\n' "${SAFE_AEGI_VER}" "${PKG_ARCH}"

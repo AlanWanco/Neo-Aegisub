@@ -172,7 +172,7 @@ bool update_ycbcr_matrix(AssFile *file, const AsyncVideoProvider *new_provider, 
 			/* TRANSLATORS: Keep the space between the two line breaks; it's required for the message
 			                to display correctly on Windows. */
 			"The video you have loaded has no specified color matrix. "
-			"Aegisub will guess the color matrix to be %s, but there is no guarantee that other programs will guess the same matrix. "
+			"Neo Aegisub will guess the color matrix to be %s, but there is no guarantee that other programs will guess the same matrix. "
 			"This may make the video appear with different colors in different media players and can prevent subtitle colors from matching video colors."
 			"\n \n"
 			"Consider tagging your video with a color matrix to ensure that your video displays consistently in all players and that subtitle colors can reliably match video colors."

@@ -176,7 +176,7 @@ std::optional<updates::Release> DoCheck() {
 	if (!headers) throw std::runtime_error("Could not allocate GitHub request headers.");
 	curl_easy_setopt(curl.get(), CURLOPT_URL, "https://api.github.com/repos/AlanWanco/Aegisub/releases?per_page=100");
 	curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
-	curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "Aegisub-update-checker/1.0");
+	curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "Neo Aegisub-update-checker/1.0");
 	curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
 	curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 30L);
 	curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
@@ -238,18 +238,18 @@ void PerformVersionCheck(bool interactive) {
 		try {
 			release = DoCheck();
 			status = release ? "available" : "current";
-			message = from_wx(release ? _("An update to Aegisub was found.") : _("There are no updates to Aegisub."));
+			message = from_wx(release ? _("An update to Neo Aegisub was found.") : _("There are no updates to Neo Aegisub."));
 			if (release) {
 				results.push_back({release->url, release->name, release->description});
 			}
 		}
 		catch (std::exception const& error) {
 			status = "error";
-			message = std::string("There was an error checking for updates to Aegisub: ") + error.what();
+			message = std::string("There was an error checking for updates to Neo Aegisub: ") + error.what();
 		}
 		catch (...) {
 			status = "error";
-			message = "An unknown error occurred while checking for updates to Aegisub.";
+			message = "An unknown error occurred while checking for updates to Neo Aegisub.";
 		}
 		bool show;
 		{

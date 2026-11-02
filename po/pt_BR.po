@@ -2,7 +2,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Aegisub 3\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-01 13:34+0800\n"
+"POT-Creation-Date: 2026-11-02 19:23+0800\n"
 "PO-Revision-Date: 2026-07-28 12:46-0300\n"
 "Last-Translator: witchymary <witchymary34@gmail.com>\n"
 "Language-Team: Rodrigo Braz Monteiro, witchymary, Tenebris Magi\n"
@@ -383,11 +383,10 @@ msgstr ""
 
 #: ../src/charset_detect.cpp:50
 msgid ""
-"Aegisub could not narrow down the character set to a single one.\n"
+"Neo Aegisub could not narrow down the character set to a single one.\n"
 "Please pick one below:"
-msgstr ""
-"Aegisub não conseguiu escolher apenas um único conjunto de caracteres.\n"
-"Por favor, escolha um abaixo:"
+msgstr "Neo Aegisub não conseguiu escolher apenas um único conjunto de "
+"caracteres.\nPor favor, escolha um abaixo:"
 
 #: ../src/charset_detect.cpp:51
 msgid "Choose character set"
@@ -414,8 +413,8 @@ msgid "About"
 msgstr "Sobre"
 
 #: ../src/command/app.cpp:71 ../src/dialog_about.cpp:44
-msgid "About Aegisub"
-msgstr "Sobre o Aegisub"
+msgid "About Neo Aegisub"
+msgstr "Sobre o Neo Aegisub"
 
 #: ../src/command/app.cpp:84
 msgid "&Audio+Subs View"
@@ -482,19 +481,19 @@ msgid "&Language..."
 msgstr "&Idioma..."
 
 #: ../src/command/app.cpp:174
-msgid "Select Aegisub interface language"
-msgstr "Selecione o idioma da interface do Aegisub"
+msgid "Select Neo Aegisub interface language"
+msgstr "Selecione o idioma da interface do Neo Aegisub"
 
 #: ../src/command/app.cpp:189
 msgid ""
-"Aegisub needs to be restarted so that the new language can be applied. "
+"Neo Aegisub needs to be restarted so that the new language can be applied. "
 "Restart now?"
-msgstr ""
-"É necessário reiniciar o Aegisub para aplicar o novo idioma. Reiniciar agora?"
+msgstr "É necessário reiniciar o Neo Aegisub para aplicar o novo idioma. "
+"Reiniciar agora?"
 
 #: ../src/command/app.cpp:189
-msgid "Restart Aegisub?"
-msgstr "Reiniciar o Aegisub?"
+msgid "Restart Neo Aegisub?"
+msgstr "Reiniciar o Neo Aegisub?"
 
 #: ../src/command/app.cpp:202
 msgid "&Log window"
@@ -531,8 +530,8 @@ msgid "Options"
 msgstr "Opções"
 
 #: ../src/command/app.cpp:232
-msgid "Configure Aegisub"
-msgstr "Configure o Aegisub"
+msgid "Configure Neo Aegisub"
+msgstr "Configure o Neo Aegisub"
 
 #: ../src/command/app.cpp:245 ../src/command/app.cpp:246
 #: ../src/preferences.cpp:102
@@ -593,8 +592,8 @@ msgid "Check for Updates"
 msgstr "Verificar Atualizações"
 
 #: ../src/command/app.cpp:319
-msgid "Check to see if there is a new version of Aegisub available"
-msgstr "Verifique se existe uma nova versão do Aegisub disponível"
+msgid "Check to see if there is a new version of Neo Aegisub available"
+msgstr "Verifique se existe uma nova versão do Neo Aegisub disponível"
 
 #: ../src/command/app.cpp:333 ../src/command/app.cpp:334
 msgid "Minimize"
@@ -1947,7 +1946,7 @@ msgid "Open a subtitles file"
 msgstr "Abre um arquivo de legendas"
 
 #: ../src/command/subtitle.cpp:274 ../src/command/subtitle.cpp:304
-#: ../src/dialog_style_manager.cpp:681 ../src/gpui_bridge.cpp:1147
+#: ../src/dialog_style_manager.cpp:681 ../src/gpui_bridge.cpp:1179
 msgid "Open Subtitles File"
 msgstr "Abrir Arquivo de Legendas"
 
@@ -1960,9 +1959,9 @@ msgid "Open Autosaved Subtitles"
 msgstr "Abrir Legendas Salvas Automaticamente"
 
 #: ../src/command/subtitle.cpp:284
-msgid "Open a previous version of a file which was autosaved by Aegisub"
-msgstr ""
-"Abre uma versão antiga do arquivo que foi salva automaticamente pelo Aegisub"
+msgid "Open a previous version of a file which was autosaved by Neo Aegisub"
+msgstr "Abre uma versão antiga do arquivo que foi salva automaticamente pelo "
+"Neo Aegisub"
 
 #: ../src/command/subtitle.cpp:297
 msgid "Open Subtitles with &Charset..."
@@ -1976,11 +1975,11 @@ msgstr "Abrir Legendas com Charset"
 msgid "Open a subtitles file with a specific file encoding"
 msgstr "Abre um arquivo de legendas com um conjunto de caracteres específico"
 
-#: ../src/command/subtitle.cpp:307 ../src/gpui_bridge.cpp:1149
+#: ../src/command/subtitle.cpp:307 ../src/gpui_bridge.cpp:1181
 msgid "Charset"
 msgstr "Charset"
 
-#: ../src/command/subtitle.cpp:307 ../src/gpui_bridge.cpp:1149
+#: ../src/command/subtitle.cpp:307 ../src/gpui_bridge.cpp:1181
 msgid "Choose charset code:"
 msgstr "Escolha o conjunto de caracteres:"
 
@@ -4501,16 +4500,16 @@ msgid "Remove fro&m dictionary"
 msgstr "&Remover do dicionário"
 
 #: ../src/dialog_spellchecker.cpp:279
-msgid "Aegisub has finished checking spelling of this script."
-msgstr "Aegisub concluiu a verificação ortográfica destas legendas."
+msgid "Neo Aegisub has finished checking spelling of this script."
+msgstr "Neo Aegisub concluiu a verificação ortográfica destas legendas."
 
 #: ../src/dialog_spellchecker.cpp:279 ../src/dialog_spellchecker.cpp:283
 msgid "Spell checking complete."
 msgstr "Correção ortográfica concluída."
 
 #: ../src/dialog_spellchecker.cpp:283
-msgid "Aegisub has found no spelling mistakes in this script."
-msgstr "Aegisub não identificou erros ortográficos nestas legendas."
+msgid "Neo Aegisub has found no spelling mistakes in this script."
+msgstr "Neo Aegisub não identificou erros ortográficos nestas legendas."
 
 #: ../src/dialog_spellchecker.cpp:329 ../src/dialog_spellchecker.cpp:343
 #: ../src/gpui_spelling.cpp:161
@@ -5255,12 +5254,12 @@ msgid "Remind me again in a &week"
 msgstr "Lembre-me novamente em uma &semana"
 
 #: ../src/dialog_version_check.cpp:241
-msgid "An update to Aegisub was found."
-msgstr "Foi encontrada uma atualização para o Aegisub."
+msgid "An update to Neo Aegisub was found."
+msgstr "Foi encontrada uma atualização para o Neo Aegisub."
 
 #: ../src/dialog_version_check.cpp:241
-msgid "There are no updates to Aegisub."
-msgstr "Não há atualizações para o Aegisub."
+msgid "There are no updates to Neo Aegisub."
+msgstr "Não há atualizações para o Neo Aegisub."
 
 #: ../src/dialog_video_details.cpp:46
 msgid "Video Details"
@@ -5317,25 +5316,23 @@ msgstr "Decodificador:"
 #: ../src/dialog_video_properties.cpp:174
 #, c-format
 msgid ""
-"The video you have loaded has no specified color matrix. Aegisub will guess "
-"the color matrix to be %s, but there is no guarantee that other programs "
-"will guess the same matrix. This may make the video appear with different "
-"colors in different media players and can prevent subtitle colors from "
-"matching video colors.\n"
+"The video you have loaded has no specified color matrix. Neo Aegisub will "
+"guess the color matrix to be %s, but there is no guarantee that other "
+"programs will guess the same matrix. This may make the video appear with "
+"different colors in different media players and can prevent subtitle colors "
+"from matching video colors.\n"
 " \n"
 "Consider tagging your video with a color matrix to ensure that your video "
 "displays consistently in all players and that subtitle colors can reliably "
 "match video colors."
-msgstr ""
-"O vídeo não tem uma matriz de cores especificada. O Aegisub presumirá que a "
-"matriz de cores é %s, mas não há garantia de que outros programas "
-"identificarão a mesma matriz. Isso pode fazer com que o vídeo seja exibido "
-"com cores diferentes em diferentes reprodutores de vídeo e impedir que as "
-"cores das legendas correspondam às cores do vídeo.\n"
-"\n"
-"Considere definir uma matriz de cores no vídeo para garantir que ele seja "
-"exibido de forma consistente em todos os reprodutores e que as cores das "
-"legendas correspondam com precisão às cores do vídeo."
+msgstr "O vídeo não tem uma matriz de cores especificada. O Neo Aegisub "
+"presumirá que a matriz de cores é %s, mas não há garantia de que outros "
+"programas identificarão a mesma matriz. Isso pode fazer com que o vídeo seja "
+"exibido com cores diferentes em diferentes reprodutores de vídeo e impedir "
+"que as cores das legendas correspondam às cores do vídeo.\n\nConsidere "
+"definir uma matriz de cores no vídeo para garantir que ele seja exibido de "
+"forma consistente em todos os reprodutores e que as cores das legendas "
+"correspondam com precisão às cores do vídeo."
 
 #: ../src/dialog_video_properties.cpp:181
 #: ../src/dialog_video_properties.cpp:183
@@ -5791,30 +5788,30 @@ msgid ""
 "manifest-path gpui-prototype/Cargo.toml."
 msgstr ""
 
-#: ../src/gpui_bridge.cpp:925
+#: ../src/gpui_bridge.cpp:940
 #, fuzzy
 #| msgid "Subtitle Editor"
 msgid "GPUI subtitle edit"
 msgstr "Editor de Legendas"
 
-#: ../src/gpui_bridge.cpp:1005
+#: ../src/gpui_bridge.cpp:1020
 #, fuzzy
 #| msgid "Properties"
 msgid "GPUI line properties"
 msgstr "Propriedades"
 
-#: ../src/gpui_bridge.cpp:1079
+#: ../src/gpui_bridge.cpp:1094
 #, fuzzy
 #| msgid "Configure Aegisub"
 msgid "Confirm Save As"
 msgstr "Configure o Aegisub"
 
-#: ../src/gpui_bridge.cpp:1080
+#: ../src/gpui_bridge.cpp:1095
 #, c-format
 msgid "The file %s already exists. Replace it?"
 msgstr ""
 
-#: ../src/gpui_bridge.cpp:1081
+#: ../src/gpui_bridge.cpp:1096
 msgid "Pick a different name, or delete the old file first."
 msgstr ""
 
@@ -5882,77 +5879,66 @@ msgstr ""
 "O arquivo de configuração é inválido. Erro informado:\n"
 "%s"
 
-#: ../src/main.cpp:282
+#: ../src/main.cpp:284
 #, c-format
 msgid ""
-"Oops, Aegisub has crashed!\n"
+"Oops, Neo Aegisub has crashed!\n"
 "\n"
 "An attempt has been made to save a copy of your file to:\n"
 "\n"
 "%s\n"
 "\n"
-"Aegisub will now close."
-msgstr ""
-"Opa, o Aegisub travou!\n"
-"\n"
-"Uma tentativa foi feita para salvar uma cópia do seu arquivo em:\n"
-"\n"
-"%s\n"
-"\n"
-"O Aegisub será fechado agora."
+"Neo Aegisub will now close."
+msgstr "Opa, o Neo Aegisub travou!\n\nUma tentativa foi feita para salvar uma "
+"cópia do seu arquivo em:\n\n%s\n\nO Neo Aegisub será fechado agora."
 
-#: ../src/main.cpp:314
+#: ../src/main.cpp:316
 msgid "Check for updates?"
 msgstr "Verificar atualizações?"
 
-#: ../src/main.cpp:314
+#: ../src/main.cpp:316
 msgid ""
-"Do you want Aegisub to check for updates whenever it starts? You can still "
-"do it manually via the Help menu."
-msgstr ""
-"Deseja que o Aegisub verifique atualizações sempre que for iniciado? "
-"Atualizações manuais ainda poderão ser realizadas pelo menu Ajuda."
+"Do you want Neo Aegisub to check for updates whenever it starts? You can "
+"still do it manually via the Help menu."
+msgstr "Deseja que o Neo Aegisub verifique atualizações sempre que for "
+"iniciado? Atualizações manuais ainda poderão ser realizadas pelo menu Ajuda."
 
-#: ../src/main.cpp:320
+#: ../src/main.cpp:322
 msgid "Error saving config file"
 msgstr "Erro ao salvar o arquivo de configuração"
 
-#: ../src/main.cpp:336 ../src/main.cpp:340 ../src/main.cpp:345
+#: ../src/main.cpp:338 ../src/main.cpp:342 ../src/main.cpp:347
 msgid "Fatal error while initializing"
 msgstr "Erro fatal durante a inicialização"
 
-#: ../src/main.cpp:345
+#: ../src/main.cpp:347
 msgid "Unhandled exception"
 msgstr "Exceção não tratada"
 
-#: ../src/main.cpp:438 ../src/main.cpp:441
+#: ../src/main.cpp:440 ../src/main.cpp:443
 msgid "Program error"
 msgstr "Erro de programa"
 
-#: ../src/main.cpp:441
+#: ../src/main.cpp:443
 #, c-format
 msgid ""
-"Aegisub has crashed while starting up!\n"
+"Neo Aegisub has crashed while starting up!\n"
 "\n"
 "The last startup step attempted was: %s."
-msgstr ""
-"O Aegisub travou durante a inicialização!\n"
-"\n"
-"A última etapa de inicialização tentada foi: %s."
+msgstr "O Neo Aegisub travou durante a inicialização!\n\nA última etapa de "
+"inicialização tentada foi: %s."
 
-#: ../src/main.cpp:455
+#: ../src/main.cpp:457
 #, c-format
 msgid ""
-"An unexpected error has occurred. Please save your work and restart "
+"An unexpected error has occurred. Please save your work and restart Neo "
 "Aegisub.\n"
 "\n"
 "Error Message: %s"
-msgstr ""
-"Ocorreu um erro inesperado. Salve seu trabalho e reinicie o Aegisub.\n"
-"\n"
-"Mensagem de erro: %s"
+msgstr "Ocorreu um erro inesperado. Salve seu trabalho e reinicie o Neo "
+"Aegisub.\n\nMensagem de erro: %s"
 
-#: ../src/main.cpp:456
+#: ../src/main.cpp:458
 msgid "Exception in event handler"
 msgstr "Exceção no manipulador de eventos"
 
@@ -7785,8 +7771,8 @@ msgid "Create a start menu icon"
 msgstr "Criar um atalho no menu iniciar"
 
 #: packages/win_installer/fragment_strings.iss:1
-msgid "Automatically check for new versions of Aegisub"
-msgstr "Verificar automaticamente se há novas versões do Aegisub"
+msgid "Automatically check for new versions of Neo Aegisub"
+msgstr "Verificar automaticamente se há novas versões do Neo Aegisub"
 
 #: packages/win_installer/fragment_strings.iss:1
 msgid "Update Checker:"
@@ -7794,22 +7780,21 @@ msgstr "Verificação de Atualizações:"
 
 #: packages/win_installer/fragment_strings.iss:1
 msgid ""
-"This will install Aegisub {#BUILD_GIT_VERSION_STRING} on your computer."
-"%n%nAegisub is covered by the GNU General Public License version 2. This "
+"This will install Neo Aegisub {#BUILD_GIT_VERSION_STRING} on your computer."
+"%n%nNeo Aegisub is covered by the GNU General Public License version 2. This "
 "means you may use the application for any purpose without charge, but that "
-"no warranties of any kind are given either.%n%nSee the Aegisub website for "
-"information on obtaining the source code."
-msgstr ""
-"Isso instalará o Aegisub {#BUILD_GIT_VERSION_STRING} no seu computador."
-"%n%nAegisub está coberto pela Licença Pública Geral GNU, versão 2. O que "
-"significa que você pode usar o aplicativo para qualquer finalidade sem "
-"custos, mas sem garantia de qualquer tipo.%n%nConsulte o site do Aegisub "
-"para obter informações sobre como acessar o código-fonte."
+"no warranties of any kind are given either.%n%nSee the Neo Aegisub website "
+"for information on obtaining the source code."
+msgstr "Isso instalará o Neo Aegisub {#BUILD_GIT_VERSION_STRING} no seu "
+"computador.%n%nNeo Aegisub está coberto pela Licença Pública Geral GNU, "
+"versão 2. O que significa que você pode usar o aplicativo para qualquer "
+"finalidade sem custos, mas sem garantia de qualquer tipo.%n%nConsulte o site "
+"do Neo Aegisub para obter informações sobre como acessar o código-fonte."
 
 #: ../packages/desktop/aegisub.desktop.in.in:4
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:6
-msgid "Aegisub"
-msgstr "Aegisub"
+msgid "Neo Aegisub"
+msgstr "Neo Aegisub"
 
 #: ../packages/desktop/aegisub.desktop.in.in:5
 msgid "Subtitle Editor"
@@ -7829,16 +7814,15 @@ msgstr "Crie e modifique legendas"
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:9
 msgid ""
-"Aegisub is a free, cross-platform open source tool for creating and "
-"modifying subtitles. Aegisub makes it quick and easy to time subtitles to "
-"audio, and features many powerful tools for styling them, including a built-"
-"in real-time video preview."
-msgstr ""
-"O Aegisub é uma ferramenta gratuita, de código aberto e multiplataforma para "
-"criar e modificar legendas. Ele facilita e agiliza o processo de "
-"sincronização de legendas com áudio, oferecendo diversas ferramentas "
-"avançadas de estilização, incluindo uma pré-visualização de vídeo em tempo "
-"real integrada."
+"Neo Aegisub is a free, cross-platform open source tool for creating and "
+"modifying subtitles. Neo Aegisub makes it quick and easy to time subtitles "
+"to audio, and features many powerful tools for styling them, including a "
+"built-in real-time video preview."
+msgstr "O Neo Aegisub é uma ferramenta gratuita, de código aberto e "
+"multiplataforma para criar e modificar legendas. Ele facilita e agiliza o "
+"processo de sincronização de legendas com áudio, oferecendo diversas "
+"ferramentas avançadas de estilização, incluindo uma pré-visualização de "
+"vídeo em tempo real integrada."
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:10
 msgid ""
@@ -7861,24 +7845,23 @@ msgstr ""
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:11
 msgid ""
-"Since then, Aegisub has grown into a fully fledged, highly customizable "
+"Since then, Neo Aegisub has grown into a fully fledged, highly customizable "
 "subtitle editor. It features a lot of convenient tools to help you with "
 "timing, typesetting, editing and translating subtitles, as well as a "
 "powerful scripting environment called Automation (originally mostly intended "
 "for creating karaoke effects, Automation can now be used much else, "
 "including creating macros and various other convenient tools)."
-msgstr ""
-"Desde então, o Aegisub evoluiu para um editor de legendas completo e "
-"altamente personalizável. Ele oferece diversas ferramentas práticas para "
-"auxiliar na sincronização, composição visual, edição e tradução de legendas, "
-"além de um poderoso ambiente de scripts chamado Automação (originalmente "
-"criado principalmente para efeitos de karaokê, a Automação agora pode ser "
-"usado para muitas outras finalidades, incluindo a criação de macros e "
-"diversas ferramentas adicionais)."
+msgstr "Desde então, o Neo Aegisub evoluiu para um editor de legendas "
+"completo e altamente personalizável. Ele oferece diversas ferramentas "
+"práticas para auxiliar na sincronização, composição visual, edição e "
+"tradução de legendas, além de um poderoso ambiente de scripts chamado "
+"Automação (originalmente criado principalmente para efeitos de karaokê, a "
+"Automação agora pode ser usado para muitas outras finalidades, incluindo a "
+"criação de macros e diversas ferramentas adicionais)."
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:12
-msgid "Some highlights of Aegisub:"
-msgstr "Alguns destaques do Aegisub:"
+msgid "Some highlights of Neo Aegisub:"
+msgstr "Alguns destaques do Neo Aegisub:"
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:14
 msgid "Simple and intuitive yet powerful interface for editing subtitles"

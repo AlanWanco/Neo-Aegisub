@@ -33,7 +33,7 @@ int wrap_luaopen_luabins(lua_State *L) {
 	lua_getfield(L, -1, "__raise_warning");
 	lua_remove(L, -2);
 
-	push_value(L, "This automation script uses the library luabins. This library is deprecated and will be removed in a future version of Aegisub. If your script critically depends on luabins and cannot be adapted to work without it, please let us know at https://github.com/TypesettingTools/Aegisub/issues/382 .");
+	push_value(L, "This automation script uses the library luabins. This library is deprecated and will be removed in a future version of Neo Aegisub. If your script critically depends on luabins and cannot be adapted to work without it, please let us know at https://github.com/TypesettingTools/Aegisub/issues/382 .");
 	lua_call(L, 1, 0);
 
 	return luaopen_luabins(L);

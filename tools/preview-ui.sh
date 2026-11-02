@@ -11,10 +11,10 @@ SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BUILD_DIR=${1:-"${SOURCE_DIR}/build-ui"}
 if [ "$#" -gt 0 ]; then shift; fi
 BUILD_DIR=$(CDPATH= cd -- "$BUILD_DIR" && pwd)
-APP_EXECUTABLE="${BUILD_DIR}/Aegisub.app/Contents/MacOS/aegisub"
+APP_EXECUTABLE="${BUILD_DIR}/Neo Aegisub.app/Contents/MacOS/aegisub"
 
 if [ ! -x "$APP_EXECUTABLE" ]; then
-    echo "Build and bundle Aegisub first; missing: ${APP_EXECUTABLE}" >&2
+    echo "Build and bundle Neo Aegisub first; missing: ${APP_EXECUTABLE}" >&2
     exit 1
 fi
 

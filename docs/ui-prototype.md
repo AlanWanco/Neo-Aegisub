@@ -4,7 +4,7 @@
 
 ## 试用本机原型
 
-已经编译并打包的本机版本位于 `build-ui/Aegisub.app`。使用独立配置启动：
+已经编译并打包的本机版本位于 `build-ui/Neo Aegisub.app`。使用独立配置启动：
 
 ```sh
 ./tools/preview-ui.sh build-ui build-ui/ui-preview.ass
@@ -16,7 +16,7 @@
 ./tools/preview-ui.sh build-ui
 ```
 
-启动器将配置、缓存与自动保存写入 `build-ui/preview-home`，首次使用时创建配置，后续保留其中的设置。演示字幕和视频仅在本机构建目录中。直接打开 `.app` 会使用常规 Aegisub 配置，建议通过上述脚本试用。
+启动器将配置、缓存与自动保存写入 `build-ui/preview-home`，首次使用时创建配置，后续保留其中的设置。演示字幕和视频仅在本机构建目录中。直接打开 `.app` 会使用常规 Neo Aegisub 配置，建议通过上述脚本试用。
 
 ## 界面改动
 
@@ -66,7 +66,7 @@
 
 ## GPUI 工作区实验
 
-CI 交付包以 `-Dgpui_default=true` 构建，双击 Aegisub 即打开 GPUI 工作区，C++ 宿主隐藏运行；关闭 GPUI 后宿主按原有保存确认流程退出。开发构建仍可从“视图 → GPUI Workspace Prototype...”启动独立 GPUI 窗口。原型通过仅绑定回环地址的临时 TCP 端口和每次启动随机令牌连接当前 `agi::Context`；文档与操作请求在 wx 主事件循环处理。字幕行、选择状态、保存状态和视频帧来自当前 C++ 项目，GPUI 的字幕文本编辑会提交为 Aegisub 撤销栈操作。视频帧由 `AsyncVideoProvider` 异步生成并返回，未引入第二个解码器。
+CI 交付包以 `-Dgpui_default=true` 构建，双击 Neo Aegisub 即打开 GPUI 工作区，C++ 宿主隐藏运行；关闭 GPUI 后宿主按原有保存确认流程退出。开发构建仍可从“视图 → GPUI Workspace Prototype...”启动独立 GPUI 窗口。原型通过仅绑定回环地址的临时 TCP 端口和每次启动随机令牌连接当前 `agi::Context`；文档与操作请求在 wx 主事件循环处理。字幕行、选择状态、保存状态和视频帧来自当前 C++ 项目，GPUI 的字幕文本编辑会提交为 Neo Aegisub 撤销栈操作。视频帧由 `AsyncVideoProvider` 异步生成并返回，未引入第二个解码器。
 
 GPUI 目前已接入当前 C++ 文档的多选字幕列表、文本/属性批量编辑、格式与复制粘贴、覆盖粘贴、撤销/重做、完整 ASS 样式与样式库、脚本属性、翻译/样式助手、查找替换/条件选行、附件管理、时间平移/后处理和分辨率重采样。命令目录来自运行时注册表，菜单来自平台/用户合并配置；动态 Lua 宏在同一项目执行。
 
@@ -78,7 +78,7 @@ GPUI 目前已接入当前 C++ 文档的多选字幕列表、文本/属性批量
 
 设置页提供本机构建可用的 143 个偏好项和 125 条初始快捷键绑定：分类/搜索、草稿、应用/放弃、恢复默认、类型/范围校验及写入前配置备份。主题与工具栏即时同步，字体/颜色、软换行及音频渲染设置使用共享配置；尚未接入的 GPUI 控件行为会标注。快捷键支持录入、绑定/移除、冲突检查/显式替换及默认恢复。桌面实测新绑定立即触发并跨重启保留；也修复了热键变动时 macOS 全局菜单缺少文档上下文导致的崩溃。
 
-本机验证：`cargo +1.95.0 fmt --manifest-path gpui-prototype/Cargo.toml`、`cargo +1.95.0 check --manifest-path gpui-prototype/Cargo.toml -q`、release 测试/构建和 Aegisub macOS arm64 增量构建通过。拼写、偏好和文件工具协议回归通过；桌面已检查拼写候选词/个人词典添加与移除、偏好搜索/主题下拉和即时切换、快捷键录入与移除、恢复版本筛选/打开。每项协议回归和桌面证据记在 [GPUI 移植计划](gpui-migration-plan.md)；脚本、结果 JSON、截图、日志和独立配置位于忽略的 `build-ui-gpui/`。
+本机验证：`cargo +1.95.0 fmt --manifest-path gpui-prototype/Cargo.toml`、`cargo +1.95.0 check --manifest-path gpui-prototype/Cargo.toml -q`、release 测试/构建和 Neo Aegisub macOS arm64 增量构建通过。拼写、偏好和文件工具协议回归通过；桌面已检查拼写候选词/个人词典添加与移除、偏好搜索/主题下拉和即时切换、快捷键录入与移除、恢复版本筛选/打开。每项协议回归和桌面证据记在 [GPUI 移植计划](gpui-migration-plan.md)；脚本、结果 JSON、截图、日志和独立配置位于忽略的 `build-ui-gpui/`。
 
 Windows、Linux、wxWidgets 3.2、中文输入法预编辑/候选框仍未实机验收；不能用 macOS 测试或历史 Windows CI 代替。原生导出/过滤器、Kanji 定时、Lua 对话框/进度，以及部分视频/窗口/偏好控件仍待迁移。拼写复用平台工厂，本机实际验证的是 macOS 系统服务；Hunspell 构建尚未实测。关联媒体/脚本信任、未保存确认和剩余兼容对话框可能进入 wx 模态循环，此时桥接等待不等于崩溃。GPUI 依赖 Rust 1.95，本机默认 Rust 1.93.1 无法编译当前 `gpui-pre`。
 

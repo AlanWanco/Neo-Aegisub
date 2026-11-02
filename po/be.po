@@ -12,7 +12,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Aegisub (unofficial)\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-01 13:34+0800\n"
+"POT-Creation-Date: 2026-11-02 19:23+0800\n"
 "PO-Revision-Date: 2018-09-26 07:39+0000\n"
 "Last-Translator: Viktar Lieškievič <vityay.leshkevich@yandex.ru>, 2019\n"
 "Language-Team: Belarusian (https://www.transifex.com/byplay/teams/91944/"
@@ -371,11 +371,10 @@ msgstr ""
 
 #: ../src/charset_detect.cpp:50
 msgid ""
-"Aegisub could not narrow down the character set to a single one.\n"
+"Neo Aegisub could not narrow down the character set to a single one.\n"
 "Please pick one below:"
-msgstr ""
-"Aegisub не можа дакладна вызначыць кадзіроўку файла.\n"
-"Выберыце адну са спісу:"
+msgstr "Neo Aegisub не можа дакладна вызначыць кадзіроўку файла.\nВыберыце "
+"адну са спісу:"
 
 #: ../src/charset_detect.cpp:51
 msgid "Choose character set"
@@ -402,8 +401,8 @@ msgid "About"
 msgstr "Аб праграме"
 
 #: ../src/command/app.cpp:71 ../src/dialog_about.cpp:44
-msgid "About Aegisub"
-msgstr "Аб Aegisub"
+msgid "About Neo Aegisub"
+msgstr "Аб Neo Aegisub"
 
 #: ../src/command/app.cpp:84
 msgid "&Audio+Subs View"
@@ -470,20 +469,20 @@ msgid "&Language..."
 msgstr "&Мова"
 
 #: ../src/command/app.cpp:174
-msgid "Select Aegisub interface language"
-msgstr "Выбраць мову інтэрфейса Aegisub"
+msgid "Select Neo Aegisub interface language"
+msgstr "Выбраць мову інтэрфейса Neo Aegisub"
 
 #: ../src/command/app.cpp:189
 msgid ""
-"Aegisub needs to be restarted so that the new language can be applied. "
+"Neo Aegisub needs to be restarted so that the new language can be applied. "
 "Restart now?"
 msgstr ""
 
 #: ../src/command/app.cpp:189
 #, fuzzy
 #| msgid "About Aegisub"
-msgid "Restart Aegisub?"
-msgstr "Аб Aegisub"
+msgid "Restart Neo Aegisub?"
+msgstr "Аб Neo Aegisub"
 
 #: ../src/command/app.cpp:202
 msgid "&Log window"
@@ -520,7 +519,7 @@ msgid "Options"
 msgstr "Параметры"
 
 #: ../src/command/app.cpp:232
-msgid "Configure Aegisub"
+msgid "Configure Neo Aegisub"
 msgstr "Налады"
 
 #: ../src/command/app.cpp:245 ../src/command/app.cpp:246
@@ -581,8 +580,8 @@ msgid "Check for Updates"
 msgstr "Праверыць абнаўленні"
 
 #: ../src/command/app.cpp:319
-msgid "Check to see if there is a new version of Aegisub available"
-msgstr "Праверыць, ці даступна новая версія Aegisub"
+msgid "Check to see if there is a new version of Neo Aegisub available"
+msgstr "Праверыць, ці даступна новая версія Neo Aegisub"
 
 #: ../src/command/app.cpp:333 ../src/command/app.cpp:334
 msgid "Minimize"
@@ -1947,7 +1946,7 @@ msgid "Open a subtitles file"
 msgstr "Адкрыць файл субтытраў"
 
 #: ../src/command/subtitle.cpp:274 ../src/command/subtitle.cpp:304
-#: ../src/dialog_style_manager.cpp:681 ../src/gpui_bridge.cpp:1147
+#: ../src/dialog_style_manager.cpp:681 ../src/gpui_bridge.cpp:1179
 #, fuzzy
 #| msgid "Open subtitles file"
 msgid "Open Subtitles File"
@@ -1962,7 +1961,7 @@ msgid "Open Autosaved Subtitles"
 msgstr "Адкрыць аўтазахаваныя субтытры"
 
 #: ../src/command/subtitle.cpp:284
-msgid "Open a previous version of a file which was autosaved by Aegisub"
+msgid "Open a previous version of a file which was autosaved by Neo Aegisub"
 msgstr "Адкрыць аўтазахаваную папярэднюю версію файла"
 
 #: ../src/command/subtitle.cpp:297
@@ -1977,11 +1976,11 @@ msgstr "Адкрыць файл субтытраў у кадзіроўцы"
 msgid "Open a subtitles file with a specific file encoding"
 msgstr "Адкрыць файл субтытраў у зададзенай кадзіроўцы"
 
-#: ../src/command/subtitle.cpp:307 ../src/gpui_bridge.cpp:1149
+#: ../src/command/subtitle.cpp:307 ../src/gpui_bridge.cpp:1181
 msgid "Charset"
 msgstr "Кадзіроўка"
 
-#: ../src/command/subtitle.cpp:307 ../src/gpui_bridge.cpp:1149
+#: ../src/command/subtitle.cpp:307 ../src/gpui_bridge.cpp:1181
 msgid "Choose charset code:"
 msgstr "Выбраць кадзіроўку відэа:"
 
@@ -4547,16 +4546,16 @@ msgid "Remove fro&m dictionary"
 msgstr "Выдаліць са слоўніку"
 
 #: ../src/dialog_spellchecker.cpp:279
-msgid "Aegisub has finished checking spelling of this script."
-msgstr "Aegisub скончыла правяраць арфаграфію ў дадзеным скрыпце."
+msgid "Neo Aegisub has finished checking spelling of this script."
+msgstr "Neo Aegisub скончыла правяраць арфаграфію ў дадзеным скрыпце."
 
 #: ../src/dialog_spellchecker.cpp:279 ../src/dialog_spellchecker.cpp:283
 msgid "Spell checking complete."
 msgstr "Праверка арфаграфіі завершана."
 
 #: ../src/dialog_spellchecker.cpp:283
-msgid "Aegisub has found no spelling mistakes in this script."
-msgstr "Aegisub не знайшла памылак у гэтым скрыпце."
+msgid "Neo Aegisub has found no spelling mistakes in this script."
+msgstr "Neo Aegisub не знайшла памылак у гэтым скрыпце."
 
 #: ../src/dialog_spellchecker.cpp:329 ../src/dialog_spellchecker.cpp:343
 #: ../src/gpui_spelling.cpp:161
@@ -5302,12 +5301,12 @@ msgid "Remind me again in a &week"
 msgstr "Нагадаць праз &тыдзень"
 
 #: ../src/dialog_version_check.cpp:241
-msgid "An update to Aegisub was found."
-msgstr "Знойдзена абнаўленне Aegisub."
+msgid "An update to Neo Aegisub was found."
+msgstr "Знойдзена абнаўленне Neo Aegisub."
 
 #: ../src/dialog_version_check.cpp:241
-msgid "There are no updates to Aegisub."
-msgstr "Абнаўленняў Aegisub няма."
+msgid "There are no updates to Neo Aegisub."
+msgstr "Абнаўленняў Neo Aegisub няма."
 
 #: ../src/dialog_video_details.cpp:46
 msgid "Video Details"
@@ -5369,11 +5368,11 @@ msgstr "Дэкодар:"
 #: ../src/dialog_video_properties.cpp:174
 #, c-format
 msgid ""
-"The video you have loaded has no specified color matrix. Aegisub will guess "
-"the color matrix to be %s, but there is no guarantee that other programs "
-"will guess the same matrix. This may make the video appear with different "
-"colors in different media players and can prevent subtitle colors from "
-"matching video colors.\n"
+"The video you have loaded has no specified color matrix. Neo Aegisub will "
+"guess the color matrix to be %s, but there is no guarantee that other "
+"programs will guess the same matrix. This may make the video appear with "
+"different colors in different media players and can prevent subtitle colors "
+"from matching video colors.\n"
 " \n"
 "Consider tagging your video with a color matrix to ensure that your video "
 "displays consistently in all players and that subtitle colors can reliably "
@@ -5806,30 +5805,30 @@ msgid ""
 "manifest-path gpui-prototype/Cargo.toml."
 msgstr ""
 
-#: ../src/gpui_bridge.cpp:925
+#: ../src/gpui_bridge.cpp:940
 #, fuzzy
 #| msgid "Subtitle Editor"
 msgid "GPUI subtitle edit"
 msgstr "Рэдактар субтытраў"
 
-#: ../src/gpui_bridge.cpp:1005
+#: ../src/gpui_bridge.cpp:1020
 #, fuzzy
 #| msgid "Properties"
 msgid "GPUI line properties"
 msgstr "Уласцівасці"
 
-#: ../src/gpui_bridge.cpp:1079
+#: ../src/gpui_bridge.cpp:1094
 #, fuzzy
 #| msgid "Configure Aegisub"
 msgid "Confirm Save As"
 msgstr "Налады"
 
-#: ../src/gpui_bridge.cpp:1080
+#: ../src/gpui_bridge.cpp:1095
 #, c-format
 msgid "The file %s already exists. Replace it?"
 msgstr ""
 
-#: ../src/gpui_bridge.cpp:1081
+#: ../src/gpui_bridge.cpp:1096
 msgid "Pick a different name, or delete the old file first."
 msgstr ""
 
@@ -5895,75 +5894,65 @@ msgid ""
 "%s"
 msgstr ""
 
-#: ../src/main.cpp:282
+#: ../src/main.cpp:284
 #, c-format
 msgid ""
-"Oops, Aegisub has crashed!\n"
+"Oops, Neo Aegisub has crashed!\n"
 "\n"
 "An attempt has been made to save a copy of your file to:\n"
 "\n"
 "%s\n"
 "\n"
-"Aegisub will now close."
-msgstr ""
-"Упс, Aegisub упала!\n"
-"\n"
-"Зрабілі спробу запісаць копію вашага файла ў:\n"
-"\n"
-"%s\n"
-"\n"
-"Зараз Aegisub будзе закрыты."
+"Neo Aegisub will now close."
+msgstr "Упс, Neo Aegisub упала!\n\nЗрабілі спробу запісаць копію вашага файла "
+"ў:\n\n%s\n\nЗараз Neo Aegisub будзе закрыты."
 
-#: ../src/main.cpp:314
+#: ../src/main.cpp:316
 msgid "Check for updates?"
 msgstr "Праверыць абнаўленні?"
 
-#: ../src/main.cpp:314
+#: ../src/main.cpp:316
 msgid ""
-"Do you want Aegisub to check for updates whenever it starts? You can still "
-"do it manually via the Help menu."
-msgstr ""
-"Правяраць абнаўленні праграмы Aegisub падчас запуску? Вы гэта можаце рабіць "
-"гэта і ўручную праз меню \"Дапамога\"."
+"Do you want Neo Aegisub to check for updates whenever it starts? You can "
+"still do it manually via the Help menu."
+msgstr "Правяраць абнаўленні праграмы Neo Aegisub падчас запуску? Вы гэта "
+"можаце рабіць гэта і ўручную праз меню \"Дапамога\"."
 
-#: ../src/main.cpp:320
+#: ../src/main.cpp:322
 msgid "Error saving config file"
 msgstr ""
 
-#: ../src/main.cpp:336 ../src/main.cpp:340 ../src/main.cpp:345
+#: ../src/main.cpp:338 ../src/main.cpp:342 ../src/main.cpp:347
 msgid "Fatal error while initializing"
 msgstr ""
 
-#: ../src/main.cpp:345
+#: ../src/main.cpp:347
 msgid "Unhandled exception"
 msgstr ""
 
-#: ../src/main.cpp:438 ../src/main.cpp:441
+#: ../src/main.cpp:440 ../src/main.cpp:443
 msgid "Program error"
 msgstr "Памылка праграмы"
 
-#: ../src/main.cpp:441
+#: ../src/main.cpp:443
 #, c-format
 msgid ""
-"Aegisub has crashed while starting up!\n"
+"Neo Aegisub has crashed while starting up!\n"
 "\n"
 "The last startup step attempted was: %s."
 msgstr ""
 
-#: ../src/main.cpp:455
+#: ../src/main.cpp:457
 #, c-format
 msgid ""
-"An unexpected error has occurred. Please save your work and restart "
+"An unexpected error has occurred. Please save your work and restart Neo "
 "Aegisub.\n"
 "\n"
 "Error Message: %s"
-msgstr ""
-"Адбылася нечаканая памылка. Захавайце вынікі вашай працы і перазапусціце "
-"Aegisub.\n"
-"\n"
-"Паведамленне аб памылцы: %s"
+msgstr "Адбылася нечаканая памылка. Захавайце вынікі вашай працы і "
+"перазапусціце Neo Aegisub.\n\nПаведамленне аб памылцы: %s"
 
-#: ../src/main.cpp:456
+#: ../src/main.cpp:458
 msgid "Exception in event handler"
 msgstr ""
 
@@ -7829,8 +7818,8 @@ msgid "Create a start menu icon"
 msgstr "Стварыць значок у меню \"Пуск\""
 
 #: packages/win_installer/fragment_strings.iss:1
-msgid "Automatically check for new versions of Aegisub"
-msgstr "Аўтаматычна правяраць абнаўленні Aegisub"
+msgid "Automatically check for new versions of Neo Aegisub"
+msgstr "Аўтаматычна правяраць абнаўленні Neo Aegisub"
 
 #: packages/win_installer/fragment_strings.iss:1
 msgid "Update Checker:"
@@ -7838,22 +7827,21 @@ msgstr "Праверка абнаўленняў:"
 
 #: packages/win_installer/fragment_strings.iss:1
 msgid ""
-"This will install Aegisub {#BUILD_GIT_VERSION_STRING} on your computer."
-"%n%nAegisub is covered by the GNU General Public License version 2. This "
+"This will install Neo Aegisub {#BUILD_GIT_VERSION_STRING} on your computer."
+"%n%nNeo Aegisub is covered by the GNU General Public License version 2. This "
 "means you may use the application for any purpose without charge, but that "
-"no warranties of any kind are given either.%n%nSee the Aegisub website for "
-"information on obtaining the source code."
-msgstr ""
-"Гэта ўсталюе Aegisub {#BUILD_GIT_VERSION_STRING} на ваш камп'ютар."
-"%n%nAegisub распаўсюджваецца па ліцэнзіі GNU General Public License version "
-"2. Гэта азначае, што вы можаце выкарыстоўваць гэту праграму для любых мэт, "
-"але без якіх-небудзь гарантый.%n%nКаб даведацца пра атрыманне зыходнага "
-"кода, перайдзіце на сайт Aegisub."
+"no warranties of any kind are given either.%n%nSee the Neo Aegisub website "
+"for information on obtaining the source code."
+msgstr "Гэта ўсталюе Neo Aegisub {#BUILD_GIT_VERSION_STRING} на ваш "
+"камп'ютар.%n%nNeo Aegisub распаўсюджваецца па ліцэнзіі GNU General Public "
+"License version 2. Гэта азначае, што вы можаце выкарыстоўваць гэту праграму "
+"для любых мэт, але без якіх-небудзь гарантый.%n%nКаб даведацца пра атрыманне "
+"зыходнага кода, перайдзіце на сайт Neo Aegisub."
 
 #: ../packages/desktop/aegisub.desktop.in.in:4
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:6
-msgid "Aegisub"
-msgstr "Aegisub"
+msgid "Neo Aegisub"
+msgstr "Neo Aegisub"
 
 #: ../packages/desktop/aegisub.desktop.in.in:5
 msgid "Subtitle Editor"
@@ -7873,10 +7861,10 @@ msgstr ""
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:9
 msgid ""
-"Aegisub is a free, cross-platform open source tool for creating and "
-"modifying subtitles. Aegisub makes it quick and easy to time subtitles to "
-"audio, and features many powerful tools for styling them, including a built-"
-"in real-time video preview."
+"Neo Aegisub is a free, cross-platform open source tool for creating and "
+"modifying subtitles. Neo Aegisub makes it quick and easy to time subtitles "
+"to audio, and features many powerful tools for styling them, including a "
+"built-in real-time video preview."
 msgstr ""
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:10
@@ -7892,7 +7880,7 @@ msgstr ""
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:11
 msgid ""
-"Since then, Aegisub has grown into a fully fledged, highly customizable "
+"Since then, Neo Aegisub has grown into a fully fledged, highly customizable "
 "subtitle editor. It features a lot of convenient tools to help you with "
 "timing, typesetting, editing and translating subtitles, as well as a "
 "powerful scripting environment called Automation (originally mostly intended "
@@ -7901,7 +7889,7 @@ msgid ""
 msgstr ""
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:12
-msgid "Some highlights of Aegisub:"
+msgid "Some highlights of Neo Aegisub:"
 msgstr ""
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:14

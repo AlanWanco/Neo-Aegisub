@@ -68,7 +68,7 @@ struct app_about final : public Command {
 	CMD_ICON(about_menu)
 	STR_MENU("&About")
 	STR_DISP("About")
-	STR_HELP("About Aegisub")
+	STR_HELP("About Neo Aegisub")
 
 	void operator()(agi::Context *c) override {
 		if (gpui::FrontendAttached()) {
@@ -171,7 +171,7 @@ struct app_language final : public Command {
 	CMD_ICON(languages_menu)
 	STR_MENU("&Language...")
 	STR_DISP("Language")
-	STR_HELP("Select Aegisub interface language")
+	STR_HELP("Select Neo Aegisub interface language")
 
 	void operator()(agi::Context *c) override {
 		if (gpui::FrontendAttached()) {
@@ -186,7 +186,7 @@ struct app_language final : public Command {
 		OPT_SET("App/Language")->SetString(new_language);
 
 		// Ask to restart program
-		int result = wxMessageBox(_("Aegisub needs to be restarted so that the new language can be applied. Restart now?"), _("Restart Aegisub?"), wxYES_NO | wxICON_QUESTION |  wxCENTER);
+		int result = wxMessageBox(_("Neo Aegisub needs to be restarted so that the new language can be applied. Restart now?"), _("Restart Neo Aegisub?"), wxYES_NO | wxICON_QUESTION |  wxCENTER);
 		if (result == wxYES) {
 			// Restart Aegisub
 			if (c->frame->Close()) {
@@ -229,7 +229,7 @@ struct app_options final : public Command {
 	CMD_ICON(options_button)
 	STR_MENU("&Options...")
 	STR_DISP("Options")
-	STR_HELP("Configure Aegisub")
+	STR_HELP("Configure Neo Aegisub")
 
 	void operator()(agi::Context *c) override {
 		try {
@@ -316,7 +316,7 @@ struct app_updates final : public Command {
 	CMD_NAME("app/updates")
 	STR_MENU("&Check for Updates...")
 	STR_DISP("Check for Updates")
-	STR_HELP("Check to see if there is a new version of Aegisub available")
+	STR_HELP("Check to see if there is a new version of Neo Aegisub available")
 
 	void operator()(agi::Context *) override {
 		if (gpui::FrontendAttached()) {

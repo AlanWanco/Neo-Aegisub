@@ -27,7 +27,7 @@ PY
 STAGE="$(mktemp -d)"
 trap 'rm -rf "${STAGE}"' EXIT
 
-ROOT_NAME="Aegisub-${VERSION}-${ARCH}"
+ROOT_NAME="Neo-Aegisub-${VERSION}-${ARCH}"
 APP_DIR="${STAGE}/${ROOT_NAME}"
 mkdir -p "${APP_DIR}"
 
@@ -86,7 +86,7 @@ exec "${APP_DIR}/aegisub-core" "$@"
 LAUNCHER
 chmod +x "${APP_DIR}/aegisub"
 cat > "${APP_DIR}/README.txt" <<EOF
-Aegisub ${VERSION} (${ARCH}) - GPUI portable build
+Neo Aegisub ${VERSION} (${ARCH}) - GPUI portable build
 
 Run ./aegisub to open the GPUI workspace directly.
 The launcher configures the bundled libraries and automation resources.
@@ -94,6 +94,6 @@ Requires a graphical Linux session compatible with Ubuntu 24.04 or newer.
 EOF
 
 mkdir -p "${OUTPUT_DIR}"
-ARCHIVE="${OUTPUT_DIR}/Aegisub-${VERSION}-${ARCH}.tar.gz"
+ARCHIVE="${OUTPUT_DIR}/Neo-Aegisub-${VERSION}-${ARCH}.tar.gz"
 tar -C "${STAGE}" -czf "${ARCHIVE}" "${ROOT_NAME}"
 echo "Created ${ARCHIVE}"

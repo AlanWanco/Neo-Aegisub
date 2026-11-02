@@ -32,7 +32,7 @@ $script:stepTotal = 10
 function Write-Step {
     param([Parameter(Mandatory)][string]$Status)
     $script:stepNum++
-    Write-Progress -Activity 'Creating portable Aegisub' -Status $Status -PercentComplete (100 * $script:stepNum / $script:stepTotal)
+    Write-Progress -Activity 'Creating portable Neo Aegisub' -Status $Status -PercentComplete (100 * $script:stepNum / $script:stepTotal)
     Write-Host "[$script:stepNum/$script:stepTotal] $Status"
 }
 
@@ -47,7 +47,7 @@ if (-not $GitVersionMatch) {
     throw "Could not read BUILD_GIT_VERSION_STRING from $GitVersionHeader"
 }
 $GitVersion = $GitVersionMatch.Matches[0].Groups[1].Value
-$PortableZipPath = Join-Path $BuildRoot "Aegisub-$GitVersion-$Architecture-portable.zip"
+$PortableZipPath = Join-Path $BuildRoot "Neo-Aegisub-$GitVersion-$Architecture-portable.zip"
 
 Write-Step 'Removing previous output'
 Remove-Item -LiteralPath $PortableOutputDir -Force -Recurse -ErrorAction SilentlyContinue
@@ -110,5 +110,5 @@ finally {
     $zip.Dispose()
 }
 
-Write-Progress -Activity 'Creating portable Aegisub' -Completed
+Write-Progress -Activity 'Creating portable Neo Aegisub' -Completed
 Write-Host "Done: $PortableZipPath"

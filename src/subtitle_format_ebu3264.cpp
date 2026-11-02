@@ -594,7 +594,7 @@ namespace
 		memcpy(gsi.co, "XXX", 3);
 		gsi_encoder.Convert(scriptinfo_editing, std::span<char>(gsi.en, 32));
 		if (export_settings.text_encoding == EbuExportSettings::utf8)
-			strncpy(gsi.uda, "This file was exported by Aegisub using non-standard UTF-8 encoding for the subtitle blocks. The TTI.TF field contains UTF-8-encoded text interspersed with the standard formatting codes, which are not encoded. GSI.CCT is set to 'U8' to signify this.", sizeof(gsi.uda));
+			strncpy(gsi.uda, "This file was exported by Neo Aegisub using non-standard UTF-8 encoding for the subtitle blocks. The TTI.TF field contains UTF-8-encoded text interspersed with the standard formatting codes, which are not encoded. GSI.CCT is set to 'U8' to signify this.", sizeof(gsi.uda));
 
 		return gsi;
 	}

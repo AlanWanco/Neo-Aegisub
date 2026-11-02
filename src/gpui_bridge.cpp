@@ -1131,7 +1131,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		std::string const& name = name_it->second;
 		std::string_view const surface = gpui::CommandSurface(name);
 		if (surface == "internal" || surface == "wx-control")
-			return R"({"ok":false,"error":"this command still requires the original Aegisub control"})";
+			return R"({"ok":false,"error":"this command still requires the original Neo Aegisub control"})";
 		if (surface == "automation") {
 			auto macros = config::global_scripts->GetMacros();
 			auto local = context->local_scripts->GetMacros();

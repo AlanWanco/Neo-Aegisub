@@ -83,7 +83,7 @@ version_h = custom_target('git_version.h',
 meson.add_dist_script(version_sh, meson.current_build_dir(), meson.current_source_dir(), 'dist')
 
 if host_machine.system() == 'darwin' and get_option('build_osx_bundle')
-    prefix = meson.current_build_dir() / 'Aegisub.app' / 'Contents'
+    prefix = meson.current_build_dir() / 'Neo Aegisub.app' / 'Contents'
     bindir = prefix / 'MacOS'
     datadir = prefix / 'SharedSupport'
     localedir = prefix / 'Resources'

@@ -9,7 +9,7 @@
 
 [Setup]
 AppID={{24BC8B57-716C-444F-B46B-A3349B9164C5}
-DefaultDirName={commonpf}\Aegisub
+DefaultDirName={commonpf}\Neo Aegisub
 PrivilegesRequired=poweruser
 #ifdef ARM64
 ArchitecturesInstallIn64BitMode=arm64

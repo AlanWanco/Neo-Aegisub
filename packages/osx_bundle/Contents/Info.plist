@@ -15,7 +15,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.aegisub.aegisub</string>
 	<key>CFBundleName</key>
-	<string>Aegisub</string>
+	<string>Neo Aegisub</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleSignature</key>

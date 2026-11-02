@@ -20,7 +20,7 @@ elif host_machine.system() == 'darwin'
 
     sign_app_sh = find_program(meson.project_source_root() / 'tools/osx-sign.sh')
     run_target('osx-sign',
-               command: [sign_app_sh, meson.project_source_root(), meson.project_build_root() / 'Aegisub.app'])
+               command: [sign_app_sh, meson.project_source_root(), meson.project_build_root() / 'Neo Aegisub.app'])
 
     build_dmg_sh = find_program(meson.project_source_root() / 'tools/osx-dmg.sh')
     run_target('osx-build-dmg',

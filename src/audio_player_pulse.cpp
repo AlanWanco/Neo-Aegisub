@@ -223,7 +223,7 @@ PulseAudioPlayer::PulseAudioPlayer(agi::AudioProvider *provider) : AudioPlayer(p
 	PAThreadedMainloopLock lock{mainloop.get()};
 
 	// Create context
-	context.reset(pa_context_new(pa_threaded_mainloop_get_api(mainloop.get()), "Aegisub"), mainloop.get());
+	context.reset(pa_context_new(pa_threaded_mainloop_get_api(mainloop.get()), "Neo Aegisub"), mainloop.get());
 	if (!context.get())
 		throw AudioPlayerOpenError("Failed to create PulseAudio context");
 

@@ -214,9 +214,9 @@ fn install_native_menus(catalog: &Catalog, cx: &mut App) {
     if !cfg!(target_os = "macos") {
         return;
     }
-    let mut menus = vec![gpui_kit::Menu::new("Aegisub").items(vec![
+    let mut menus = vec![gpui_kit::Menu::new("Neo Aegisub").items(vec![
         gpui_kit::MenuItem::action(
-            "关于 Aegisub",
+            "关于 Neo Aegisub",
             RunCommand {
                 name: "app/about".into(),
             },
@@ -230,7 +230,7 @@ fn install_native_menus(catalog: &Catalog, cx: &mut App) {
         ),
         gpui_kit::MenuItem::separator(),
         gpui_kit::MenuItem::action(
-            "退出 Aegisub",
+            "退出 Neo Aegisub",
             RunCommand {
                 name: "app/exit".into(),
             },
@@ -931,7 +931,7 @@ impl Bridge {
             .context("invalid local bridge endpoint")?;
         let mut stream = TcpStream::connect(address)
             .await
-            .context("Aegisub bridge is unavailable")?;
+            .context("Neo Aegisub bridge is unavailable")?;
         let mut request = body;
         request["token"] = Value::String(self.token.clone());
         let mut bytes = serde_json::to_vec(&request)?;
@@ -939,20 +939,20 @@ impl Bridge {
         stream
             .write_all(&bytes)
             .await
-            .context("could not write to Aegisub bridge")?;
+            .context("could not write to Neo Aegisub bridge")?;
         let mut response = Vec::new();
         stream
             .read_to_end(&mut response)
             .await
-            .context("could not read Aegisub bridge response")?;
+            .context("could not read Neo Aegisub bridge response")?;
         let value: Value =
-            serde_json::from_slice(&response).context("invalid Aegisub bridge response")?;
+            serde_json::from_slice(&response).context("invalid Neo Aegisub bridge response")?;
         if value.get("ok").and_then(Value::as_bool) == Some(false) {
             return Err(anyhow!(
                 value
                     .get("error")
                     .and_then(Value::as_str)
-                    .unwrap_or("Aegisub command failed")
+                    .unwrap_or("Neo Aegisub command failed")
                     .to_owned()
             ));
         }
@@ -1401,7 +1401,7 @@ impl Workspace {
             bridge,
             focus_handle,
             snapshot: Snapshot {
-                file: "正在连接 Aegisub…".into(),
+                file: "正在连接 Neo Aegisub…".into(),
                 notices: Vec::new(),
                 progress: None,
                 commands: Vec::new(),
@@ -1506,7 +1506,7 @@ impl Workspace {
             key_focus: KeyFocus::Grid,
             sidebar_collapsed: None,
             selected_line: -1,
-            status: "已连接当前 Aegisub 文档".into(),
+            status: "已连接当前 Neo Aegisub 文档".into(),
             notices: Vec::new(),
             notice_suppress: false,
             color_dialog: None,
@@ -1771,7 +1771,7 @@ impl Workspace {
         cx.spawn(async move |_, cx| {
             let picked = rfd::AsyncFileDialog::new()
                 .set_title("导入旧版配置")
-                .add_filter("Aegisub 配置文件", &["json"])
+                .add_filter("Neo Aegisub 配置文件", &["json"])
                 .pick_file()
                 .await;
             let Some(file) = picked else {
@@ -2647,7 +2647,7 @@ impl Workspace {
                         .on_click(cx.listener(|_, _, _, cx| cx.open_url(FORK_RELEASES_URL))),
                 );
                 (
-                    "关于 Aegisub".into(),
+                    "关于 Neo Aegisub".into(),
                     "字幕编辑与卡拉 OK 打轴工具".into(),
                     rows.into_any_element(),
                     div().into_any_element(),
@@ -4787,7 +4787,7 @@ impl Workspace {
         cx.spawn(async move |_, cx| {
             let picked = rfd::AsyncFileDialog::new()
                 .set_title("导入旧版快捷键")
-                .add_filter("Aegisub 快捷键文件", &["json"])
+                .add_filter("Neo Aegisub 快捷键文件", &["json"])
                 .pick_file()
                 .await;
             let Some(file) = picked else {
@@ -6022,7 +6022,7 @@ impl Workspace {
                 async move { request.await },
                 async move {
                     timeout.await;
-                    Err::<Value, _>(anyhow!("Aegisub 视频帧请求超时"))
+                    Err::<Value, _>(anyhow!("Neo Aegisub 视频帧请求超时"))
                 },
             ).await;
             match response {
@@ -6061,7 +6061,7 @@ impl Workspace {
                                     view.status = format!("视频帧请求失败：{error}");
                                     cx.notify();
                                 } else {
-                                    view.status = "等待 Aegisub 当前视频帧".into();
+                                    view.status = "等待 Neo Aegisub 当前视频帧".into();
                                     cx.notify();
                                 }
                             });
@@ -7163,7 +7163,12 @@ impl Workspace {
                         v.child(
                             div()
                                 .v_flex()
-                                .child(div().font_semibold().text_size(px(15.)).child("Aegisub"))
+                                .child(
+                                    div()
+                                        .font_semibold()
+                                        .text_size(px(15.))
+                                        .child("Neo Aegisub"),
+                                )
                                 .child(
                                     div()
                                         .text_size(px(11.))
@@ -9948,8 +9953,8 @@ fn open_workspace(
         },
     };
     let title: gpui_kit::SharedString = match detached {
-        Some(panel) => format!("Aegisub · {}", panel.label()).into(),
-        None => "Aegisub".into(),
+        Some(panel) => format!("Neo Aegisub · {}", panel.label()).into(),
+        None => "Neo Aegisub".into(),
     };
     cx.open_window(
         WindowOptions {
@@ -10044,8 +10049,8 @@ fn open_workspace(
                             playing = snapshot.playing || snapshot.audio.playing;
                             if let Some(view) = weak.upgrade() {
                                 let _ = view.update(cx, |view, cx| {
-                                    if view.status.starts_with("Aegisub 连接中断") {
-                                        view.status = "已重新连接 Aegisub".into();
+                                    if view.status.starts_with("Neo Aegisub 连接中断") {
+                                        view.status = "已重新连接 Neo Aegisub".into();
                                     }
                                     view.apply_snapshot(snapshot, cx);
                                     view.refresh_frame(cx);
@@ -10064,7 +10069,7 @@ fn open_workspace(
                         }
                         Err(error) => {
                             consecutive_failures += 1;
-                            set_status(&weak, cx, format!("Aegisub 连接中断：{error}"));
+                            set_status(&weak, cx, format!("Neo Aegisub 连接中断：{error}"));
                             if consecutive_failures >= 5 {
                                 cx.update(|app| app.quit());
                                 break;
@@ -10159,8 +10164,8 @@ fn main() -> Result<()> {
         }
     }
     let endpoint =
-        endpoint.context("missing --bridge endpoint; launch this prototype from Aegisub")?;
-    let token = token.context("missing --token; launch this prototype from Aegisub")?;
+        endpoint.context("missing --bridge endpoint; launch this prototype from Neo Aegisub")?;
+    let token = token.context("missing --token; launch this prototype from Neo Aegisub")?;
     run(endpoint, token)
 }
 

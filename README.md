@@ -1,4 +1,4 @@
-# Aegisub
+# Neo Aegisub
 
 For binaries and general information [see the homepage](http://aegisub.org).
 
@@ -6,7 +6,7 @@ The bug tracker can be found at https://github.com/TypesettingTools/Aegisub/issu
 
 Support is available on [Discord](https://discord.com/invite/AZaVyPr) or [IRC](irc://irc.rizon.net/aegisub).
 
-## Building Aegisub
+## Building Neo Aegisub
 
 ### Windows
 
@@ -27,7 +27,7 @@ All other dependencies are either stored in the repository or are included as su
 
 Building:
 
-1. Clone Aegisub's repository: `git clone https://github.com/TypesettingTools/Aegisub.git`
+1. Clone Neo Aegisub's repository: `git clone https://github.com/TypesettingTools/Aegisub.git`
 2. From the Visual Studio "x64 Native Tools Command Prompt", generate the build directory: `meson build -Ddefault_library=static` (if building for release, add `--buildtype=release`)
 3. Build with `cd build` and `ninja`
 
@@ -43,7 +43,7 @@ You can generate the portable zip with `ninja win-portable` after a successful b
 
 A vaguely recent version of Xcode and the corresponding command-line tools are required.
 
-For personal usage, you can use pip and homebrew to install almost all of Aegisub's dependencies:
+For personal usage, you can use pip and homebrew to install almost all of Neo Aegisub's dependencies:
 
     pip3 install meson      # or brew install meson if you installed Python via brew
     brew install cmake ninja pkg-config  libass boost zlib ffms2 fftw hunspell uchardet
@@ -53,12 +53,12 @@ For personal usage, you can use pip and homebrew to install almost all of Aegisu
 
 When compiling on Apple Silicon, replace `/usr/local` with `/opt/homebrew`.
 
-Once the dependencies are installed, build Aegisub with `meson build && meson compile -C build`.
+Once the dependencies are installed, build Neo Aegisub with `meson build && meson compile -C build`.
 
 #### Build a local DMG
 
 Homebrew bottles target the macOS release they were built for, which may be
-newer than Aegisub's default deployment target. For a local package, target
+newer than Neo Aegisub's default deployment target. For a local package, target
 the current macOS major release and explicitly request an ad-hoc signature.
 The resulting DMG is for development and personal use on that macOS release;
 release packages use CI's source-built dependencies and the
@@ -113,7 +113,7 @@ I.e. to install on Ubuntu 24.04 run this command:
 sudo apt install build-essential pkg-config meson ninja-build gettext intltool libfontconfig1-dev libass-dev libboost-chrono-dev libboost-locale-dev libboost-regex-dev libboost-system-dev libboost-thread-dev zlib1g-dev wx3.2-headers libwxgtk3.2-dev icu-devtools libicu-dev libpulse-dev libasound2-dev libopenal-dev libffms2-dev libfftw3-dev libhunspell-dev libuchardet-dev libcurl4-gnutls-dev libgl1-mesa-dev libgtest-dev libgmock-dev libportal-gtk3-dev
 ```
 
-#### Build Aegisub
+#### Build Neo Aegisub
 
 ``` bash
 meson setup build --prefix=/usr/local --buildtype=release --strip -Dsystem_luajit=false -Ddefault_library=static
@@ -122,18 +122,18 @@ meson install -C build --skip-subprojects luajit
 ```
 
 #### Packaging
-If you are packaging Aegisub for a Linux distribution, here are a few things you may need to know:
-- Aegisub depends on LuaJIT and *requires* LuaJIT to be build with Lua 5.2 compatibility enabled.
+If you are packaging Neo Aegisub for a Linux distribution, here are a few things you may need to know:
+- Neo Aegisub depends on LuaJIT and *requires* LuaJIT to be build with Lua 5.2 compatibility enabled.
   We are aware that most distributions do not compile LuaJIT with this flag, and that this complicates packaging for them, see https://github.com/TypesettingTools/Aegisub/issues/239 for a detailed discussion of the situation.
 
-  Like for its other dependencies, Aegisub includes a meson subproject for LuaJIT that can be used to statically link a version of LuaJIT with 5.2 compatibility.
+  Like for its other dependencies, Neo Aegisub includes a meson subproject for LuaJIT that can be used to statically link a version of LuaJIT with 5.2 compatibility.
   For distributions that do not allow downloading additional sources at build time, the downloaded LuaJIT subproject is included in the source tarballs distributed with releases.
-- When linked against libstdc++, Aegisub needs libstdc++ 6.0.32 or later due to https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95048.
-  Aegisub's tests will detect this bug, but if you're not running tests on packaging you'll need to make sure the libstdc++ version is recent enough.
-- Aegisub uses OpenGL through wxWidgets. For Aegisub to work directly on Wayland (as opposed to Xwayland), wxWidgets needs to be built with EGL enabled.
-  Aegisub will automatically fall back to X11 when it detects missing EGL support.
+- When linked against libstdc++, Neo Aegisub needs libstdc++ 6.0.32 or later due to https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95048.
+  Neo Aegisub's tests will detect this bug, but if you're not running tests on packaging you'll need to make sure the libstdc++ version is recent enough.
+- Neo Aegisub uses OpenGL through wxWidgets. For Neo Aegisub to work directly on Wayland (as opposed to Xwayland), wxWidgets needs to be built with EGL enabled.
+  Neo Aegisub will automatically fall back to X11 when it detects missing EGL support.
 
-The following commands are an example for how to build Aegisub with the goal of creating a distribution package:
+The following commands are an example for how to build Neo Aegisub with the goal of creating a distribution package:
 
 ```bash
 meson subprojects download luajit              # Or use the tarball

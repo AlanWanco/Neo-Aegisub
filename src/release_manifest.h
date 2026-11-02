@@ -63,7 +63,7 @@ inline std::optional<Release> FindUpdate(json::Array const& releases, int revisi
 			    !(name.ends_with(".dmg") || name.ends_with(".exe") || name.ends_with(".zip") ||
 			      name.ends_with(".AppImage") || name.ends_with(".deb") || name.ends_with(".rpm") ||
 			      name.ends_with(".tar.gz") || name.ends_with(".tar.xz"))) continue;
-			if (!name.starts_with("Aegisub-")) continue;
+			if (!name.starts_with("Neo-Aegisub-")) continue;
 			name.remove_prefix(8);
 			int number = 0;
 			auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), number);

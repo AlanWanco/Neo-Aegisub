@@ -6,7 +6,7 @@ SRC_DIR="${1}"
 BUILD_DIR="${2}"
 VERSION_OVERRIDE="${3:-}"
 
-PKG_DIR="${BUILD_DIR}/Aegisub.app"
+PKG_DIR="${BUILD_DIR}/Neo Aegisub.app"
 PKG_NAME="$("${SRC_DIR}/tools/osx-package-name.sh" "${PKG_DIR}" "${VERSION_OVERRIDE}")"
 DMG_PATH="${BUILD_DIR}/${PKG_NAME}.dmg"
 NOTARY_PROFILE="${AEGISUB_NOTARY_PROFILE:-}"
@@ -70,7 +70,7 @@ trap cleanup EXIT HUP INT TERM
 
 hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "${VERIFY_MOUNT}" "${DMG_PATH}" >/dev/null
 DMG_MOUNTED=true
-verify_app "${VERIFY_MOUNT}/Aegisub.app"
+verify_app "${VERIFY_MOUNT}/Neo Aegisub.app"
 hdiutil detach "${VERIFY_MOUNT}" >/dev/null
 DMG_MOUNTED=false
 rmdir "${VERIFY_MOUNT}"

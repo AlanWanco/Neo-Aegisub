@@ -7,15 +7,15 @@
 #include BUILD_ROOT + "\git_version.h"
 
 [Setup]
-AppName=Aegisub
-AppVerName=Aegisub {#BUILD_GIT_VERSION_STRING}
+AppName=Neo Aegisub
+AppVerName=Neo Aegisub {#BUILD_GIT_VERSION_STRING}
 AppVersion={#INSTALLER_VERSION}
-AppPublisher=Aegisub Team
+AppPublisher=Neo Aegisub Team
 AppPublisherURL=http://aegisub.org/
 AppSupportURL=https://github.com/TypesettingTools/Aegisub/issues
 AppCopyright=2005-{#CURRENT_YEAR} The Aegisub Team
 VersionInfoVersion={#INSTALLER_VERSION}
-DefaultGroupName=Aegisub
+DefaultGroupName=Neo Aegisub
 AllowNoIcons=true
 OutputDir={#BUILD_ROOT}
 Compression=lzma/ultra64
@@ -36,8 +36,8 @@ SetupIconFile={#INSTALLER_DIR}\portable\icon.ico
 WizardImageFile={#INSTALLER_DIR}\welcome-large.bmp
 WizardSmallImageFile={#INSTALLER_DIR}\aegisub-large.bmp
 
-OutputBaseFilename=Aegisub-{#BUILD_GIT_VERSION_STRING}-{#ARCH}
-VersionInfoDescription=Aegisub {#BUILD_GIT_VERSION_STRING}
+OutputBaseFilename=Neo-Aegisub-{#BUILD_GIT_VERSION_STRING}-{#ARCH}
+VersionInfoDescription=Neo Aegisub {#BUILD_GIT_VERSION_STRING}
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"

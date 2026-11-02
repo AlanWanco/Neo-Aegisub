@@ -356,7 +356,7 @@ jobs:
         if: matrix.config.windows
         shell: pwsh
         run: |
-          python tools/verify-gpui-package.py build/aegisub-portable --arch "${{ matrix.config.os == 'windows-11-arm' && 'arm64' || 'x86_64' }}" --portable-zip (Get-Item build/Aegisub-*-portable.zip).FullName
+          python tools/verify-gpui-package.py build/aegisub-portable --arch "${{ matrix.config.os == 'windows-11-arm' && 'arm64' || 'x86_64' }}" --portable-zip (Get-Item 'build/Neo-Aegisub-*-portable.zip').FullName
 
       - name: Exercise Windows GPUI desktop
         if: matrix.config.os == 'windows-latest'
@@ -380,7 +380,7 @@ jobs:
         if: matrix.config.windows && env.AEGISUB_SIGN_WINDOWS != 'true'
         with:
           name: ${{ matrix.config.name }} - installer
-          path: build/Aegisub-*.exe
+          path: build/Neo-Aegisub-*.exe
           if-no-files-found: error
 
       - name: Upload artifacts - portable.zip
@@ -388,7 +388,7 @@ jobs:
         if: matrix.config.windows && env.AEGISUB_SIGN_WINDOWS != 'true'
         with:
           name: ${{ matrix.config.name }} - portable
-          path: build/Aegisub-*-portable.zip
+          path: build/Neo-Aegisub-*-portable.zip
           if-no-files-found: error
 
       # Release builds are signed and packaged by the windows-* jobs below
@@ -410,7 +410,7 @@ jobs:
             build/aegisub-gpui-prototype.exe
             build/po/*/LC_MESSAGES/aegisub.mo
             build/installer-deps/
-            build/Aegisub-*-portable.zip
+            build/Neo-Aegisub-*-portable.zip
           if-no-files-found: error
 
       # macOS artifacts
@@ -422,7 +422,7 @@ jobs:
           AEGISUB_BUNDLE_SIGNATURE: '-'
         run: |
           meson compile osx-bundle -C build
-          python tools/verify-gpui-package.py build/Aegisub.app/Contents/MacOS --arch "${{ matrix.config.rust_target && 'x86_64' || 'arm64' }}"
+          python tools/verify-gpui-package.py "build/Neo Aegisub.app/Contents/MacOS" --arch "${{ matrix.config.rust_target && 'x86_64' || 'arm64' }}"
 
           # Run osx-build-dmg but retry up to 10 times if it fails since hdiutil can be unreliable
           # See: https://github.com/actions/runner-images/issues/7522
@@ -439,15 +439,15 @@ jobs:
       - name: Archive macOS app for local signing
         if: startsWith(matrix.config.os, 'macos-') && matrix.config.buildtype == 'release' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
         run: |
-          package_name="$(tools/osx-package-name.sh build/Aegisub.app)"
-          ditto -c -k --sequesterRsrc --keepParent build/Aegisub.app "build/${package_name}-signing-input.zip"
+          package_name="$(tools/osx-package-name.sh "build/Neo Aegisub.app")"
+          ditto -c -k --sequesterRsrc --keepParent "build/Neo Aegisub.app" "build/${package_name}-signing-input.zip"
 
       - name: Upload macOS local-signing input
         uses: actions/upload-artifact@v7
         if: startsWith(matrix.config.os, 'macos-') && matrix.config.buildtype == 'release' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
         with:
           name: ${{ matrix.config.name }} - local signing input
-          path: build/Aegisub-*-signing-input.zip
+          path: build/Neo-Aegisub-*-signing-input.zip
           if-no-files-found: error
 
       - name: Upload artifacts - macOS dmg
@@ -455,7 +455,7 @@ jobs:
         if: startsWith(matrix.config.os, 'macos-') && matrix.config.buildtype == 'release'
         with:
           name: ${{ matrix.config.name }} - ad-hoc installer
-          path: build/Aegisub-*.dmg
+          path: build/Neo-Aegisub-*.dmg
           if-no-files-found: error
 
       # Linux binary package (portable tarball next to the host binary)
@@ -469,7 +469,7 @@ jobs:
         if: startsWith(matrix.config.os, 'ubuntu-') && matrix.config.buildtype == 'release'
         with:
           name: ${{ matrix.config.name }} - linux binary
-          path: build/Aegisub-*-linux-*.tar.gz
+          path: build/Neo-Aegisub-*-linux-*.tar.gz
           if-no-files-found: error
 
       # Tarball
@@ -530,18 +530,18 @@ jobs:
         run: |
           Copy-Item signed\aegisub.exe build\aegisub.exe -Force
           tools\win-installer-setup.ps1 "$PWD\build" "$PWD" x64 -NoBuild
-          packages\win_installer\portable\replace-executable.ps1 (Get-Item build\Aegisub-*-portable.zip) build\aegisub.exe
+          packages\win_installer\portable\replace-executable.ps1 (Get-Item 'build\Neo-Aegisub-*-portable.zip') build\aegisub.exe
 
       - uses: actions/upload-artifact@v7
         with:
           name: Windows signing - unsigned installer
-          path: build/Aegisub-*.exe
+          path: build/Neo-Aegisub-*.exe
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v7
         with:
           name: Windows MSVC Release - portable
-          path: build/Aegisub-*-portable.zip
+          path: build/Neo-Aegisub-*-portable.zip
           if-no-files-found: error
 
   windows-sign-installer:

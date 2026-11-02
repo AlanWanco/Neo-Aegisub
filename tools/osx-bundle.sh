@@ -14,12 +14,12 @@ if [ "${MESON_BUILD_OSX_BUNDLE}" != "TRUE" ]; then
   exit 1
 fi
 
-PKG_DIR="${BUILD_DIR}/Aegisub.app"
+PKG_DIR="${BUILD_DIR}/Neo Aegisub.app"
 SKEL_DIR="${SRC_DIR}/packages/osx_bundle"
 
 if test -d "${PKG_DIR}"; then
   rm -rf "${PKG_DIR}"
-  echo "Removing old Aegisub.app"
+  echo "Removing old Neo Aegisub.app"
 fi
 
 echo
@@ -72,7 +72,7 @@ else
 fi
 
 echo
-echo "---- Copying Aegisub locale files ----"
+echo "---- Copying Neo Aegisub locale files ----"
 # Let Aqua know that aegisub supports english.  English strings are
 # internal so we don't need an aegisub.mo file.
 mkdir -vp "${PKG_DIR}/Contents/Resources/en.lproj"

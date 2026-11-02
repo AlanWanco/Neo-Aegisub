@@ -15,7 +15,7 @@ Name: "macros\modules\depctrl"; Description: "DependencyControl"; Types: full
 #endif
 Name: "dictionaries"; Description: "Spellcheck Dictionaries"; Types: full basic
 Name: "dictionaries\en_US"; Description: "English (US)"; Types: full basic
-Name: "translations"; Description: "Aegisub Translations"; Types: full basic
+Name: "translations"; Description: "Neo Aegisub Translations"; Types: full basic
 
 [Tasks]
 Name: "startmenuicon"; Description: "{cm:StartMenuIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -28,7 +28,7 @@ DestDir: {app}; Source: "{#BUILD_ROOT}\aegisub-gpui-prototype.exe"; Flags: ignor
 DestDir: {app}; Source: "{#INSTALLER_DIR}\license.txt"; Flags: ignoreversion; Components: main
 
 [Icons]
-Name: {commonprograms}\Aegisub; Filename: {app}\aegisub.exe; WorkingDir: {app}; IconIndex: 0; Tasks: startmenuicon; Comment: Create and edit subtitle files
+Name: {commonprograms}\Neo Aegisub; Filename: {app}\aegisub.exe; WorkingDir: {app}; IconIndex: 0; Tasks: startmenuicon; Comment: Create and edit subtitle files
 
 [Registry]
 ; Register in App Paths so the user can conveniently enter 'aegisub' in their Run box
@@ -36,7 +36,7 @@ Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\aegisub
 Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\aegisub.exe"; ValueType: string; ValueName: ""; ValueData: "{app}\aegisub.exe"; Flags: uninsdeletekey
 
 [Run]
-Filename: {app}\aegisub.exe; Description: {cm:LaunchProgram,Aegisub}; Flags: nowait postinstall skipifsilent
+Filename: {app}\aegisub.exe; Description: {cm:LaunchProgram,Neo Aegisub}; Flags: nowait postinstall skipifsilent
 
 [InstallDelete]
 Type: files; Name: "{app}\ffms2_64.dll"

@@ -281,7 +281,7 @@ struct subtitle_open_autosave final : public Command {
 	CMD_NAME("subtitle/open/autosave")
 	STR_MENU("Open A&utosaved Subtitles...")
 	STR_DISP("Open Autosaved Subtitles")
-	STR_HELP("Open a previous version of a file which was autosaved by Aegisub")
+	STR_HELP("Open a previous version of a file which was autosaved by Neo Aegisub")
 
 	void operator()(agi::Context *c) override {
 		if (!is_okay_to_close_subtitles(c)) return;

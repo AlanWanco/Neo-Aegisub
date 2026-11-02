@@ -18,7 +18,7 @@ set -e
 SRC_DIR="${1}"
 BUILD_DIR="${2}"
 
-PKG_DIR="${BUILD_DIR}/Aegisub.app"
+PKG_DIR="${BUILD_DIR}/Neo Aegisub.app"
 
 if ! test -d "${PKG_DIR}"; then
   echo "\"${PKG_DIR}\" does not exist, please run 'meson compile osx-bundle'" >&2

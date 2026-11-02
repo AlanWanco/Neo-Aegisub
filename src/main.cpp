@@ -85,7 +85,7 @@ wxIMPLEMENT_APP(AegisubApp);
 static const char *LastStartupState = nullptr;
 
 #ifdef WITH_STARTUPLOG
-#define StartupLog(a) MessageBox(0, L ## a, L"Aegisub startup log", 0)
+#define StartupLog(a) MessageBox(0, L ## a, L"Neo Aegisub startup log", 0)
 #else
 #define StartupLog(a) LastStartupState = a
 #endif
@@ -112,7 +112,7 @@ AegisubApp::AegisubApp() {
 				printf(" Falling back to X11.");
 				wxSetEnv("GDK_BACKEND", "x11");
 			} else {
-				printf(" Set GDK_BACKEND=x11 to run Aegisub under X11.");
+				printf(" Set GDK_BACKEND=x11 to run Neo Aegisub under X11.");
 			}
 			printf("\n");
 		}
@@ -125,14 +125,14 @@ wxDEFINE_EVENT(EVT_CALL_THUNK, ValueEvent<agi::dispatch::Thunk>);
 }
 
 /// Message displayed when an exception has occurred.
-static wxString exception_message = "Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.";
+static wxString exception_message = "Oops, Neo Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nNeo Aegisub will now close.";
 
 /// @brief Gets called when application starts.
 /// @return bool
 bool AegisubApp::OnInit() {
 	// App name (yeah, this is a little weird to get rid of an odd warning)
 #if defined(__WXMSW__) || defined(__WXMAC__)
-	SetAppName("Aegisub");
+	SetAppName("Neo Aegisub");
 #else
 	SetAppName("aegisub");
 #endif
@@ -281,7 +281,7 @@ bool AegisubApp::OnInit() {
 		setlocale(LC_CTYPE, "en_US.UTF-8");
 #endif
 
-		exception_message = _("Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.");
+		exception_message = _("Oops, Neo Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nNeo Aegisub will now close.");
 
 		agi::xdp_utils::Initialize();
 
@@ -313,7 +313,7 @@ bool AegisubApp::OnInit() {
 		if (OPT_GET("App/First Start")->GetBool()) {
 			OPT_SET("App/First Start")->SetBool(false);
 #if defined(WITH_UPDATE_CHECKER) && !defined(WITH_GPUI_DEFAULT)
-			int result = wxMessageBox(_("Do you want Aegisub to check for updates whenever it starts? You can still do it manually via the Help menu."),_("Check for updates?"), wxYES_NO | wxCENTER);
+			int result = wxMessageBox(_("Do you want Neo Aegisub to check for updates whenever it starts? You can still do it manually via the Help menu."),_("Check for updates?"), wxYES_NO | wxCENTER);
 			OPT_SET("App/Auto/Check For Updates")->SetBool(result == wxYES);
 			try {
 				config::opt->Flush();
@@ -440,7 +440,7 @@ void AegisubApp::UnhandledException([[maybe_unused]] bool stackWalk) {
 		wxMessageBox(agi::wxformat(exception_message, path), _("Program error"), wxOK | wxICON_ERROR | wxCENTER, nullptr);
 	}
 	else if (LastStartupState) {
-		wxMessageBox(fmt_tl("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", LastStartupState), _("Program error"), wxOK | wxICON_ERROR | wxCENTER);
+		wxMessageBox(fmt_tl("Neo Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", LastStartupState), _("Program error"), wxOK | wxICON_ERROR | wxCENTER);
 	}
 #endif
 }
@@ -454,7 +454,7 @@ void AegisubApp::OnFatalException() {
 }
 
 #define SHOW_EXCEPTION(str) \
-	wxMessageBox(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", str), \
+	wxMessageBox(fmt_tl("An unexpected error has occurred. Please save your work and restart Neo Aegisub.\n\nError Message: %s", str), \
 				_("Exception in event handler"), wxOK | wxICON_ERROR | wxCENTER | wxSTAY_ON_TOP)
 int AegisubApp::FilterEvent(wxEvent& event) {
 	if (event.GetEventType() == wxEVT_CREATE) {
