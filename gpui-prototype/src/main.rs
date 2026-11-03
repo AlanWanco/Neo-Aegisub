@@ -940,11 +940,24 @@ impl Bridge {
             .write_all(&bytes)
             .await
             .context("could not write to Neo Aegisub bridge")?;
+        // The host answers with one newline-terminated JSON line and closes the
+        // socket afterwards. Reading to EOF makes every request wait for the
+        // close handshake as well, which costs milliseconds per playback frame.
         let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .await
-            .context("could not read Neo Aegisub bridge response")?;
+        let mut chunk = [0u8; 65536];
+        loop {
+            let read = stream
+                .read(&mut chunk)
+                .await
+                .context("could not read Neo Aegisub bridge response")?;
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&chunk[..read]);
+            if response.last() == Some(&b'\n') {
+                break;
+            }
+        }
         let value: Value =
             serde_json::from_slice(&response).context("invalid Neo Aegisub bridge response")?;
         if value.get("ok").and_then(Value::as_bool) == Some(false) {

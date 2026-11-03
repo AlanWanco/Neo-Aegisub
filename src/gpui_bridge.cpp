@@ -159,21 +159,26 @@ std::string quote_json(std::string_view value) {
 std::string to_base64_jpeg(VideoFrame const& frame, double aspect, int max_width, int& width, int& height) {
 	wxImage image = GetImage(frame);
 	int display_width = std::max(1, static_cast<int>(std::round(image.GetHeight() * aspect)));
-	// The preview is a few hundred pixels wide, so shipping a full 1080p frame
-	// only makes the frontend decode and upload nine times the pixels it shows.
-	// A preview frame is fetched, encoded and decoded again inside one video
-	// frame interval, so the resampler has to stay cheap: box averaging is the
-	// fast path for shrinking, and bilinear is what the rare upscale needs.
-	wxImageResizeQuality const shrink_quality = max_width > 0 && display_width > max_width
-		? wxIMAGE_QUALITY_BOX_AVERAGE
-		: wxIMAGE_QUALITY_BILINEAR;
-	if (max_width > 0 && display_width > max_width) {
+	// The wx display uploads the frame at its native size and lets OpenGL
+	// scale it. Resampling here is only worth its cost when it removes a
+	// large share of the pixels: box averaging 1920x1080 down to a 1529 px
+	// preview measures ~6 ms on the frame path, more than the extra JPEG cost
+	// of shipping the native frame. Only resample when the request drops at
+	// least a third of the width; below that, hand the scaling to the frontend.
+	constexpr double kMinShrink = 0.7;
+	auto const resample = [&](int target_width, int target_height) {
+		auto const quality = target_width < image.GetWidth() || target_height < image.GetHeight()
+			? wxIMAGE_QUALITY_BOX_AVERAGE
+			: wxIMAGE_QUALITY_BILINEAR;
+		image.Rescale(target_width, target_height, quality);
+	};
+	if (max_width > 0 && max_width < display_width * kMinShrink) {
 		int const scaled_height = std::max(1, static_cast<int>(std::round(image.GetHeight() * (double(max_width) / display_width))));
-		image.Rescale(max_width, scaled_height, shrink_quality);
+		resample(max_width, scaled_height);
 		display_width = max_width;
 	}
 	else if (display_width != image.GetWidth()) {
-		image.Rescale(display_width, image.GetHeight(), shrink_quality);
+		resample(display_width, image.GetHeight());
 	}
 	width = image.GetWidth();
 	height = image.GetHeight();
@@ -518,9 +523,10 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			it->second.frame_retries = 0;
 			it->second.awaiting_current = false;
 			it->second.provider = nullptr;
+			int const max_width = it->second.max_width;
 			int width = 0;
 			int height = 0;
-			std::string encoded = to_base64_jpeg(*event.frame, context->videoController->GetAspectRatioValue(), it->second.max_width, width, height);
+			std::string encoded = to_base64_jpeg(*event.frame, context->videoController->GetAspectRatioValue(), max_width, width, height);
 			if (encoded.empty()) {
 				BeginResponse(socket, it->second, R"({"ok":false,"error":"could not encode preview frame"})");
 				continue;
