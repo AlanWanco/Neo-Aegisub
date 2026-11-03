@@ -42,6 +42,7 @@ mod video_settings_panel;
 mod video_timeline;
 use translation_panel::{TranslationPanel, TranslationState};
 use video_settings_panel::{VideoPage, VideoSettings, VideoSettingsPanel};
+mod trace;
 mod visual_panel;
 mod workspace_theme;
 use gpui_kit::assets::IconName;
@@ -54,6 +55,7 @@ use visual_panel::{VisualPanel, VisualReply, video_base_bounds, zoomed_video_bou
 use video_timeline::VideoTimeline;
 
 use document_panels::{DocumentDetails, DocumentPanels, LibraryDetails};
+use trace::trace;
 
 use command_catalog::{Catalog, populate_menu};
 use std::{
@@ -1387,6 +1389,13 @@ impl Workspace {
             }
         }
         if let Some(queued) = shown {
+            let shown_at = trace::now();
+            trace!(
+                "show t={shown_at} frame={} late_us={} q={}",
+                queued.frame,
+                now.saturating_duration_since(queued.due).as_micros(),
+                self.frame_queue.len()
+            );
             self.replace_frame_image(cx, queued.image, queued.frame, queued.revision);
             cx.notify();
         }
@@ -1396,6 +1405,7 @@ impl Workspace {
     /// keeps running: it runs for as long as playback runs, even with an empty
     /// queue, so a frame that arrives late is shown on the next refresh.
     fn present_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        trace!("tick t={} q={}", trace::now(), self.frame_queue.len());
         self.present_due_frames(cx);
         if !self.snapshot.playing {
             self.present_loop_armed = false;
@@ -6326,6 +6336,9 @@ impl Workspace {
                 let epoch = pump.epoch.load(Ordering::Relaxed);
                 let max_width = pump.max_width.load(Ordering::Relaxed);
                 let revision = pump.revision.load(Ordering::Relaxed);
+                let asked_at = trace::now();
+                let seq = sequence;
+                trace!("req t={asked_at} frame={request_frame} seq={seq} period={}", pump.period.load(Ordering::Relaxed));
                 let call = bridge.call(json!({"op":"frame", "frame":request_frame, "request":sequence, "epoch":epoch, "max_width":max_width}));
                 let cancelled = {
                     let pump = pump.clone();
@@ -6348,6 +6361,7 @@ impl Workspace {
                     }
                 };
                 let response = futures_lite::future::or(call, cancelled).await;
+                let answered_at = trace::now();
                 sequence += 1;
                 let reply = match response {
                     Ok(value) => match serde_json::from_value::<FrameReply>(value) {
@@ -6380,6 +6394,7 @@ impl Workspace {
                     }
                 };
                 let frame = reply.frame.unwrap_or(-1);
+                trace!("resp t={answered_at} frame={frame} seq={seq} rtt_us={}", answered_at.saturating_sub(asked_at));
                 let video_gone = reply.video == Some(false);
                 let Some(encoded) = reply.image else {
                     if video_gone {
@@ -6397,10 +6412,12 @@ impl Workspace {
                 if frame >= 0
                     && pump.delivered.swap(frame, Ordering::AcqRel) == frame
                 {
+                    trace!("same t={answered_at} frame={frame}");
                     continue;
                 }
                 let sequence_now = sequence - 1;
                 let weak_decode = weak.clone();
+                let decode_started = trace::now();
                 cx.spawn(async move |cx| {
                     let image = match decode_frame_image(encoded, cx).await {
                         Ok(image) => image,
@@ -6414,6 +6431,8 @@ impl Workspace {
                             return;
                         }
                     };
+                    let decoded_at = trace::now();
+                    trace!("dec t={decoded_at} frame={frame} us={}", decoded_at.saturating_sub(decode_started));
                     if let Some(view) = weak_decode.upgrade() {
                         let _ = view.update(cx, |view, cx| {
                             if view.frame_pump.id.load(Ordering::Relaxed) != id { return; }

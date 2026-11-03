@@ -26,7 +26,7 @@ function Copy-ToDirectory {
 
 # Keep in sync with the number of Write-Step calls below.
 $script:stepNum = 0
-$script:stepTotal = 9
+$script:stepTotal = 10
 
 # Report progress both via an interactive bar and a textual trail for CI logs.
 function Write-Step {
@@ -60,6 +60,10 @@ if ($LASTEXITCODE -ne 0) { throw "meson install failed (exit $LASTEXITCODE)" }
 Write-Step 'Copying executable'
 Copy-ToDirectory $InstallerDir\bin\aegisub.exe  $PortableOutputDir
 Copy-ToDirectory $InstallerDir\bin\aegisub-gpui-prototype.exe $PortableOutputDir
+
+# Playback diagnostics: the launcher turns the env-gated frame traces on.
+Write-Step 'Copying trace launcher'
+Copy-ToDirectory (Join-Path $PSScriptRoot 'trace-play.bat') $PortableOutputDir
 
 # Put the matching runtime DLLs beside the executables: no redist installation.
 $RuntimeDir = Get-ChildItem -Path (Join-Path $env:VCToolsRedistDir $Architecture) -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1 -ExpandProperty FullName

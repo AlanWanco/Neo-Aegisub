@@ -59,20 +59,44 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdint>
+#include <chrono>
 #include <cmath>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
 #include <iomanip>
-#include <map>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <random>
 #include <sstream>
 #include <string_view>
-#include <chrono>
-#include <deque>
 #include <vector>
 
 namespace {
+/// Diagnostic playback trace: with `AEGISUB_GPUI_HOST_TRACE=<path>` the host
+/// writes a line per decoded preview frame and per cache hit, so a stutter
+/// reported on another machine can be attributed to decoding, encoding or the
+/// request cadence. Unset means no file is opened and no time is taken.
+void HostTrace(char const *format, ...) {
+	static std::FILE *const file = [] {
+		char const *path = std::getenv("AEGISUB_GPUI_HOST_TRACE");
+		return path ? std::fopen(path, "w") : nullptr;
+	}();
+	if (!file) return;
+	static auto const origin = std::chrono::steady_clock::now();
+	auto const us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - origin).count();
+	std::fprintf(file, "%lld ", static_cast<long long>(us));
+	va_list args;
+	va_start(args, format);
+	std::vfprintf(file, format, args);
+	va_end(args);
+	std::fputc('\n', file);
+	std::fflush(file);
+}
+
 std::mutex notice_mutex;
 struct PendingNotice {
 	std::string title;
@@ -532,6 +556,13 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 				ready.push_back(socket);
 			}
 		}
+		{
+			static auto last_ready = std::chrono::steady_clock::now();
+			auto const ready_at = std::chrono::steady_clock::now();
+			auto const gap = std::chrono::duration_cast<std::chrono::microseconds>(ready_at - last_ready).count();
+			HostTrace("ready frame=%d playing=%d waiters=%zu gap_us=%lld", frame_number, playing ? 1 : 0, ready.size(), static_cast<long long>(gap));
+			last_ready = ready_at;
+		}
 		for (auto socket : ready) {
 			auto it = clients.find(socket);
 			if (it == clients.end()) continue;
@@ -542,7 +573,9 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			int const max_width = it->second.max_width;
 			int width = 0;
 			int height = 0;
+			auto const encode_start = std::chrono::steady_clock::now();
 			std::string encoded = to_base64_jpeg(*event.frame, context->videoController->GetAspectRatioValue(), max_width, width, height);
+			HostTrace("encode frame=%d width=%d bytes=%zu us=%lld", frame_number, width, encoded.size(), static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start).count()));
 			if (encoded.empty()) {
 				BeginResponse(socket, it->second, R"({"ok":false,"error":"could not encode preview frame"})");
 				continue;
@@ -565,7 +598,9 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			&& std::chrono::steady_clock::now() - last_playback_poll < std::chrono::seconds(1)) {
 			int width = 0;
 			int height = 0;
+			auto const encode_start = std::chrono::steady_clock::now();
 			std::string encoded = to_base64_jpeg(*event.frame, context->videoController->GetAspectRatioValue(), cached_frame.max_width, width, height);
+			HostTrace("encode frame=%d width=%d bytes=%zu us=%lld refresh=1", frame_number, width, encoded.size(), static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start).count()));
 			if (!encoded.empty())
 				cached_frame = {std::move(encoded), frame_number, width, height, cached_frame.max_width, video_epoch, true};
 		}
@@ -914,6 +949,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		// the frontend sees the newest frame as soon as it exists.
 		if (playing && cached_frame.valid
 			&& cached_frame.max_width == client.max_width && cached_frame.epoch == video_epoch) {
+			HostTrace("hit frame=%d", cached_frame.frame);
 			std::ostringstream out;
 			out << "{\"ok\":true,\"video\":true,\"frame\":" << cached_frame.frame
 			    << ",\"request\":" << request_id
