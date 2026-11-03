@@ -303,6 +303,22 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 	bool sockets_initialized = false;
 	unsigned short port = 0;
 	uint64_t video_epoch = 0;
+	/// The newest frame the bridge already encoded for a client. Playback
+	/// requests are answered from this copy, so the frontend's request latency
+	/// no longer includes the host's own frame interval: a reply arrives in
+	/// microseconds instead of up to one decoded frame later.
+	struct CachedFrame {
+		std::string jpeg;
+		int frame = -1;
+		int width = 0;
+		int height = 0;
+		int max_width = -1;
+		uint64_t epoch = 0;
+		bool valid = false;
+	} cached_frame;
+	/// When the frontend last asked for a playback frame. The cache is only
+	/// refreshed while those requests keep coming.
+	std::chrono::steady_clock::time_point last_playback_poll{};
 	uint64_t revision = 1;
 	uint64_t details_revision = 1;
 	agi::signal::Connection commit_connection;
@@ -537,6 +553,21 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			    << ",\"width\":" << width << ",\"height\":" << height
 			    << ",\"image\":" << quote_json(encoded) << '}';
 			BeginResponse(socket, it->second, out.str());
+			if (playing)
+				cached_frame = {std::move(encoded), frame_number, width, height, max_width, video_epoch, true};
+		}
+		// Playback requests are answered from the cached copy, so a ready frame
+		// usually arrives with nobody waiting. Refresh the copy anyway, or the
+		// frontend would keep receiving the frame it just displayed. Skip it
+		// when no playback request arrived recently: encoding every frame for a
+		// viewer that stopped polling is pure UI-thread work.
+		if (playing && cached_frame.valid && ready.empty()
+			&& std::chrono::steady_clock::now() - last_playback_poll < std::chrono::seconds(1)) {
+			int width = 0;
+			int height = 0;
+			std::string encoded = to_base64_jpeg(*event.frame, context->videoController->GetAspectRatioValue(), cached_frame.max_width, width, height);
+			if (!encoded.empty())
+				cached_frame = {std::move(encoded), frame_number, width, height, cached_frame.max_width, video_epoch, true};
 		}
 		event.Skip();
 	}
@@ -874,6 +905,24 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		uint64_t request_id = request_it == object.end() ? 0 : static_cast<uint64_t>(static_cast<json::Integer const&>(request_it->second));
 		if (auto width_it = object.find("max_width"); width_it != object.end())
 			client.max_width = static_cast<int>(static_cast<json::Integer const&>(width_it->second));
+		bool const playing = context->videoController->IsPlaying();
+		if (playing)
+			last_playback_poll = std::chrono::steady_clock::now();
+		// While playing, the decoder advances on its own schedule; waiting for
+		// its next frame would put a whole frame interval between the request
+		// and the reply. Answer from the copy already encoded for this width so
+		// the frontend sees the newest frame as soon as it exists.
+		if (playing && cached_frame.valid
+			&& cached_frame.max_width == client.max_width && cached_frame.epoch == video_epoch) {
+			std::ostringstream out;
+			out << "{\"ok\":true,\"video\":true,\"frame\":" << cached_frame.frame
+			    << ",\"request\":" << request_id
+			    << ",\"width\":" << cached_frame.width
+			    << ",\"height\":" << cached_frame.height
+			    << ",\"image\":\"" << cached_frame.jpeg << "\"}";
+			BeginResponse(socket, client, out.str());
+			return;
+		}
 		client.waiting_for_frame = true;
 		client.waiting_since = std::chrono::steady_clock::now();
 		client.frame_retries = 0;

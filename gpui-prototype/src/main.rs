@@ -1106,6 +1106,13 @@ struct FramePump {
     frame: AtomicI64,
     max_width: AtomicI64,
     revision: AtomicU64,
+    /// One frame period in microseconds: the pump asks the host a few times per
+    /// frame instead of once per reply, so a frame that appears mid-period is
+    /// picked up on the next poll rather than one period later.
+    period: AtomicU64,
+    /// Frame number of the newest reply already handed to the decoder; repeated
+    /// polls of the same host frame skip the JPEG decode.
+    delivered: AtomicI64,
 }
 
 /// A decoded playback frame waiting for its slot on the presentation clock.
@@ -1303,6 +1310,12 @@ impl Workspace {
             .is_some_and(|queued| queued.frame == frame)
         {
             // Same frame delivered twice: the queued copy already covers it.
+            cx.drop_image(image, None);
+            return;
+        }
+        if self.frame_queue.is_empty() && self.frame_image_frame == frame {
+            // Already on screen and nothing newer is queued: showing it again
+            // would only re-upload the same pixels.
             cx.drop_image(image, None);
             return;
         }
@@ -6162,6 +6175,10 @@ impl Workspace {
         self.frame_pump
             .revision
             .store(self.snapshot.revision, Ordering::Relaxed);
+        self.frame_pump.period.store(
+            playback_period(self.snapshot.fps, self.snapshot.playback_rate).as_micros() as u64,
+            Ordering::Relaxed,
+        );
         if self.snapshot.playing {
             self.start_frame_pump(cx);
             return;
@@ -6277,6 +6294,9 @@ impl Workspace {
         if self.frame_pump.running.swap(true, Ordering::AcqRel) {
             return;
         }
+        // A fresh pump decodes the first frame even when the host still reports
+        // the frame that was on screen when playback stopped.
+        self.frame_pump.delivered.store(-1, Ordering::Release);
         self.frame_request_inflight = true;
         self.frame_request_generation += 1;
         let pump = self.frame_pump.clone();
@@ -6288,10 +6308,20 @@ impl Workspace {
             // Continue past the newest applied reply: a session that restarted at 0
             // would have every reply dropped by the `applied` check below.
             let mut sequence = pump.applied.load(Ordering::Acquire) + 1;
+            let mut first = true;
             loop {
                 if !pump.playing.load(Ordering::Relaxed) {
                     break;
                 }
+                // Ask twice per frame period. The host answers from the frame it
+                // has already encoded, so a poll is cheap and the newest frame is
+                // seen within half a period of being decoded instead of a whole
+                // request/reply cycle later.
+                if !first {
+                    let period = pump.period.load(Ordering::Relaxed).max(2_000);
+                    executor.timer(Duration::from_micros(period / 2)).await;
+                }
+                first = false;
                 let request_frame = pump.frame.load(Ordering::Relaxed);
                 let epoch = pump.epoch.load(Ordering::Relaxed);
                 let max_width = pump.max_width.load(Ordering::Relaxed);
@@ -6301,10 +6331,18 @@ impl Workspace {
                     let pump = pump.clone();
                     let executor = executor.clone();
                     async move {
+                        // Abandon only when playback ended or the host stopped
+                        // answering: a reply that misses one frame period is
+                        // still worth showing, and cancelling it would leave the
+                        // decoder's frame on the floor.
+                        let deadline = Instant::now() + Duration::from_millis(250);
                         loop {
-                            executor.timer(Duration::from_millis(40)).await;
+                            executor.timer(Duration::from_millis(20)).await;
                             if !pump.playing.load(Ordering::Relaxed) {
                                 break Err::<Value, _>(anyhow!("playback stopped"));
+                            }
+                            if Instant::now() >= deadline {
+                                break Err::<Value, _>(anyhow!("host did not answer the frame request"));
                             }
                         }
                     }
@@ -6354,6 +6392,13 @@ impl Workspace {
                     }
                     continue;
                 };
+                // Polling faster than the source repeats the same host frame;
+                // decoding it again would only rebuild an identical image.
+                if frame >= 0
+                    && pump.delivered.swap(frame, Ordering::AcqRel) == frame
+                {
+                    continue;
+                }
                 let sequence_now = sequence - 1;
                 let weak_decode = weak.clone();
                 cx.spawn(async move |cx| {
