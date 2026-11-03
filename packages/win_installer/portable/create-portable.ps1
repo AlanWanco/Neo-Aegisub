@@ -26,7 +26,7 @@ function Copy-ToDirectory {
 
 # Keep in sync with the number of Write-Step calls below.
 $script:stepNum = 0
-$script:stepTotal = 10
+$script:stepTotal = 9
 
 # Report progress both via an interactive bar and a textual trail for CI logs.
 function Write-Step {
@@ -88,9 +88,6 @@ Copy-ToDirectory "$InstallerDir\share\aegisub\automation\*"  "$PortableOutputDir
 
 Write-Step 'Copying DependencyControl'
 Copy-ToDirectory "$InstallerDepsDir\DependencyControl\automation\*"  "$PortableOutputDir\automation\"  -Recurse
-
-Write-Step 'Copying portable config'
-Copy-ToDirectory $SourceRoot\packages\win_installer\portable\config.json  $PortableOutputDir
 
 Write-Step 'Creating portable zip'
 Remove-Item -LiteralPath $PortableZipPath -Force -ErrorAction SilentlyContinue

@@ -25,13 +25,10 @@ $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 $runtime = Join-Path $OutputDirectory 'runtime'
 Copy-Item -LiteralPath $PackageDirectory -Destination $runtime -Recurse
+# The package ships no settings file; the app creates one on first start. Seed
+# only the keys this smoke run depends on, so no first-start prompt or update check appears.
 $configPath = Join-Path $runtime 'config.json'
-Copy-Item $configPath "$configPath.before-smoke"
-$config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable
-$config.App['First Start'] = $false
-$config.App['Language'] = 'en_US'
-$config.App['Theme'] = 2
-$config.App['Auto'] = @{ 'Check For Updates' = $false }
+$config = @{ App = @{ 'First Start' = $false; Language = 'en_US'; Theme = 2; Auto = @{ 'Check For Updates' = $false } } }
 $config | ConvertTo-Json -Depth 20 | Set-Content $configPath -Encoding utf8NoBOM
 $history = @(0..49 | ForEach-Object {
     @{ filename = "Layout regression long subtitle filename concert 1920x1080 x265 FLAC record $_.ass";

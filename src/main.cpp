@@ -170,6 +170,13 @@ bool AegisubApp::OnInit() {
 	// Try loading configuration from the install dir if one exists there
 	try {
 		auto conf_local(config::path->Decode("?data/config.json"));
+		// Portable copies ship no settings file: create one beside the executable
+		// on first start, so a newer package extracted over this folder cannot
+		// overwrite the user's settings. Installed copies are marked by the
+		// installer_config.json the installer writes; they keep settings in the profile.
+		auto installer_marker(config::path->Decode("?data/installer_config.json"));
+		if (!agi::fs::FileExists(conf_local) && !agi::fs::FileExists(installer_marker))
+			agi::Options(conf_local, GET_DEFAULT_CONFIG(default_config), agi::Options::FLUSH_SKIP).Flush();
 		std::unique_ptr<std::istream> localConfig(agi::io::Open(conf_local));
 		config::opt = new agi::Options(conf_local, GET_DEFAULT_CONFIG(default_config));
 
