@@ -58,3 +58,9 @@ wxImage GetImageWithAlpha(VideoFrame const &frame) {
 	}
 	return img;
 }
+
+wxImage GetImageShrunk(VideoFrame const& frame, int target_width, int target_height) {
+	wxImage img(target_width, target_height);
+	ShrinkFrameToRgb(frame, img.GetData(), target_width, target_height);
+	return img;
+}
