@@ -1095,6 +1095,32 @@ struct FramePump {
     revision: AtomicU64,
 }
 
+/// A decoded playback frame waiting for its slot on the presentation clock.
+struct QueuedFrame {
+    frame: i64,
+    revision: u64,
+    image: Arc<gpui_kit::RenderImage>,
+    due: Instant,
+}
+
+/// Anchor of the presentation schedule: frame `base_frame` is due
+/// `PLAYBACK_PRESENT_LAG` after `base`, and each later frame one `period` after
+/// the previous one. A different playback rate re-anchors the schedule.
+#[derive(Clone, Copy)]
+struct PresentClock {
+    base: Instant,
+    base_frame: i64,
+    period: Duration,
+}
+
+/// How far behind arrival a frame's slot sits: the jitter budget for the host
+/// timer, JPEG encode, socket and decode before a frame misses its slot.
+const PLAYBACK_PRESENT_LAG: Duration = Duration::from_millis(50);
+/// Frames held ahead of the display; the oldest is released when this fills.
+const PLAYBACK_QUEUE_LIMIT: usize = 8;
+/// Re-anchor when a frame's slot is more than this many periods off schedule.
+const PLAYBACK_RESYNC_PERIODS: u32 = 4;
+
 struct Workspace {
     bridge: Bridge,
     focus_handle: gpui_kit::FocusHandle,
@@ -1106,6 +1132,13 @@ struct Workspace {
     /// refetch — tracked per revision so a stale reply never clears the need.
     frame_image_revision: u64,
     frame_image_generation: u64,
+    /// Decoded playback frames not yet shown, oldest first. Each one shows at its
+    /// slot on `present_clock` rather than the moment it arrives.
+    frame_queue: std::collections::VecDeque<QueuedFrame>,
+    present_clock: Option<PresentClock>,
+    /// True while a display-refresh callback is registered for playback. The
+    /// callback re-registers itself each refresh until playback stops.
+    present_loop_armed: bool,
     /// Width in physical pixels the preview paints at, so the host can ship a
     /// frame sized for the box instead of the full source resolution.
     preview_width_px: std::cell::Cell<f32>,
@@ -1209,6 +1242,10 @@ impl Workspace {
         }
         self.frame_image_frame = -1;
         self.frame_image_revision = u64::MAX;
+        self.present_clock = None;
+        for queued in self.frame_queue.drain(..) {
+            cx.drop_image(queued.image, None);
+        }
     }
 
     fn replace_frame_image(
@@ -1223,6 +1260,121 @@ impl Workspace {
         }
         self.frame_image_frame = frame;
         self.frame_image_revision = revision;
+    }
+
+    /// Hands a decoded playback frame to the presentation clock. Frames show at
+    /// evenly spaced slots `PLAYBACK_PRESENT_LAG` behind arrival, so jitter from
+    /// the host timer, JPEG encode, socket and decode no longer lands on the
+    /// display's refresh grid as uneven 33/50 ms steps. A frame whose slot is far
+    /// off (a seek, a rate change or a stalled host) re-anchors the schedule and
+    /// drops the queue, because queued frames belong to the old schedule.
+    fn queue_playback_frame(
+        &mut self,
+        cx: &mut Context<Self>,
+        image: Arc<gpui_kit::RenderImage>,
+        frame: i64,
+        revision: u64,
+    ) {
+        if !self.snapshot.playing {
+            self.present_clock = None;
+            for queued in self.frame_queue.drain(..) {
+                cx.drop_image(queued.image, None);
+            }
+            self.replace_frame_image(cx, image, frame, revision);
+            cx.notify();
+            return;
+        }
+        if self
+            .frame_queue
+            .back()
+            .is_some_and(|queued| queued.frame == frame)
+        {
+            // Same frame delivered twice: the queued copy already covers it.
+            cx.drop_image(image, None);
+            return;
+        }
+        let now = Instant::now();
+        let period = playback_period(self.snapshot.fps, self.snapshot.playback_rate);
+        let slack = period * PLAYBACK_RESYNC_PERIODS;
+        let in_order = self
+            .frame_queue
+            .back()
+            .is_none_or(|queued| frame > queued.frame);
+        let kept = self.present_clock.filter(|clock| {
+            let due = playback_due(*clock, frame);
+            in_order
+                && clock.period == period
+                && frame >= clock.base_frame
+                && due + slack >= now
+                && due <= now + PLAYBACK_PRESENT_LAG + slack
+        });
+        let clock = match kept {
+            Some(clock) => clock,
+            None => {
+                for queued in self.frame_queue.drain(..) {
+                    cx.drop_image(queued.image, None);
+                }
+                PresentClock {
+                    base: now,
+                    base_frame: frame,
+                    period,
+                }
+            }
+        };
+        self.present_clock = Some(clock);
+        let due = playback_due(clock, frame);
+        self.frame_queue.push_back(QueuedFrame {
+            frame,
+            revision,
+            image,
+            due,
+        });
+        while self.frame_queue.len() > PLAYBACK_QUEUE_LIMIT {
+            if let Some(dropped) = self.frame_queue.pop_front() {
+                cx.drop_image(dropped.image, None);
+            }
+        }
+        if !self.present_loop_armed {
+            // Playback started or the loop ended: notify so render arms it.
+            cx.notify();
+        }
+    }
+
+    /// Shows the newest queued frame whose slot has arrived and releases the
+    /// older due ones. Runs once per display refresh while playing, so a frame
+    /// lands on the refresh that follows its slot.
+    fn present_due_frames(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let mut shown: Option<QueuedFrame> = None;
+        loop {
+            let Some(front) = self.frame_queue.front() else {
+                break;
+            };
+            if self.snapshot.playing && front.due > now {
+                break;
+            }
+            let Some(queued) = self.frame_queue.pop_front() else {
+                break;
+            };
+            if let Some(skipped) = shown.replace(queued) {
+                cx.drop_image(skipped.image, None);
+            }
+        }
+        if let Some(queued) = shown {
+            self.replace_frame_image(cx, queued.image, queued.frame, queued.revision);
+            cx.notify();
+        }
+    }
+
+    /// One display refresh of the presentation loop. Returns whether the loop
+    /// keeps running: it runs for as long as playback runs, even with an empty
+    /// queue, so a frame that arrives late is shown on the next refresh.
+    fn present_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        self.present_due_frames(cx);
+        if !self.snapshot.playing {
+            self.present_loop_armed = false;
+        }
+        self.snapshot.playing
     }
 
     fn clear_audio_image(&mut self, cx: &mut Context<Self>) {
@@ -1440,6 +1592,9 @@ impl Workspace {
             frame_image_frame: -1,
             frame_image_revision: u64::MAX,
             frame_image_generation: 0,
+            frame_queue: std::collections::VecDeque::new(),
+            present_clock: None,
+            present_loop_armed: false,
             preview_width_px: std::cell::Cell::new(0.),
             frame_request_inflight: false,
             frame_request_generation: 0,
@@ -6117,7 +6272,9 @@ impl Workspace {
         let weak = cx.weak_entity();
         let executor = cx.background_executor().clone();
         cx.spawn(async move |_, cx| {
-            let mut sequence = 0u64;
+            // Continue past the newest applied reply: a session that restarted at 0
+            // would have every reply dropped by the `applied` check below.
+            let mut sequence = pump.applied.load(Ordering::Acquire) + 1;
             loop {
                 if !pump.playing.load(Ordering::Relaxed) {
                     break;
@@ -6208,8 +6365,7 @@ impl Workspace {
                             }
                             view.frame_pump.applied.store(sequence_now, Ordering::Release);
                             view.frame_image_generation = view.frame_image_generation.max(sequence_now + 1);
-                            view.replace_frame_image(cx, image, frame, revision);
-                            cx.notify();
+                            view.queue_playback_frame(cx, image, frame, revision);
                         });
                     }
                 }).detach();
@@ -8935,6 +9091,41 @@ fn parse_time(value: &str) -> Result<i64> {
         .ok_or_else(|| anyhow!("时间码超出范围"))
 }
 
+/// Wall-clock time per frame at the current playback rate: the host advances
+/// `fps * rate` frames each second. Falls back to 30 fps when the stream rate is
+/// unknown (VFR) and to 1x when the rate is not a positive finite number.
+fn playback_period(fps: Option<f64>, rate: f64) -> Duration {
+    let fps = fps
+        .filter(|fps| fps.is_finite() && *fps > 0.)
+        .unwrap_or(30.);
+    let rate = if rate.is_finite() && rate > 0. {
+        rate
+    } else {
+        1.
+    };
+    Duration::from_secs_f64(1. / (fps * rate))
+}
+
+/// Slot time of `frame` on `clock`: the anchor frame is due `PLAYBACK_PRESENT_LAG`
+/// after the clock base, and each later frame one period after the previous.
+fn playback_due(clock: PresentClock, frame: i64) -> Instant {
+    let steps = (frame - clock.base_frame).max(0);
+    clock.base + PLAYBACK_PRESENT_LAG + clock.period.mul_f64(steps as f64)
+}
+
+/// Registers the next display refresh for the presentation loop. The callback
+/// runs on each platform frame and re-registers itself while playback runs.
+fn present_next_refresh(weak: gpui_kit::WeakEntity<Workspace>, window: &Window) {
+    window.on_next_frame(move |window, cx| {
+        let keep_going = weak
+            .update(cx, |view, cx| view.present_tick(cx))
+            .unwrap_or(false);
+        if keep_going {
+            present_next_refresh(weak, window);
+        }
+    });
+}
+
 /// Decodes one base64 JPEG preview frame into a paintable image, off the UI
 /// thread: the decode plus channel swap costs more than a frame interval.
 async fn decode_frame_image(
@@ -9013,6 +9204,10 @@ async fn invoke_weak(
 }
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.snapshot.playing && !self.present_loop_armed {
+            self.present_loop_armed = true;
+            present_next_refresh(cx.weak_entity(), window);
+        }
         let focus_area = self.focus_area(window, cx);
         if let Some(line) = self
             .snapshot
