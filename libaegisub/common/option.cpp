@@ -169,6 +169,21 @@ struct option_name_cmp {
 	}
 };
 
+/// Keeps a copy of a configuration file that could not be parsed. The in-memory
+/// options stay at their defaults and the next Flush writes those over the
+/// original, so without this copy the stored settings would be lost silently.
+void backup_unreadable_config(agi::fs::path const& path) {
+	try {
+		if (!agi::fs::FileExists(path)) return;
+		auto const backup = agi::fs::path(path.string() + ".invalid");
+		agi::fs::Copy(path, backup);
+		LOG_E("option/load") << "Could not parse " << path.string() << "; kept a copy as " << backup.string();
+	}
+	catch (agi::Exception const& err) {
+		LOG_E("option/load") << "Could not back up unreadable configuration: " << err.GetMessage();
+	}
+}
+
 }
 
 namespace agi {
@@ -189,37 +204,38 @@ Options::~Options() {
 
 void Options::ConfigUser() {
 	try {
-		LoadConfig(*io::Open(config_file), true);
+		if (!LoadConfig(*io::Open(config_file), true))
+			backup_unreadable_config(config_file);
 	}
 	catch (fs::FileNotFound const&) {
 		return;
 	}
 }
 
-void Options::LoadConfig(std::istream& stream, bool ignore_errors) {
+bool Options::LoadConfig(std::istream& stream, bool ignore_errors) {
 	json::UnknownElement config_root;
 
 	try {
 		json::Reader::Read(config_root, stream);
 	} catch (json::Reader::ParseException& e) {
 		LOG_E("option/load") << "json::ParseException: " << e.what() << ", Line/offset: " << e.m_locTokenBegin.m_nLine + 1 << '/' << e.m_locTokenBegin.m_nLineOffset + 1;
-		return;
+		return false;
 	} catch (json::Exception& e) {
 		LOG_E("option/load") << "json::Exception: " << e.what();
-		return;
+		return false;
 	}
 
 	ConfigVisitor config_visitor(ignore_errors);
 	config_root.Accept(config_visitor);
 
 	auto new_values = config_visitor.Values();
-	if (new_values.empty()) return;
+	if (new_values.empty()) return true;
 
 	sort(begin(new_values), end(new_values), option_name_cmp());
 
 	if (values.empty()) {
 		values = std::move(new_values);
-		return;
+		return true;
 	}
 
 	auto src_it = begin(new_values), src_end = end(new_values);
@@ -247,6 +263,7 @@ void Options::LoadConfig(std::istream& stream, bool ignore_errors) {
 			++dst_it;
 		}
 	}
+	return true;
 }
 
 OptionValue *Options::Get(std::string_view name) {

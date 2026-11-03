@@ -90,6 +90,21 @@ TEST_F(lagi_option, existent_but_invalid_file_uses_default) {
 	EXPECT_THROW(opt.Get("Null"), agi::Exception);
 }
 
+TEST_F(lagi_option, unreadable_config_is_kept_next_to_the_original) {
+	{
+		std::ofstream file("data/options/corrupt");
+		file << R"({"Valid" : )";
+	}
+	agi::fs::Remove("data/options/corrupt.invalid");
+
+	agi::Options opt("data/options/corrupt", default_opt, agi::Options::FLUSH_SKIP);
+	EXPECT_STREQ("This is valid", opt.Get("Valid")->GetString().c_str());
+
+	ASSERT_NO_THROW(opt.ConfigUser());
+	EXPECT_TRUE(agi::fs::FileExists("data/options/corrupt.invalid"));
+	EXPECT_TRUE(util::compare("data/options/corrupt", "data/options/corrupt.invalid"));
+}
+
 TEST_F(lagi_option, arrays) {
 	agi::Options opt("", all_types, agi::Options::FLUSH_SKIP);
 
