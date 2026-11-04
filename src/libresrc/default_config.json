@@ -392,6 +392,7 @@
 			"Column" : [
 				{"bool" : true}
 			],
+			"GPUI Column Widths" : "[]",
 			"Focus Allow" : true,
 			"Font Face" : "",
 			"Font Size" : 9,
@@ -633,6 +634,8 @@
 		"LayoutRes Mismatch" : 1,
 		"Last LayoutRes Mismatch Choice" : 0,
 		"Open Audio" : true,
+		"Seek On Double Click" : true,
+		"Loop Playback" : false,
 		"Overscan Mask" : false,
 		"Provider" : "ffmpegsource",
 		"Slider" : {

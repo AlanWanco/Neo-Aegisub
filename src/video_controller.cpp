@@ -144,6 +144,8 @@ void VideoController::Play() {
 
 	start_ms = TimeAtFrame(frame_n);
 	end_frame = provider->GetFrameCount() - 1;
+	loop_start_ms = 0;
+	loop_end_ms = -1;
 
 	context->audioController->PlayToEnd(start_ms);
 
@@ -163,6 +165,8 @@ void VideoController::PlayLine() {
 	int startFrame = FrameAtTime(context->selectionController->GetActiveLine()->Start, agi::vfr::START);
 	start_ms = TimeAtFrame(startFrame);
 	end_frame = FrameAtTime(context->selectionController->GetActiveLine()->End, agi::vfr::END) + 1;
+	loop_start_ms = start_ms;
+	loop_end_ms = curline->End;
 
 	JumpToFrame(startFrame);
 
@@ -199,8 +203,21 @@ void VideoController::OnPlayTimer(wxTimerEvent &) {
 	int next_frame = FrameAtTime(static_cast<int>(time));
 	if (next_frame == frame_n) return;
 
-	if (next_frame >= end_frame)
-		Stop();
+	if (next_frame >= end_frame) {
+		if (!OPT_GET("Video/Loop Playback")->GetBool()) {
+			Stop();
+			return;
+		}
+		start_ms = loop_start_ms;
+		if (loop_end_ms < 0)
+			context->audioController->PlayToEnd(start_ms);
+		else
+			context->audioController->PlayRange(TimeRange(start_ms, loop_end_ms));
+		playback_start_time = steady_clock::now();
+		frame_n = FrameAtTime(start_ms);
+		RequestFrame();
+		Seek(frame_n);
+	}
 	else {
 		frame_n = next_frame;
 		RequestFrame();

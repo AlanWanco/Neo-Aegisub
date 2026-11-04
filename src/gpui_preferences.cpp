@@ -214,6 +214,9 @@ std::string Appearance() {
 	result["soft_line_break"] = OPT_GET("Subtitle/Edit Box/Soft Line Break")->GetBool();
 	result["highlight_visible"] = OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool();
 	result["focus_grid"] = OPT_GET("Subtitle/Grid/Focus Allow")->GetBool();
+	result["grid_widths"] = OPT_GET("Subtitle/Grid/GPUI Column Widths")->GetString();
+	result["seek_on_double_click"] = OPT_GET("Video/Seek On Double Click")->GetBool();
+	result["loop_playback"] = OPT_GET("Video/Loop Playback")->GetBool();
 	return encode(std::move(result));
 }
 
@@ -296,6 +299,13 @@ void import_object(json::Object const& object, std::string const& prefix, int &a
 std::string Preferences(json::Object const& request) {
 	std::string const& action = request.at("action");
 	int imported = 0, skipped = 0;
+	if (action == "grid_widths") {
+		std::string const& widths = request.at("widths");
+		backup("config.json");
+		OPT_SET("Subtitle/Grid/GPUI Column Widths")->SetString(widths);
+		config::opt->Flush();
+		return "{\"ok\":true}";
+	}
 	if (action == "apply") {
 		std::vector<std::unique_ptr<agi::OptionValue>> changes;
 		for (auto const& [name, item] : static_cast<json::Object const&>(request.at("fields"))) {

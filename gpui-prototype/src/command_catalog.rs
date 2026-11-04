@@ -214,3 +214,67 @@ pub fn populate_menu(
     }
     menu.scrollable(true).max_h(gpui_kit::px(580.))
 }
+
+/// Read validation after selecting the context row, so multi-line commands use
+/// the same selection and enablement as the legacy grid menu.
+pub fn subtitle_context_menu(
+    menu: PopupMenu,
+    id: i64,
+    workspace: gpui_kit::WeakEntity<Workspace>,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let Ok((bridge, draft, select)) = workspace.update(cx, |view, cx| {
+        view.key_focus = crate::KeyFocus::Grid;
+        view.grid_drag_anchor = None;
+        view.follow_suppressed = true;
+        let select = (!view.snapshot.selected.contains(&id))
+            .then(|| json!({"op":"select", "id":id, "ids":[id]}));
+        (view.bridge.clone(), view.pending_draft(cx), select)
+    }) else {
+        return menu;
+    };
+    cx.spawn_in(window, async move |menu, cx| {
+        let result: anyhow::Result<_> = async {
+            if let Some(draft) = draft {
+                bridge.call(draft).await?;
+            }
+            if let Some(select) = select {
+                bridge.call(select).await?;
+            }
+            let snapshot = bridge.snapshot().await?;
+            let catalog: Catalog =
+                serde_json::from_value(bridge.call(json!({"op":"catalog"})).await?)?;
+            Ok((snapshot, Arc::new(catalog)))
+        }
+        .await;
+        let _ = menu.update_in(cx, |menu, window, cx| match result {
+            Ok((snapshot, catalog)) => {
+                let _ = workspace.update(cx, |view, cx| {
+                    view.apply_snapshot(snapshot, cx);
+                    view.catalog = catalog.clone();
+                    view.sync_display_mode(cx);
+                });
+                menu.rebuild(window, cx, |menu, window, cx| {
+                    populate_menu(
+                        menu,
+                        catalog.menu("grid_context"),
+                        catalog,
+                        workspace,
+                        window,
+                        cx,
+                    )
+                });
+            }
+            Err(error) => {
+                menu.rebuild(window, cx, |menu, _, _| menu.label("菜单读取失败"));
+                let _ = workspace.update(cx, |view, cx| {
+                    view.status = format!("菜单读取失败：{error}");
+                    cx.notify();
+                });
+            }
+        });
+    })
+    .detach();
+    menu.label("读取菜单…")
+}

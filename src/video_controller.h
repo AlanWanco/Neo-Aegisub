@@ -89,6 +89,10 @@ class VideoController final : public wxEvtHandler {
 	/// The last frame to play if video is currently playing
 	int end_frame = 0;
 
+	/// Range to restart on natural completion; -1 means play audio to EOF.
+	int loop_start_ms = 0;
+	int loop_end_ms = -1;
+
 	/// The frame number which was last requested from the video provider,
 	/// which may not be the same thing as the currently displayed frame
 	int frame_n = 0;

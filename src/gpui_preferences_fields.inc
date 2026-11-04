@@ -38,6 +38,8 @@
 {"视频", wxTRANSLATE("Show keyframes in slider"), "Video/Slider/Show Keyframes", 0, 2147483647, false},
 {"视频", wxTRANSLATE("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide", 0, 2147483647, false},
 {"视频", wxTRANSLATE("Seek video to line start on selection change"), "Video/Subtitle Sync", 0, 2147483647, false},
+{"视频", "双击字幕行跳转视频", "Video/Seek On Double Click", 0, 1, false},
+{"视频", "播放结束后自动重头播放", "Video/Loop Playback", 0, 1, false},
 {"视频", wxTRANSLATE("Automatically open audio when opening video"), "Video/Open Audio", 0, 2147483647, false},
 {"视频", wxTRANSLATE("Scrolling on the video display"), "Video/Scroll Action", 0, 2147483647, false},
 {"视频", wxTRANSLATE("Ctrl+Scrolling on the video display"), "Video/Ctrl Scroll Action", 0, 2147483647, false},

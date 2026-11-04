@@ -57,7 +57,7 @@ use video_timeline::VideoTimeline;
 use document_panels::{DocumentDetails, DocumentPanels, LibraryDetails};
 use trace::trace;
 
-use command_catalog::{Catalog, populate_menu};
+use command_catalog::{Catalog, populate_menu, subtitle_context_menu};
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
@@ -84,7 +84,7 @@ use gpui_kit::{
         button::{Button, ButtonVariants},
         color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
-        menu::{DropdownMenu, PopupMenuItem},
+        menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
         scroll::ScrollableElement,
     },
     platform::application,
@@ -296,7 +296,7 @@ enum KeyFocus {
     Video,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, Deserialize)]
 enum SubtitleColumn {
     IdLayer,
     Time,
@@ -371,6 +371,12 @@ struct Appearance {
     highlight_visible: bool,
     #[serde(default)]
     focus_grid: bool,
+    #[serde(default)]
+    grid_widths: String,
+    #[serde(default)]
+    seek_on_double_click: bool,
+    #[serde(default)]
+    loop_playback: bool,
 }
 
 impl Appearance {
@@ -1001,6 +1007,7 @@ enum Panel {
     Styles,
     Project,
     Visual,
+    Video,
     Translation,
     Styling,
     Timing,
@@ -1023,6 +1030,7 @@ impl Panel {
         match self {
             Self::Subtitles => "字幕编辑",
             Self::Visual => "视觉排版",
+            Self::Video => "视频预览",
             Self::Translation => "翻译助手",
             Self::Styles => "样式管理",
             Self::Styling => "配样式",
@@ -1047,6 +1055,7 @@ impl Panel {
         match self {
             Self::Subtitles => IconName::Captions,
             Self::Visual => IconName::Frame,
+            Self::Video => IconName::Play,
             Self::Translation => IconName::Languages,
             Self::Styles => IconName::Palette,
             Self::Styling => IconName::CaseSensitive,
@@ -1145,9 +1154,9 @@ struct PresentClock {
     period: Duration,
 }
 
-/// How far behind arrival a frame's slot sits: the jitter budget for the host
-/// timer, JPEG encode, socket and decode before a frame misses its slot.
-const PLAYBACK_PRESENT_LAG: Duration = Duration::from_millis(50);
+/// Jitter budget before a frame's slot. Measured on a 30 fps clip: 0 ms and
+/// 16 ms leave uneven 16/50 ms steps, 33 ms (one frame period) is smooth.
+const PLAYBACK_PRESENT_LAG: Duration = Duration::from_millis(33);
 /// Frames held ahead of the display; the oldest is released when this fills.
 const PLAYBACK_QUEUE_LIMIT: usize = 8;
 /// Re-anchor when a frame's slot is more than this many periods off schedule.
@@ -1199,6 +1208,7 @@ struct Workspace {
     subtitle_columns: Vec<SubtitleColumn>,
     /// User-adjusted widths; anything missing falls back to the default.
     subtitle_column_widths: Vec<(SubtitleColumn, f32)>,
+    subtitle_widths_loaded: bool,
     /// Measured width of the subtitle list, used to squeeze the columns.
     subtitle_grid_width: f32,
     layout_drag: Option<WorkspaceResizeDrag>,
@@ -1246,6 +1256,7 @@ struct Workspace {
     /// 视图菜单里的容器开关：字幕区始终在，音频条和视频预览各自可选。
     show_audio: bool,
     show_video: bool,
+    video_restore_layout: Option<(bool, bool)>,
     properties_line_id: i64,
     _property_events: Vec<Subscription>,
     _command_search_events: Subscription,
@@ -1670,6 +1681,7 @@ impl Workspace {
                 SubtitleColumn::StyleActor,
             ],
             subtitle_column_widths: Vec::new(),
+            subtitle_widths_loaded: false,
             subtitle_grid_width: 0.,
             layout_drag: None,
             audio_panel_height: 80.,
@@ -1710,6 +1722,7 @@ impl Workspace {
             quit_after_save: false,
             show_audio: true,
             show_video: true,
+            video_restore_layout: None,
             properties_line_id: -1,
             _property_events: property_events,
             _command_search_events: command_search_events,
@@ -1738,6 +1751,11 @@ impl Workspace {
     }
 
     fn apply_snapshot(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
+        if !self.subtitle_widths_loaded {
+            self.subtitle_column_widths =
+                serde_json::from_str(&snapshot.appearance.grid_widths).unwrap_or_default();
+            self.subtitle_widths_loaded = true;
+        }
         // "保存" on the unsaved-changes card only deferred the quit until the
         // host confirms the document is clean again.
         if self.quit_after_save && !snapshot.modified {
@@ -1872,7 +1890,7 @@ impl Workspace {
             self.seek_target = None;
         }
         self.snapshot = snapshot;
-        if command_state_changed {
+        if command_state_changed && !self.visual.dragging {
             self.refresh_catalog(cx);
         }
         if details_changed || document_changed || media_changed {
@@ -1892,7 +1910,10 @@ impl Workspace {
             self.snapshot.active,
             self.video_epoch as i64,
         );
-        if self.active_panel == Panel::Visual && self.visual.drawn != Some(visual_state) {
+        if self.active_panel == Panel::Visual
+            && !self.visual.dragging
+            && self.visual.drawn != Some(visual_state)
+        {
             self.visual.drawn = Some(visual_state);
             self.queue_visual(json!({"action":"draw"}), cx);
         }
@@ -4154,8 +4175,9 @@ impl Workspace {
                     self.visual.reset_zoom();
                 }
                 Some("subtitle/spellcheck") => {
-                    self.active_panel = Panel::Spelling;
-                    self.spelling_request(json!({"action":"state"}), cx);
+                    self.open_tool(Panel::Spelling, cx, |view, cx| {
+                        view.spelling_request(json!({"action":"state"}), cx)
+                    });
                     return;
                 }
                 Some("app/toggle/toolbar") => {
@@ -4163,26 +4185,30 @@ impl Workspace {
                     return;
                 }
                 Some("app/options") => {
-                    self.active_panel = Panel::Preferences;
-                    self.preferences_request(json!({"action":"state"}), cx);
+                    self.open_tool(Panel::Preferences, cx, |view, cx| {
+                        view.preferences_request(json!({"action":"state"}), cx)
+                    });
                     return;
                 }
                 Some("subtitle/attachment") => {
-                    self.active_panel = Panel::Attachments;
-                    self.attachment_request(json!({"action":"state"}), cx);
+                    self.open_tool(Panel::Attachments, cx, |view, cx| {
+                        view.attachment_request(json!({"action":"state"}), cx)
+                    });
                     return;
                 }
                 Some("subtitle/open/charset") => {
-                    self.active_panel = Panel::Files;
-                    self.files.page = FilePage::Encoding;
-                    self.file_tools_request(json!({"action":"state"}), cx);
-                    self.pick_encoded_subtitle(cx);
+                    self.open_tool(Panel::Files, cx, |view, cx| {
+                        view.files.page = FilePage::Encoding;
+                        view.file_tools_request(json!({"action":"state"}), cx);
+                        view.pick_encoded_subtitle(cx);
+                    });
                     return;
                 }
                 Some("subtitle/open/autosave") => {
-                    self.active_panel = Panel::Files;
-                    self.files.page = FilePage::Recovery;
-                    self.file_tools_request(json!({"action":"state"}), cx);
+                    self.open_tool(Panel::Files, cx, |view, cx| {
+                        view.files.page = FilePage::Recovery;
+                        view.file_tools_request(json!({"action":"state"}), cx);
+                    });
                     return;
                 }
                 Some("subtitle/open") => {
@@ -4195,15 +4221,17 @@ impl Workspace {
                     | "video/aspect/custom"
                     | "video/details"),
                 ) => {
-                    self.active_panel = Panel::VideoSettings;
-                    self.video_settings.page = match name {
+                    let page = match name {
                         "video/open/dummy" => VideoPage::Dummy,
                         "video/jump" => VideoPage::Jump,
                         "video/aspect/custom" => VideoPage::Aspect,
                         _ => VideoPage::Details,
                     };
-                    self.video_settings.initialized = false;
-                    self.video_settings_request("state", cx);
+                    self.open_tool(Panel::VideoSettings, cx, move |view, cx| {
+                        view.video_settings.page = page;
+                        view.video_settings.initialized = false;
+                        view.video_settings_request("state", cx);
+                    });
                     return;
                 }
                 Some("video/open") => {
@@ -4237,6 +4265,13 @@ impl Workspace {
                     | "app/display/full"),
                 ) => {
                     // Container visibility and menu checks belong to this workspace.
+                    if let Some(handle) =
+                        PANEL_WINDOWS.with(|windows| windows.borrow_mut().remove(&Panel::Video))
+                    {
+                        let _ = handle.update(cx, |_, window, _| window.remove_window());
+                        PANEL_VIEWS.with(|views| views.borrow_mut().remove(&Panel::Video));
+                    }
+                    self.video_restore_layout = None;
                     self.show_audio = matches!(name, "app/display/audio_subs" | "app/display/full");
                     self.show_video = matches!(name, "app/display/video_subs" | "app/display/full");
                     self.sync_display_mode(cx);
@@ -4272,8 +4307,9 @@ impl Workspace {
                     return;
                 }
                 Some("am/manager" | "am/meta") => {
-                    self.active_panel = Panel::Automation;
-                    self.automation_request(json!({"action":"state"}), cx);
+                    self.open_tool(Panel::Automation, cx, |view, cx| {
+                        view.automation_request(json!({"action":"state"}), cx)
+                    });
                     return;
                 }
                 Some("am/reload" | "am/reload/autoload") => {
@@ -4286,8 +4322,7 @@ impl Workspace {
                     return;
                 }
                 Some("edit/line/paste/over") => {
-                    self.active_panel = Panel::Paste;
-                    self.paste_request(false, cx);
+                    self.open_tool(Panel::Paste, cx, |view, cx| view.paste_request(false, cx));
                     return;
                 }
                 Some("tool/line/select") => {
@@ -4309,26 +4344,30 @@ impl Workspace {
                     return;
                 }
                 Some("tool/time/postprocess") => {
-                    self.active_panel = Panel::Processor;
-                    self.processor_request("state", cx);
+                    self.open_tool(Panel::Processor, cx, |view, cx| {
+                        view.processor_request("state", cx)
+                    });
                     return;
                 }
                 Some("tool/resampleres") => {
-                    self.active_panel = Panel::Resample;
-                    self.resample_request("state", cx);
+                    self.open_tool(Panel::Resample, cx, |view, cx| {
+                        view.resample_request("state", cx)
+                    });
                     return;
                 }
                 Some("time/shift") => {
-                    self.active_panel = Panel::Timing;
-                    self.shift_times_request("state", cx);
+                    self.open_tool(Panel::Timing, cx, |view, cx| {
+                        view.shift_times_request("state", cx)
+                    });
                     return;
                 }
                 Some("tool/style/assistant") => {
-                    self.active_panel = Panel::Styling;
-                    self.styling.line_id = -1;
-                    self.styling.focus_pending = true;
-                    self.refresh_document(cx);
-                    self.styling_action("start", None, cx);
+                    self.open_tool(Panel::Styling, cx, |view, cx| {
+                        view.styling.line_id = -1;
+                        view.styling.focus_pending = true;
+                        view.refresh_document(cx);
+                        view.styling_action("start", None, cx);
+                    });
                     return;
                 }
                 Some("tool/styling_assistant/commit") => {
@@ -4340,8 +4379,9 @@ impl Workspace {
                     return;
                 }
                 Some("tool/translation_assistant") => {
-                    self.active_panel = Panel::Translation;
-                    self.translation_action("start", cx);
+                    self.open_tool(Panel::Translation, cx, |view, cx| {
+                        view.translation_action("start", cx)
+                    });
                     return;
                 }
                 Some(name) if name.starts_with("tool/translation_assistant/") => {
@@ -4356,16 +4396,14 @@ impl Workspace {
                     return;
                 }
                 Some("tool/style/manager") => {
-                    self.active_panel = Panel::Styles;
-                    self.refresh_document(cx);
-                    self.refresh_library(cx);
-                    cx.notify();
+                    self.open_tool(Panel::Styles, cx, |view, cx| {
+                        view.refresh_document(cx);
+                        view.refresh_library(cx);
+                    });
                     return;
                 }
                 Some("subtitle/properties") => {
-                    self.active_panel = Panel::Project;
-                    self.refresh_document(cx);
-                    cx.notify();
+                    self.open_tool(Panel::Project, cx, |view, cx| view.refresh_document(cx));
                     return;
                 }
                 _ => {}
@@ -4575,7 +4613,7 @@ impl Workspace {
             Some("down" | "double" | "toggle_move" | "up")
         ) || self.visual.dragging;
         let request_epoch = self.video_epoch;
-        let refresh_catalog = request["action"] == "draw";
+        let refresh_catalog = matches!(request["action"].as_str(), Some("draw" | "up"));
         cx.spawn(async move |_, cx| {
             let result = bridge.call(request).await.and_then(|value| {
                 serde_json::from_value::<VisualReply>(value).context("invalid visual drawing")
@@ -5319,14 +5357,45 @@ impl Workspace {
     }
 
     fn open_search(&mut self, selection: bool, cx: &mut Context<Self>) {
-        let changed = self.find_panel.selection_mode != selection;
-        self.active_panel = Panel::Search;
-        self.find_panel.selection_mode = selection;
-        if changed {
-            self.find_panel.initialized = false;
+        self.open_tool(Panel::Search, cx, move |view, cx| {
+            let changed = view.find_panel.selection_mode != selection;
+            view.find_panel.selection_mode = selection;
+            if changed {
+                view.find_panel.initialized = false;
+            }
+            view.find_panel.focus_pending = true;
+            view.search_request("state", cx);
+        });
+    }
+
+    /// Shows a tool page the way the sidebar does: in its own window, so the
+    /// editor stays where it is. A window that already is that tool (or the
+    /// subtitle page itself) configures in place.
+    fn open_tool(
+        &mut self,
+        panel: Panel,
+        cx: &mut Context<Self>,
+        configure: impl FnOnce(&mut Workspace, &mut Context<Workspace>) + 'static,
+    ) {
+        if panel == Panel::Subtitles || self.detached == Some(panel) {
+            self.active_panel = panel;
+            configure(self, cx);
+            cx.notify();
+            return;
         }
-        self.find_panel.focus_pending = true;
-        self.search_request("state", cx);
+        if let Err(error) = focus_or_open_panel_window(cx, self.bridge.clone(), panel) {
+            eprintln!("Could not open tool window: {error:#}");
+            return;
+        }
+        let Some(view) = PANEL_VIEWS.with(|views| views.borrow().get(&panel).cloned()) else {
+            eprintln!("Tool window opened but no view is registered for it");
+            return;
+        };
+        let _ = view.update(cx, |view, cx| {
+            view.active_panel = panel;
+            configure(view, cx);
+            cx.notify();
+        });
     }
 
     fn search_request(&mut self, action: &'static str, cx: &mut Context<Self>) {
@@ -6013,6 +6082,9 @@ impl Workspace {
     }
 
     fn sync_display_mode(&mut self, cx: &mut Context<Self>) {
+        if self.detached.is_some() {
+            return;
+        }
         for command in &mut Arc::make_mut(&mut self.catalog).commands {
             command.active = match command.name.as_str() {
                 "app/display/subs" => !self.show_audio && !self.show_video,
@@ -6394,6 +6466,9 @@ impl Workspace {
                                 view.seek_target = None;
                             }
                             view.replace_frame_image(cx, image, frame, request_revision);
+                            if view.frame_image_revision != view.snapshot.revision {
+                                view.refresh_frame(cx);
+                            }
                             // The drag may have moved on while this picture was
                             // decoded; one cycle at a time, newest position next.
                             view.flush_video_seek(cx);
@@ -6810,6 +6885,9 @@ impl Workspace {
         if let Some(command) = command {
             let name = command.name.clone();
             self.invoke(json!({"op":"command", "name":name}), cx);
+            cx.stop_propagation();
+        } else if context == "Video" && combo == "Space" {
+            self.invoke(json!({"op":"command", "name":"video/play"}), cx);
             cx.stop_propagation();
         }
     }
@@ -7684,7 +7762,9 @@ impl Workspace {
         let display_size = (self.snapshot.video && !self.visual.fit_video)
             .then(|| size(px(height * aspect), px(height)));
         let available_height = f32::from(window.viewport_size().height);
-        let view_height = if fill {
+        let view_height = if self.active_panel == Panel::Video {
+            (available_height - 200.).max(160.)
+        } else if fill {
             // The line properties moved beside the text editor, so nothing is
             // stacked under the preview any more: it takes the whole column.
             (available_height - 430.).max(160.)
@@ -7751,6 +7831,21 @@ impl Workspace {
             .child(Icon::new(IconName::Play).size(px(14.)).text_color(p.muted))
             .child(
                 div()
+                    .id("detach-video-preview")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        if view.detached == Some(Panel::Video) { return; }
+                        let restore = (view.show_audio, view.show_video);
+                        view.open_tool(Panel::Video, cx, |view, cx| {
+                            view.key_focus = KeyFocus::Video;
+                            cx.notify();
+                        });
+                        view.video_restore_layout.get_or_insert(restore);
+                        view.show_video = false;
+                        view.show_audio = true;
+                        view.sync_display_mode(cx);
+                        cx.notify();
+                    }))
                     .text_size(px(12.))
                     .font_semibold()
                     .px_1()
@@ -7826,6 +7921,28 @@ impl Workspace {
                             view.visual.reset_zoom();
                         }
                         cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("video-seek-double-click")
+                    .small().ghost()
+                    .label("双击跳转")
+                    .tooltip("双击字幕行时跳转到该行开始时间")
+                    .selected(self.snapshot.appearance.seek_on_double_click)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        let value = if view.snapshot.appearance.seek_on_double_click { "0" } else { "1" };
+                        view.preferences_request(json!({"action":"apply", "fields":{"Video/Seek On Double Click":value}}), cx);
+                    })),
+            )
+            .child(
+                Button::new("video-loop-playback")
+                    .small().ghost()
+                    .label("循环播放")
+                    .tooltip("播放结束后自动重头播放；播放当前行时循环该行，手动暂停不重播")
+                    .selected(self.snapshot.appearance.loop_playback)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        let value = if view.snapshot.appearance.loop_playback { "0" } else { "1" };
+                        view.preferences_request(json!({"action":"apply", "fields":{"Video/Loop Playback":value}}), cx);
                     })),
             )
             .child(div().flex_1())
@@ -8112,6 +8229,23 @@ impl Workspace {
             Some(entry) => entry.1 = width,
             None => self.subtitle_column_widths.push((column, width)),
         }
+    }
+
+    fn save_subtitle_widths(&self, cx: &mut Context<Self>) {
+        let bridge = self.bridge.clone();
+        let widths = serde_json::to_string(&self.subtitle_column_widths).unwrap();
+        cx.spawn(async move |view, cx| {
+            if let Err(error) = bridge
+                .call(json!({"op":"preferences", "action":"grid_widths", "widths":widths}))
+                .await
+            {
+                let _ = view.update(cx, |view, cx| {
+                    view.status = format!("保存列宽失败：{error}");
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     /// Adds or removes an optional column, keeping the canonical left-to-right
@@ -8999,6 +9133,10 @@ impl Workspace {
                                                     view.grid_drag_anchor = Some(id);
                                                     view.grid_drag_row = id;
                                                     view.follow_suppressed = true;
+                                                    if event.click_count == 2 {
+                                                        view.invoke(json!({"op":"select", "id":id, "ids":[id], "double_click":true}), cx);
+                                                        return;
+                                                    }
                                                     view.select_lines(
                                                         id,
                                                         event.modifiers.shift,
@@ -9006,6 +9144,15 @@ impl Workspace {
                                                             || event.modifiers.platform,
                                                         cx,
                                                     );
+                                                });
+                                            }
+                                        })
+                                        .on_mouse_down(gpui_kit::MouseButton::Right, {
+                                            let weak = weak.clone();
+                                            move |_, window, cx| {
+                                                let _ = weak.update(cx, |view, cx| {
+                                                    view.key_focus = KeyFocus::Grid;
+                                                    view.focus_handle.focus(window, cx);
                                                 });
                                             }
                                         })
@@ -9084,6 +9231,13 @@ impl Workspace {
                                                 })
                                                 .child(line.display_text),
                                         )
+                                        .context_menu({
+                                            let weak = weak.clone();
+                                            let id = line.id;
+                                            move |menu, window, cx| {
+                                                subtitle_context_menu(menu, id, weak.clone(), window, cx)
+                                            }
+                                        })
                                     })
                                     .collect()
                             }),
@@ -9678,7 +9832,10 @@ impl Render for Workspace {
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|view, _, _, cx| {
-                    if view.layout_drag.take().is_some() {
+                    if let Some(drag) = view.layout_drag.take() {
+                        if matches!(drag, WorkspaceResizeDrag::SubtitleColumn { .. }) {
+                            view.save_subtitle_widths(cx);
+                        }
                         cx.notify();
                     }
                 }),
@@ -9846,6 +10003,8 @@ impl Render for Workspace {
                     .p_2()
                     .child(columns),
             );
+        } else if self.active_panel == Panel::Video {
+            body = body.child(self.render_player(window, false, false, true, cx));
         } else if self.active_panel == Panel::Visual {
             body = body.child(
                 page::page(cx, "visual-panel")
@@ -10371,6 +10530,7 @@ fn panel_window_size(panel: Panel) -> gpui_kit::Size<gpui_kit::Pixels> {
         Panel::Styling => (820., 520.),
         Panel::Project => (900., 620.),
         Panel::Visual => (1100., 780.),
+        Panel::Video => (1000., 720.),
         Panel::Translation => (900., 600.),
         Panel::Timing => (860., 660.),
         Panel::Processor => (900., 600.),
@@ -10429,6 +10589,13 @@ fn open_workspace(
                 }
                 view
             });
+            if let Some(panel) = detached {
+                PANEL_VIEWS.with(|views| {
+                    views.borrow_mut().insert(panel, workspace.downgrade());
+                });
+            } else {
+                MAIN_VIEW.with(|view| *view.borrow_mut() = Some(workspace.downgrade()));
+            }
             // The wx frame used to ask this itself, but by the time the GPUI
             // window is gone the host has no client to talk to and falls back to
             // a native modal. Ask here instead, while the card can still render.
@@ -10438,6 +10605,24 @@ fn open_workspace(
                     return true;
                 };
                 view.update(cx, |view, cx| {
+                    if view.detached == Some(Panel::Video) {
+                        PANEL_WINDOWS.with(|windows| windows.borrow_mut().remove(&Panel::Video));
+                        PANEL_VIEWS.with(|views| views.borrow_mut().remove(&Panel::Video));
+                        MAIN_VIEW.with(|main| {
+                            if let Some(main) =
+                                main.borrow().as_ref().and_then(|view| view.upgrade())
+                            {
+                                main.update(cx, |main, cx| {
+                                    if let Some((audio, video)) = main.video_restore_layout.take() {
+                                        main.show_audio = audio;
+                                        main.show_video = video;
+                                        main.sync_display_mode(cx);
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        });
+                    }
                     if view.detached.is_some() || !view.snapshot.modified {
                         return true;
                     }
@@ -10459,15 +10644,17 @@ fn open_workspace(
                     false
                 })
             });
-            let menu_target = workspace.downgrade();
-            cx.on_action(move |action: &RunCommand, cx| {
-                let name = action.name.clone();
-                if let Some(view) = menu_target.upgrade() {
-                    let _ = view.update(cx, |view, cx| {
-                        view.invoke(json!({"op":"command", "name":name}), cx)
-                    });
-                }
-            });
+            if detached.is_none() {
+                let menu_target = workspace.downgrade();
+                cx.on_action(move |action: &RunCommand, cx| {
+                    let name = action.name.clone();
+                    if let Some(view) = menu_target.upgrade() {
+                        let _ = view.update(cx, |view, cx| {
+                            view.invoke(json!({"op":"command", "name":name}), cx)
+                        });
+                    }
+                });
+            }
             workspace.update(cx, |view, cx| {
                 view.refresh_catalog(cx);
                 view.refresh_document(cx);
@@ -10551,10 +10738,17 @@ fn open_panel_window(
 }
 
 thread_local! {
+    static MAIN_VIEW: std::cell::RefCell<Option<gpui_kit::WeakEntity<Workspace>>> =
+        std::cell::RefCell::new(None);
     /// One window per tool: clicking the same sidebar row twice should raise the
     /// window that is already open instead of stacking duplicates.
     static PANEL_WINDOWS: std::cell::RefCell<
         std::collections::HashMap<Panel, gpui_kit::WindowHandle<gpui_kit::component::Root>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The workspace inside each tool window, so a command can configure the
+    /// page (find vs. select mode, video sub-page) after raising the window.
+    static PANEL_VIEWS: std::cell::RefCell<
+        std::collections::HashMap<Panel, gpui_kit::WeakEntity<Workspace>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 

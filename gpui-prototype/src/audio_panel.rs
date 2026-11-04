@@ -193,6 +193,7 @@ pub struct AudioPanel {
     pub finish_drag: bool,
     pub drag_button: Option<MouseButton>,
     pub drag_moved: bool,
+    pub drag_origin_x: Pixels,
     pub snap_inverted: bool,
     pub pan_drag: Option<PanDrag>,
 }
@@ -215,6 +216,7 @@ impl AudioPanel {
             finish_drag: false,
             drag_button: None,
             drag_moved: false,
+            drag_origin_x: px(0.),
             snap_inverted: false,
             pan_drag: None,
         }
@@ -308,7 +310,7 @@ impl AudioPanel {
                         || cached.span != key.span
                         || cached.height != key.height;
                     let distance = (tile.start + cached.span / 2 - center).abs();
-                    (!stale, distance)
+                    (stale, distance)
                 })
                 .map(|(index, _)| index);
             let Some(index) = worst else { break };
@@ -710,6 +712,7 @@ impl AudioPanel {
                     let ms = view.audio.time_at(event.position.x, &view.snapshot.audio);
                     view.audio.snap_inverted = event.modifiers.shift;
                     view.audio.drag_button = Some(event.button);
+                    view.audio.drag_origin_x = event.position.x;
                     view.begin_audio_drag(
                         ms,
                         event.button == MouseButton::Right,
@@ -722,6 +725,11 @@ impl AudioPanel {
             .on_mouse_move(
                 cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
                     if !view.audio.dragging || event.pressed_button != view.audio.drag_button {
+                        return;
+                    }
+                    if !view.audio.drag_moved
+                        && f32::from(event.position.x - view.audio.drag_origin_x).abs() < 3.
+                    {
                         return;
                     }
                     view.audio.drag_moved = true;

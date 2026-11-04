@@ -1059,6 +1059,11 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			if (line.Id != id) continue;
 			selected.insert(&line);
 			context->selectionController->SetSelectionAndActive(std::move(selected), &line);
+			if (auto seek = object.find("double_click"); seek != object.end()
+				&& static_cast<bool const&>(seek->second)
+				&& OPT_GET("Video/Seek On Double Click")->GetBool()
+				&& context->project->VideoProvider())
+				context->videoController->JumpToTime(line.Start);
 			return R"({"ok":true})";
 		}
 		return R"({"ok":false,"error":"line no longer exists"})";
