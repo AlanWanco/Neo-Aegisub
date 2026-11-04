@@ -1,4 +1,4 @@
-use gpui_kit::base::{Disableable, Slider as BaseSlider, SliderTrack};
+use gpui_kit::base::{Disableable, Slider as BaseSlider, SliderIndicator, SliderTrack};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::{
     StyledExt, Theme,
@@ -104,6 +104,21 @@ impl VideoTimeline {
                             cx.notify();
                         }
                     }))
+                    // `BaseSlider` converts a pointer position to a value
+                    // through `SliderState::bounds`, and only `SliderIndicator`
+                    // records those bounds at prepaint. Without it the bounds
+                    // stay zero, every click divides by zero and the seek snaps
+                    // to frame 0 with an invisible (NaN) fill, so the indicator
+                    // stays here as the invisible value-mapping surface even
+                    // though the track and knob are painted below by hand.
+                    .child(
+                        SliderIndicator::new(&slider)
+                            .absolute()
+                            .left(px(5.))
+                            .right(px(5.))
+                            .top_0()
+                            .bottom_0(),
+                    )
                     .child(
                         BaseSlider::new(&slider)
                             .disabled(!enabled)
