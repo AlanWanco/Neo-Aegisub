@@ -7830,6 +7830,8 @@ impl Workspace {
         } else {
             p.muted
         };
+        // The seek bar is not built here: `Timeline::render` owns it so it can
+        // sit on the seam between this readout and the transport row.
         div()
             .v_flex()
             .w_full()
@@ -7892,9 +7894,6 @@ impl Workspace {
                         .absolute()
                         .size_full(),
                     )
-                    .when(self.snapshot.video, |v| {
-                        v.child(self.timeline.scrubber(&self.snapshot, cx))
-                    })
                     .when(!has_image, |v| {
                         v.child(
                             div()
@@ -7961,13 +7960,17 @@ impl Workspace {
                     }),
             )
             .child(
+                // Frame and scaling readout; the seek bar rides on its lower
+                // border, owned by the transport block that follows.
                 div()
                     .h_flex()
                     .justify_between()
                     .px_3()
                     .py_2()
-                    .bg(stage_bg)
                     .text_xs()
+                    .bg(stage_bg)
+                    .border_b_1()
+                    .border_color(p.divider)
                     .text_color(stage_text)
                     .child(status)
                     .when(f32::from(window.viewport_size().width) > 1100., |v| {
