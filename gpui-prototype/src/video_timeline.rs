@@ -145,15 +145,19 @@ impl VideoTimeline {
                                 gpui_kit::ElementId::from("video-scrubber-thickness"),
                                 gpui_kit::SpringAnimation::new(SCRUB_SPRING).to(target),
                                 move |layer, at| {
+                                    // The bottom edge stays on the seam and the
+                                    // bar grows upward, so thickening reads as
+                                    // the line lifting rather than swelling both
+                                    // ways into the readout and transport rows.
+                                    const BASE: f32 = 9.5;
                                     let track = 3. + 3. * at;
-                                    let knob = 8. + 3. * at;
                                     layer
                                         .child(
                                             div()
                                                 .absolute()
                                                 .left_0()
                                                 .right_0()
-                                                .top(px(8. - track / 2.))
+                                                .top(px(BASE - track))
                                                 .h(px(track))
                                                 .rounded_full()
                                                 .bg(groove)
@@ -169,12 +173,17 @@ impl VideoTimeline {
                                                 ),
                                         )
                                         .child(
+                                            // A playhead tick, not a dot: a short
+                                            // vertical stroke that stands proud of
+                                            // the bar. It shares the fill's colour
+                                            // so the two read as one needle.
                                             div()
                                                 .absolute()
                                                 .left(gpui_kit::relative(end))
-                                                .top(px(8. - knob / 2.))
-                                                .ml(px(-knob / 2.))
-                                                .size(px(knob))
+                                                .top(px(3.))
+                                                .ml(px(-1.))
+                                                .w(px(2.))
+                                                .h(px(10.))
                                                 .rounded_full()
                                                 .bg(accent),
                                         )

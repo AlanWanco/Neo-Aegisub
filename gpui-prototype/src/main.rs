@@ -1166,6 +1166,10 @@ struct Workspace {
     preview_width_px: std::cell::Cell<f32>,
     frame_request_inflight: bool,
     frame_request_generation: u64,
+    /// Frame the in-flight picture request is for. A seek moves the decoder
+    /// before the host has pushed a snapshot, so the request has to name its
+    /// own target instead of reading `snapshot.frame` (a round trip behind).
+    seek_target: Option<i64>,
     /// Playback fetches frames from a background loop instead of the UI thread:
     /// the host only hands a frame to a client that is already waiting, so the
     /// next request has to leave the moment the previous answer lands.
@@ -1634,6 +1638,7 @@ impl Workspace {
             preview_width_px: std::cell::Cell::new(0.),
             frame_request_inflight: false,
             frame_request_generation: 0,
+            seek_target: None,
             frame_pump: Arc::new(FramePump::default()),
             video_epoch: 0,
             list_scroll_handle: gpui_kit::UniformListScrollHandle::new(),
@@ -1808,6 +1813,7 @@ impl Workspace {
             self.clear_frame_image(cx);
             self.frame_request_generation += 1;
             self.frame_request_inflight = false;
+            self.seek_target = None;
         }
         self.video_epoch = snapshot.video_epoch;
         // Keep the last complete frame visible until its replacement arrives.
@@ -1826,6 +1832,7 @@ impl Workspace {
             self.clear_frame_image(cx);
             self.frame_request_generation += 1;
             self.frame_request_inflight = false;
+            self.seek_target = None;
         }
         self.snapshot = snapshot;
         if command_state_changed {
@@ -4416,7 +4423,13 @@ impl Workspace {
     }
 
     fn flush_video_seek(&mut self, cx: &mut Context<Self>) {
-        if self.timeline.seeking || !self.snapshot.video {
+        // One preview at a time. A seek restarts the decoder at the previous
+        // keyframe, so issuing the next one while the last picture is still
+        // being produced throws that work away: a pointer moving at 60 Hz then
+        // never gets a frame out and the picture trails the pointer by the
+        // keyframe distance. The newest position waits in `pending_frame` and
+        // is flushed by the reply that ends the current cycle.
+        if self.timeline.seeking || self.frame_request_inflight || !self.snapshot.video {
             return;
         }
         let Some(frame) = self.timeline.pending_frame.take() else {
@@ -4426,6 +4439,7 @@ impl Workspace {
             return;
         };
         self.timeline.seeking = true;
+        self.seek_target = Some(frame);
         let bridge = self.bridge.clone();
         let weak = cx.weak_entity();
         cx.spawn(async move |_, cx| {
@@ -4433,12 +4447,13 @@ impl Workspace {
                 invoke_weak(&bridge, &weak, cx, json!({"op":"seek", "frame":frame})).await;
             let _ = weak.update(cx, |view, cx| {
                 view.timeline.seeking = false;
-                // A drag overwrites pending_frame with a newer position; asking
-                // for this one would decode a frame nobody displays.
-                if succeeded && view.timeline.pending_frame.is_none() {
-                    view.refresh_frame(cx);
+                // The seek only moves the decoder; the picture for it is the
+                // next request. `refresh_frame` names this frame itself rather
+                // than waiting for the host to push it back in a snapshot.
+                if !succeeded {
+                    view.seek_target = None;
                 }
-                view.flush_video_seek(cx);
+                view.refresh_frame(cx);
             });
         })
         .detach();
@@ -6195,21 +6210,29 @@ impl Workspace {
             Ordering::Relaxed,
         );
         if self.snapshot.playing {
+            // Playback names its own frames; a leftover seek target would ask
+            // for a stale position the next time playback stops.
+            self.seek_target = None;
             self.start_frame_pump(cx);
             return;
         }
+        // A seek moves the decoder before the host pushes its snapshot, so the
+        // request names the frame it is for instead of reading `snapshot.frame`.
+        let request_frame = self.seek_target.unwrap_or(self.snapshot.frame);
         // Keeping the previous image up while the replacement is fetched stops
         // visual drags from flashing the placeholder on every step.
-        if self.frame_request_inflight
-            || (self.frame_image_frame == self.snapshot.frame
-                && self.frame_image_revision == self.snapshot.revision)
+        if self.frame_request_inflight {
+            return;
+        }
+        if self.frame_image_frame == request_frame
+            && self.frame_image_revision == self.snapshot.revision
         {
+            self.seek_target = None;
             return;
         }
         self.frame_request_inflight = true;
         self.frame_request_generation += 1;
         let generation = self.frame_request_generation;
-        let request_frame = self.snapshot.frame;
         let request_epoch = self.video_epoch;
         let request_revision = self.snapshot.revision;
         let bridge = self.bridge.clone();
@@ -6239,6 +6262,7 @@ impl Workspace {
                             let _ = view.update(cx, |view, cx| {
                                 if view.frame_request_generation == generation {
                                     view.frame_request_inflight = false;
+                                    view.flush_video_seek(cx);
                                     view.refresh_frame(cx);
                                 }
                             });
@@ -6254,6 +6278,8 @@ impl Workspace {
                             let _ = view.update(cx, |view, cx| {
                                 if view.frame_request_generation != generation { return; }
                                 view.frame_request_inflight = false;
+                                view.seek_target = None;
+                                view.flush_video_seek(cx);
                                 if video_gone {
                                     view.apply_snapshot(Snapshot { video: false, ..view.snapshot.clone() }, cx);
                                 }
@@ -6275,6 +6301,8 @@ impl Workspace {
                                 let _ = view.update(cx, |view, cx| {
                                     if view.frame_request_generation == generation {
                                         view.frame_request_inflight = false;
+                                        view.seek_target = None;
+                                        view.flush_video_seek(cx);
                                     }
                                     view.status = format!("视频帧解码失败：{error}");
                                     cx.notify();
@@ -6292,24 +6320,46 @@ impl Workspace {
                             // Leaving it set after a still frame kept every later
                             // seek and step from asking for its picture.
                             view.frame_request_inflight = false;
+                            let expected = view.seek_target.unwrap_or(view.snapshot.frame);
                             let stale = !view.snapshot.video
                                 || view.video_epoch != request_epoch
                                 // Request order stays monotonic across backward
                                 // seeks; frame numbers do not, so only order is
                                 // compared here.
                                 || generation < view.frame_image_generation
-                                || (!view.snapshot.playing && frame != view.snapshot.frame);
+                                || (!view.snapshot.playing && frame != expected);
                             if stale {
+                                // A newer pointer position supersedes this
+                                // picture; ask for that one instead of redoing
+                                // the frame nobody is going to see.
+                                view.seek_target = None;
+                                view.flush_video_seek(cx);
                                 view.refresh_frame(cx);
                                 return;
                             }
+                            if view.seek_target == Some(frame) {
+                                view.seek_target = None;
+                            }
                             view.replace_frame_image(cx, image, frame, request_revision);
+                            // The drag may have moved on while this picture was
+                            // decoded; one cycle at a time, newest position next.
+                            view.flush_video_seek(cx);
                             cx.notify();
                         });
                     }
                 }
                 Err(error) => {
-                    if let Some(view) = weak.upgrade() { let _ = view.update(cx, |view, cx| { if view.frame_request_generation == generation { view.frame_request_inflight = false; view.status = format!("获取视频帧失败：{error}"); cx.notify(); } }); }
+                    if let Some(view) = weak.upgrade() {
+                        let _ = view.update(cx, |view, cx| {
+                            if view.frame_request_generation == generation {
+                                view.frame_request_inflight = false;
+                                view.seek_target = None;
+                                view.flush_video_seek(cx);
+                            }
+                            view.status = format!("获取视频帧失败：{error}");
+                            cx.notify();
+                        });
+                    }
                 }
             }
         }).detach();

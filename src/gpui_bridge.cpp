@@ -142,6 +142,10 @@ constexpr size_t max_message_size = 2 * 1024 * 1024;
 constexpr auto frame_retry_interval = std::chrono::milliseconds(1500);
 /// Re-requests before the bridge answers with an explicit timeout error.
 constexpr int max_frame_retries = 3;
+/// How long a request the bridge already issued counts as still on its way.
+/// The duplicate this suppresses arrives within a few milliseconds of the
+/// seek that issued it, so the window only needs to outlast the round trip.
+constexpr auto pending_request_window = std::chrono::milliseconds(500);
 
 
 std::string make_token() {
@@ -338,6 +342,15 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 	std::shared_ptr<VideoFrame> last_decoded;
 	int last_decoded_frame = -1;
 	uint64_t last_decoded_epoch = 0;
+	/// The frame a request already asked the provider for and that has not
+	/// arrived yet. A seek asks for its frame, then the frontend's frame
+	/// request for the same number arrives before the decode finishes;
+	/// re-requesting it would cancel the running decode and restart from the
+	/// previous keyframe, so a drag would pay for every step twice. The stamp
+	/// keeps the note from outliving the decode it describes when a request
+	/// is dropped without a frame arriving.
+	int pending_frame_request = -1;
+	std::chrono::steady_clock::time_point pending_frame_request_at{};
 	/// When the frontend last asked for a playback frame. The cache is only
 	/// refreshed while those requests keep coming.
 	std::chrono::steady_clock::time_point last_playback_poll{};
@@ -356,6 +369,10 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			// so a cached still picture stops being authoritative.
 			cached_frame.valid = false;
 			last_decoded.reset();
+			// The re-render supersedes the decode in flight, which then never
+			// arrives; forgetting it lets the next request ask again instead
+			// of waiting for the retry timer.
+			pending_frame_request = -1;
 			if (type == AssFile::COMMIT_NEW || (type & (AssFile::COMMIT_STYLES | AssFile::COMMIT_SCRIPTINFO)))
 				++details_revision;
 		});
@@ -377,6 +394,20 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		DetachClient();
 	}
 
+	/// Asks the provider for one frame and records that it is on its way.
+	void RequestProviderFrame(AsyncVideoProvider *provider, int frame) {
+		pending_frame_request = frame;
+		pending_frame_request_at = std::chrono::steady_clock::now();
+		provider->RequestFrame(frame, context->videoController->TimeAtFrame(frame));
+	}
+
+	/// A request the bridge already issued for this frame may still be
+	/// decoding. Asking again would cancel it, so the caller holds off.
+	bool FrameRequestPending(int frame) const {
+		return pending_frame_request == frame
+			&& std::chrono::steady_clock::now() - pending_frame_request_at < pending_request_window;
+	}
+
 	void Stop() {
 		frame_poll.Stop();
 		for (auto it = clients.begin(); it != clients.end();) {
@@ -393,6 +424,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		if (context && context->videoController)
 			context->videoController->Unbind(EVT_FRAME_READY, &Impl::OnFrameReady, this);
 		observed_provider = nullptr;
+		pending_frame_request = -1;
 		++video_epoch;
 		port = 0;
 		if (sockets_initialized) {
@@ -438,8 +470,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 				client.awaiting_current = true;
 				client.waiting_since = now;
 				client.frame_retries = 0;
-				if (!playing)
-					provider_now->RequestFrame(frame_number, context->videoController->TimeAtFrame(frame_number));
+				if (!playing) RequestProviderFrame(provider_now, frame_number);
 				continue;
 			}
 			// A subtitle update can supersede the request (ProcAsync drops
@@ -453,8 +484,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			}
 			++client.frame_retries;
 			client.waiting_since = now;
-			if (!playing)
-				provider_now->RequestFrame(frame_number, context->videoController->TimeAtFrame(frame_number));
+			if (!playing) RequestProviderFrame(provider_now, frame_number);
 		}
 		for (auto socket : timed_out) {
 			auto it = clients.find(socket);
@@ -553,6 +583,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		last_decoded = event.frame;
 		last_decoded_frame = frame_number;
 		last_decoded_epoch = video_epoch;
+		if (frame_number == pending_frame_request) pending_frame_request = -1;
 		for (auto const& [socket, client] : clients) {
 			bool const matching_still_frame = client.requested_frame == current_frame
 				&& event.frame_number == current_frame;
@@ -947,8 +978,12 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		if (auto width_it = object.find("max_width"); width_it != object.end())
 			client.max_width = static_cast<int>(static_cast<json::Integer const&>(width_it->second));
 		bool const playing = context->videoController->IsPlaying();
-		if (playing)
+		if (playing) {
 			last_playback_poll = std::chrono::steady_clock::now();
+			// Playback advances the decoder itself; a still request noted
+			// before it started says nothing about what is decoding now.
+			pending_frame_request = -1;
+		}
 		// Answer from the copy already encoded for this width whenever it is the
 		// frame being asked for. While playing the decoder advances on its own
 		// schedule, so waiting for its next frame would put a whole frame
@@ -1000,8 +1035,8 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		client.provider = provider;
 		// Playback already requests every advancing frame. Do not enqueue a
 		// competing request which can cancel the decoder's current work.
-		if (!context->videoController->IsPlaying())
-			provider->RequestFrame(frame_number, context->videoController->TimeAtFrame(frame_number));
+		if (!context->videoController->IsPlaying() && !FrameRequestPending(frame_number))
+			RequestProviderFrame(provider, frame_number);
 	}
 
 	std::string Select(json::Object const& object) {
@@ -1149,7 +1184,12 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			return R"({"ok":false,"error":"missing frame"})";
 		int64_t const frame = static_cast<json::Integer const&>(frame_it->second);
 		if (!context->project->VideoProvider()) return R"({"ok":false,"error":"no video is loaded"})";
-		context->videoController->JumpToFrame(static_cast<int>(std::clamp<int64_t>(frame, 0, context->project->VideoProvider()->GetFrameCount() - 1)));
+		int const target = static_cast<int>(std::clamp<int64_t>(frame, 0, context->project->VideoProvider()->GetFrameCount() - 1));
+		context->videoController->JumpToFrame(target);
+		// JumpToFrame asks the provider for the frame itself; remember it so
+		// the frame request that follows does not ask a second time.
+		pending_frame_request = target;
+		pending_frame_request_at = std::chrono::steady_clock::now();
 		return R"({"ok":true})";
 	}
 
