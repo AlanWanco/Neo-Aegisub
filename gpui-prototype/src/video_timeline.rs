@@ -162,13 +162,29 @@ impl VideoTimeline {
                                                 .rounded_full()
                                                 .bg(groove)
                                                 .child(
+                                                    // Square where it meets the
+                                                    // playhead: only the bar's
+                                                    // outer ends carry the
+                                                    // rounding, so the fill stops
+                                                    // flat against the needle
+                                                    // instead of bulging into it.
                                                     div()
                                                         .absolute()
                                                         .left_0()
                                                         .top_0()
                                                         .h_full()
                                                         .w(gpui_kit::relative(end))
-                                                        .rounded_full()
+                                                        .rounded_tl(px(track / 2.))
+                                                        .rounded_bl(px(track / 2.))
+                                                        // At the very end the fill
+                                                        // *is* the bar's right end,
+                                                        // so it takes the rounding
+                                                        // back rather than leaving a
+                                                        // square tip.
+                                                        .when(end > 0.995, |d| {
+                                                            d.rounded_tr(px(track / 2.))
+                                                                .rounded_br(px(track / 2.))
+                                                        })
                                                         .bg(accent),
                                                 ),
                                         )
