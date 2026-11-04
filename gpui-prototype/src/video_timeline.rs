@@ -1,9 +1,9 @@
-use gpui_kit::base::Disableable;
+use gpui_kit::base::{Disableable, Slider as BaseSlider, SliderIndicator, SliderTrack};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::{
     StyledExt, Theme,
     button::{Button, ButtonVariants},
-    slider::{Slider, SliderEvent, SliderState},
+    slider::{SliderEvent, SliderState},
 };
 use gpui_kit::{Context, Entity, IntoElement, Subscription, div, prelude::*, px};
 use serde_json::json;
@@ -16,6 +16,7 @@ pub struct VideoTimeline {
     pub dragging: bool,
     pub seeking: bool,
     pub pending_frame: Option<i64>,
+    pub resume_after_drag: bool,
     _events: Subscription,
 }
 
@@ -25,6 +26,13 @@ impl VideoTimeline {
         let events = cx.subscribe(&slider, |view, _, event: &SliderEvent, cx| {
             let value = match event {
                 SliderEvent::Change(value) => {
+                    // Scrubbing over a running decoder would trade the preview
+                    // frame for the playback frame it keeps producing, so the
+                    // preview only follows the pointer while playback is paused.
+                    if !view.timeline.dragging && view.snapshot.playing {
+                        view.timeline.resume_after_drag = true;
+                        view.invoke(json!({"op":"command", "name":"video/stop"}), cx);
+                    }
                     view.timeline.dragging = true;
                     value.start()
                 }
@@ -42,8 +50,74 @@ impl VideoTimeline {
             dragging: false,
             seeking: false,
             pending_frame: None,
+            resume_after_drag: false,
             _events: events,
         }
+    }
+
+    /// The scrub bar sits on the bottom edge of the picture, the way a media
+    /// player overlays it, instead of taking a row in the control strip.
+    pub fn scrubber(&self, snapshot: &Snapshot, cx: &mut Context<Workspace>) -> impl IntoElement {
+        let p = Palette::current(cx);
+        let progress = self.slider.read(cx).percentage();
+        let enabled = snapshot.video;
+        div()
+            .id("video-scrubber")
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(16.))
+            .flex()
+            .items_end()
+            .child(
+                BaseSlider::new(&self.slider)
+                    .disabled(!enabled)
+                    .w_full()
+                    .h(px(16.))
+                    .px(px(5.))
+                    // The thumb overhangs the 3 px track, so the bar floats a
+                    // few pixels up instead of being clipped by the surface.
+                    .pb(px(4.))
+                    .flex()
+                    .items_end()
+                    .child(
+                        SliderTrack::new(&self.slider)
+                            .disabled(!enabled)
+                            .w_full()
+                            .h(px(16.))
+                            .flex()
+                            .items_end()
+                            .child(
+                                SliderIndicator::new(&self.slider)
+                                    .relative()
+                                    .w_full()
+                                    .h(px(3.))
+                                    .rounded_full()
+                                    .bg(gpui_kit::rgba(0xffffff2e))
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .top_0()
+                                            .h_full()
+                                            .w(gpui_kit::relative(progress.end))
+                                            .rounded_full()
+                                            .bg(p.accent),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left(gpui_kit::relative(progress.end))
+                                            .top(px(-2.5))
+                                            .ml(px(-4.))
+                                            .size(px(8.))
+                                            .rounded_full()
+                                            .bg(p.accent),
+                                    ),
+                            ),
+                    ),
+            )
     }
 
     pub fn render(&self, snapshot: &Snapshot, cx: &mut Context<Workspace>) -> impl IntoElement {
@@ -138,31 +212,20 @@ impl VideoTimeline {
             .border_t_1()
             .border_color(p.divider)
             .child(
-                div()
-                    .h_flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .font_family(Theme::global(cx).mono_font_family.clone())
-                            .text_size(px(11.))
-                            .text_color(p.muted)
-                            .child(format!(
-                                "{} / {} · 帧 {} / {} · {:.2}×",
-                                format_time(snapshot.video_time),
-                                format_time(snapshot.video_duration),
-                                snapshot.frame,
-                                (snapshot.frame_count - 1).max(0),
-                                snapshot.playback_rate
-                            )),
-                    )
-                    .child(
-                        Slider::new(&self.slider)
-                            .disabled(!snapshot.video)
-                            .flex_1()
-                            .min_w(px(120.)),
-                    ),
+                div().h_flex().flex_wrap().items_center().gap_3().child(
+                    div()
+                        .font_family(Theme::global(cx).mono_font_family.clone())
+                        .text_size(px(11.))
+                        .text_color(p.muted)
+                        .child(format!(
+                            "{} / {} · 帧 {} / {} · {:.2}×",
+                            format_time(snapshot.video_time),
+                            format_time(snapshot.video_duration),
+                            snapshot.frame,
+                            (snapshot.frame_count - 1).max(0),
+                            snapshot.playback_rate
+                        )),
+                ),
             )
             .child(
                 controls.child(

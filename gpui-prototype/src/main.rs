@@ -4420,6 +4420,9 @@ impl Workspace {
             return;
         }
         let Some(frame) = self.timeline.pending_frame.take() else {
+            if !self.timeline.dragging && std::mem::take(&mut self.timeline.resume_after_drag) {
+                self.invoke(json!({"op":"command", "name":"video/play"}), cx);
+            }
             return;
         };
         self.timeline.seeking = true;
@@ -4430,7 +4433,9 @@ impl Workspace {
                 invoke_weak(&bridge, &weak, cx, json!({"op":"seek", "frame":frame})).await;
             let _ = weak.update(cx, |view, cx| {
                 view.timeline.seeking = false;
-                if succeeded {
+                // A drag overwrites pending_frame with a newer position; asking
+                // for this one would decode a frame nobody displays.
+                if succeeded && view.timeline.pending_frame.is_none() {
                     view.refresh_frame(cx);
                 }
                 view.flush_video_seek(cx);
@@ -6268,6 +6273,9 @@ impl Workspace {
                         Err(error) => {
                             if let Some(view) = weak.upgrade() {
                                 let _ = view.update(cx, |view, cx| {
+                                    if view.frame_request_generation == generation {
+                                        view.frame_request_inflight = false;
+                                    }
                                     view.status = format!("视频帧解码失败：{error}");
                                     cx.notify();
                                 });
@@ -6277,12 +6285,24 @@ impl Workspace {
                     };
                     if let Some(view) = weak.upgrade() {
                         let _ = view.update(cx, |view, cx| {
-                            if !view.snapshot.video || view.video_epoch != request_epoch { return; }
-                            // Request order remains monotonic across backward seeks.
-                            // Frame numbers do not: rejecting a smaller frame freezes
-                            // resumed playback until it catches the previous position.
-                            if generation < view.frame_image_generation { return; }
-                            if !view.snapshot.playing && frame != view.snapshot.frame { return; }
+                            if view.frame_request_generation != generation {
+                                return;
+                            }
+                            // Any answered request ends the in-flight window.
+                            // Leaving it set after a still frame kept every later
+                            // seek and step from asking for its picture.
+                            view.frame_request_inflight = false;
+                            let stale = !view.snapshot.video
+                                || view.video_epoch != request_epoch
+                                // Request order stays monotonic across backward
+                                // seeks; frame numbers do not, so only order is
+                                // compared here.
+                                || generation < view.frame_image_generation
+                                || (!view.snapshot.playing && frame != view.snapshot.frame);
+                            if stale {
+                                view.refresh_frame(cx);
+                                return;
+                            }
                             view.replace_frame_image(cx, image, frame, request_revision);
                             cx.notify();
                         });
@@ -7872,6 +7892,9 @@ impl Workspace {
                         .absolute()
                         .size_full(),
                     )
+                    .when(self.snapshot.video, |v| {
+                        v.child(self.timeline.scrubber(&self.snapshot, cx))
+                    })
                     .when(!has_image, |v| {
                         v.child(
                             div()

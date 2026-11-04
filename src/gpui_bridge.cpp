@@ -332,6 +332,12 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		uint64_t epoch = 0;
 		bool valid = false;
 	} cached_frame;
+	/// The frame the host decoded last. A seek makes the controller request that
+	/// frame on its own, and the frontend asks for the same one right after;
+	/// encoding this copy skips a second seek-and-decode of the source.
+	std::shared_ptr<VideoFrame> last_decoded;
+	int last_decoded_frame = -1;
+	uint64_t last_decoded_epoch = 0;
 	/// When the frontend last asked for a playback frame. The cache is only
 	/// refreshed while those requests keep coming.
 	std::chrono::steady_clock::time_point last_playback_poll{};
@@ -346,6 +352,10 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		Bind(wxEVT_TIMER, &Impl::OnFramePoll, this, frame_poll.GetId());
 		commit_connection = context->ass->AddCommitListener([this](int type, const AssDialogue *) {
 			++revision;
+			// A commit can change the subtitles burned into the current frame,
+			// so a cached still picture stops being authoritative.
+			cached_frame.valid = false;
+			last_decoded.reset();
 			if (type == AssFile::COMMIT_NEW || (type & (AssFile::COMMIT_STYLES | AssFile::COMMIT_SCRIPTINFO)))
 				++details_revision;
 		});
@@ -540,6 +550,9 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		int const current_frame = context->videoController->GetFrameN();
 		bool const playing = context->videoController->IsPlaying();
 		int const frame_number = event.frame_number;
+		last_decoded = event.frame;
+		last_decoded_frame = frame_number;
+		last_decoded_epoch = video_epoch;
 		for (auto const& [socket, client] : clients) {
 			bool const matching_still_frame = client.requested_frame == current_frame
 				&& event.frame_number == current_frame;
@@ -578,8 +591,9 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			    << ",\"width\":" << width << ",\"height\":" << height
 			    << ",\"image\":" << quote_json(encoded) << '}';
 			BeginResponse(socket, it->second, out.str());
-			if (playing)
-				cached_frame = {std::move(encoded), frame_number, width, height, max_width, video_epoch, true};
+			// A still frame is cached too: the frontend asks again right after
+			// a seek, and answering from the copy avoids decoding it twice.
+			cached_frame = {std::move(encoded), frame_number, width, height, max_width, video_epoch, true};
 		}
 		// Playback requests are answered from the cached copy, so a ready frame
 		// usually arrives with nobody waiting. Refresh the copy anyway, or the
@@ -935,13 +949,17 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		bool const playing = context->videoController->IsPlaying();
 		if (playing)
 			last_playback_poll = std::chrono::steady_clock::now();
-		// While playing, the decoder advances on its own schedule; waiting for
-		// its next frame would put a whole frame interval between the request
-		// and the reply. Answer from the copy already encoded for this width so
-		// the frontend sees the newest frame as soon as it exists.
-		if (playing && cached_frame.valid
-			&& cached_frame.max_width == client.max_width && cached_frame.epoch == video_epoch) {
-			HostTrace("hit frame=%d", cached_frame.frame);
+		// Answer from the copy already encoded for this width whenever it is the
+		// frame being asked for. While playing the decoder advances on its own
+		// schedule, so waiting for its next frame would put a whole frame
+		// interval between request and reply; for a still frame the copy is what
+		// the seek just decoded, and reusing it skips a second full decode.
+		bool const cached_now = cached_frame.valid
+			&& cached_frame.max_width == client.max_width
+			&& cached_frame.epoch == video_epoch
+			&& (playing || cached_frame.frame == frame_number);
+		if (cached_now) {
+			HostTrace("hit frame=%d playing=%d", cached_frame.frame, playing ? 1 : 0);
 			std::ostringstream out;
 			out << "{\"ok\":true,\"video\":true,\"frame\":" << cached_frame.frame
 			    << ",\"request\":" << request_id
@@ -950,6 +968,27 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			    << ",\"image\":\"" << cached_frame.jpeg << "\"}";
 			BeginResponse(socket, client, out.str());
 			return;
+		}
+		// A seek already made the controller decode this exact frame; encoding
+		// that copy is a memcpy plus JPEG instead of another decode of the
+		// source, which is what a drag over the timeline would otherwise pay
+		// on every step.
+		if (!playing && last_decoded && last_decoded_frame == frame_number && last_decoded_epoch == video_epoch) {
+			int width = 0;
+			int height = 0;
+			auto const encode_start = std::chrono::steady_clock::now();
+			std::string encoded = to_base64_jpeg(*last_decoded, context->videoController->GetAspectRatioValue(), client.max_width, width, height);
+			HostTrace("encode frame=%d width=%d bytes=%zu us=%lld reuse=1", frame_number, width, encoded.size(), static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start).count()));
+			if (!encoded.empty()) {
+				cached_frame = {encoded, frame_number, width, height, client.max_width, video_epoch, true};
+				std::ostringstream out;
+				out << "{\"ok\":true,\"video\":true,\"frame\":" << frame_number
+				    << ",\"request\":" << request_id
+				    << ",\"width\":" << width << ",\"height\":" << height
+				    << ",\"image\":" << quote_json(encoded) << '}';
+				BeginResponse(socket, client, out.str());
+				return;
+			}
 		}
 		client.waiting_for_frame = true;
 		client.waiting_since = std::chrono::steady_clock::now();
