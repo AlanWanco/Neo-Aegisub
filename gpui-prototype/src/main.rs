@@ -836,6 +836,16 @@ fn escape_line_breaks(text: String, soft: bool) -> String {
     text.replace('\n', if soft { "\\n" } else { "\\N" })
 }
 
+/// Whether a row survives the search box. Shared by the list and by the
+/// selection follower, which has to translate the active line's id into the
+/// same index the filtered list is showing.
+fn matches_subtitle_filter(line: &Line, lower_filter: &str) -> bool {
+    lower_filter.is_empty()
+        || line.text.to_lowercase().contains(lower_filter)
+        || line.actor.to_lowercase().contains(lower_filter)
+        || line.style.to_lowercase().contains(lower_filter)
+}
+
 fn hotkey_key(key: &str) -> String {
     match key {
         "backspace" => "Backspace".into(),
@@ -1176,6 +1186,13 @@ struct Workspace {
     frame_pump: Arc<FramePump>,
     video_epoch: u64,
     list_scroll_handle: gpui_kit::UniformListScrollHandle,
+    /// Row where a press-and-drag selection started, while the button is held.
+    grid_drag_anchor: Option<i64>,
+    /// Row the drag painted last, so a move inside one row selects nothing new.
+    grid_drag_row: i64,
+    /// Set when a pointer gesture picked rows, so the resulting snapshot leaves
+    /// the list where the user put it instead of pinning the row to the top.
+    follow_suppressed: bool,
     subtitle_filter_cache: Option<(u64, String, String, Arc<Vec<Line>>)>,
     subtitle_editor_height: f32,
     /// Fixed columns shown before the subtitle text column.
@@ -1642,6 +1659,9 @@ impl Workspace {
             frame_pump: Arc::new(FramePump::default()),
             video_epoch: 0,
             list_scroll_handle: gpui_kit::UniformListScrollHandle::new(),
+            grid_drag_anchor: None,
+            grid_drag_row: -1,
+            follow_suppressed: false,
             subtitle_filter_cache: None,
             subtitle_editor_height: 252.,
             subtitle_columns: vec![
@@ -1782,6 +1802,23 @@ impl Workspace {
             };
         }
         self.selected_line = selected;
+        // Timing moves the active row one line at a time, so the list keeps it
+        // pinned to the top: the rows coming up next stay under it instead of
+        // scrolling off the bottom edge. A pointer gesture in the grid is the
+        // one exception, since the row it picked has to stay where it was hit.
+        if active_changed && !self.follow_suppressed && selected >= 0 {
+            let filter = self.search.read(cx).value().to_lowercase();
+            if let Some(index) = snapshot
+                .lines
+                .iter()
+                .filter(|line| matches_subtitle_filter(line, &filter))
+                .position(|line| line.id == selected)
+            {
+                self.list_scroll_handle
+                    .scroll_to_item_strict(index, gpui_kit::ScrollStrategy::Top);
+            }
+        }
+        self.follow_suppressed = false;
         let media_changed = snapshot.video_epoch != self.video_epoch
             || snapshot.video != self.snapshot.video
             || snapshot.aspect != self.snapshot.aspect;
@@ -1889,25 +1926,16 @@ impl Workspace {
     }
 
     fn select_lines(&mut self, id: i64, extend: bool, toggle: bool, cx: &mut Context<Self>) {
+        if extend {
+            self.select_range(self.selected_line, id, cx);
+            return;
+        }
         let mut ids = if toggle {
             self.snapshot.selected.clone()
         } else {
             vec![]
         };
-        if extend {
-            if let (Some(anchor), Some(target)) = (
-                self.snapshot
-                    .lines
-                    .iter()
-                    .position(|line| line.id == self.selected_line),
-                self.snapshot.lines.iter().position(|line| line.id == id),
-            ) {
-                ids = self.snapshot.lines[anchor.min(target)..=anchor.max(target)]
-                    .iter()
-                    .map(|line| line.id)
-                    .collect();
-            }
-        } else if toggle {
+        if toggle {
             if ids.contains(&id) {
                 ids.retain(|selected| *selected != id);
             } else {
@@ -1928,6 +1956,31 @@ impl Workspace {
             ids[0]
         };
         self.invoke(json!({"op":"select", "id":active, "ids":ids}), cx);
+    }
+
+    /// Select every row between two ids in script order, with `target` active.
+    /// Press-and-drag in the grid passes the row the press landed on, which is
+    /// what makes a drag paint one contiguous block instead of a fresh range
+    /// from wherever the cursor happens to be.
+    fn select_range(&mut self, anchor: i64, target: i64, cx: &mut Context<Self>) {
+        let (Some(anchor_index), Some(target_index)) = (
+            self.snapshot
+                .lines
+                .iter()
+                .position(|line| line.id == anchor),
+            self.snapshot
+                .lines
+                .iter()
+                .position(|line| line.id == target),
+        ) else {
+            return;
+        };
+        let ids: Vec<i64> = self.snapshot.lines
+            [anchor_index.min(target_index)..=anchor_index.max(target_index)]
+            .iter()
+            .map(|line| line.id)
+            .collect();
+        self.invoke(json!({"op":"select", "id":target, "ids":ids}), cx);
     }
 
     /// Classify dropped files the same way the open dialogs do, so dragging a
@@ -8240,12 +8293,7 @@ impl Workspace {
                 .snapshot
                 .lines
                 .iter()
-                .filter(|line| {
-                    lower_filter.is_empty()
-                        || line.text.to_lowercase().contains(&lower_filter)
-                        || line.actor.to_lowercase().contains(&lower_filter)
-                        || line.style.to_lowercase().contains(&lower_filter)
-                })
+                .filter(|line| matches_subtitle_filter(line, &lower_filter))
                 .cloned()
                 .collect();
             self.subtitle_filter_cache = Some((
@@ -8836,6 +8884,16 @@ impl Workspace {
                     .relative()
                     .flex_1()
                     .min_h(px(90.))
+                    // A drag ends wherever the button is released, including on
+                    // the padding between rows, so the viewport clears it and
+                    // not just the row that started it.
+                    .capture_any_mouse_up(cx.listener(
+                        |view, _: &gpui_kit::MouseUpEvent, _, cx| {
+                            if view.grid_drag_anchor.take().is_some() {
+                                cx.notify();
+                            }
+                        },
+                    ))
                     .child(
                         // The grid needs its own width to decide whether the
                         // columns still fit, and layout only knows it here.
@@ -8935,6 +8993,12 @@ impl Workspace {
                                                     if focus_grid {
                                                         view.focus_handle.focus(window, cx);
                                                     }
+                                                    // The press both selects and arms a
+                                                    // drag, so sliding from here paints
+                                                    // a block starting on this row.
+                                                    view.grid_drag_anchor = Some(id);
+                                                    view.grid_drag_row = id;
+                                                    view.follow_suppressed = true;
                                                     view.select_lines(
                                                         id,
                                                         event.modifiers.shift,
@@ -8942,6 +9006,30 @@ impl Workspace {
                                                             || event.modifiers.platform,
                                                         cx,
                                                     );
+                                                });
+                                            }
+                                        })
+                                        .on_mouse_move({
+                                            let weak = weak.clone();
+                                            let id = line.id;
+                                            move |event: &gpui_kit::MouseMoveEvent, _, cx| {
+                                                let _ = weak.update(cx, |view, cx| {
+                                                    if event.pressed_button
+                                                        != Some(gpui_kit::MouseButton::Left)
+                                                    {
+                                                        view.grid_drag_anchor = None;
+                                                        return;
+                                                    }
+                                                    let Some(anchor) = view.grid_drag_anchor
+                                                    else {
+                                                        return;
+                                                    };
+                                                    if view.grid_drag_row == id {
+                                                        return;
+                                                    }
+                                                    view.grid_drag_row = id;
+                                                    view.follow_suppressed = true;
+                                                    view.select_range(anchor, id, cx);
                                                 });
                                             }
                                         })
