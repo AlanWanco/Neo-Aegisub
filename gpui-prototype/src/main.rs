@@ -7602,6 +7602,18 @@ impl Workspace {
         cx.stop_propagation();
     }
 
+    /// Raw text of the line being timed, tags and all: the audio strip shows it
+    /// the way the editor's "show original" line does, so the strip reads as
+    /// part of the script rather than as a rendered cue.
+    fn timed_line_text(&self) -> String {
+        self.snapshot
+            .lines
+            .iter()
+            .find(|line| line.id == self.selected_line)
+            .map(|line| line.text.clone())
+            .unwrap_or_default()
+    }
+
     fn render_player(
         &self,
         window: &Window,
@@ -9663,6 +9675,7 @@ impl Render for Workspace {
                 );
             // A visible video uses the left column on wide windows. Without video,
             // audio sits above the full-width subtitle editor and list.
+            let line_text = self.timed_line_text();
             let audio_strip = self
                 .audio
                 .render_compact(
@@ -9671,6 +9684,7 @@ impl Render for Workspace {
                     &self.snapshot.appearance,
                     self.audio_panel_height,
                     focus_area == KeyFocus::Audio,
+                    &line_text,
                     cx,
                 )
                 .into_any_element();

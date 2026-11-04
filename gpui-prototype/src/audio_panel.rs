@@ -367,6 +367,7 @@ impl AudioPanel {
         appearance: &crate::Appearance,
         height: f32,
         focused: bool,
+        line_text: &str,
         cx: &mut Context<Workspace>,
     ) -> impl IntoElement {
         let mut controls = div()
@@ -982,13 +983,22 @@ impl AudioPanel {
                     .font_semibold()
                     .child("音频波形"),
             )
+            // The line being timed, in the same plain form as the editor's
+            // "show original" line: raw text with its tags, one ellipsised
+            // line, so it reads as the script rather than as a rendered cue.
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
+                    .truncate()
+                    .text_sm()
+                    .text_color(crate::workspace_theme::Palette::current(cx).muted)
+                    .child(line_text.to_string()),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
                     .whitespace_nowrap()
-                    .text_ellipsis()
                     .text_size(px(11.))
                     .text_color(Theme::global(cx).muted_foreground)
                     .child(hint),
