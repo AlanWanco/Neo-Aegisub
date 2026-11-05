@@ -36,7 +36,6 @@
 #include "audio_player_portaudio.h"
 
 #include "audio_controller.h"
-#include "compat.h"
 #include "options.h"
 #include "utils.h"
 
@@ -258,15 +257,15 @@ int64_t PortAudioPlayer::GetCurrentPosition() {
 	return real;
 }
 
-wxArrayString PortAudioPlayer::GetOutputDevices() {
-	wxArrayString list;
+std::vector<std::string> PortAudioPlayer::GetOutputDevices() {
+	std::vector<std::string> list;
 	list.push_back("Default");
 
 	try {
 		PortAudioPlayer player(nullptr);
 
 		for (auto it = player.devices.begin(); it != player.devices.end(); ++it)
-			list.push_back(to_wx(it->first));
+			list.push_back(it->first);
 	}
 	catch (AudioPlayerOpenError const&) {
 		// No output devices, just return the list with only Default
@@ -279,7 +278,7 @@ bool PortAudioPlayer::IsPlaying() {
 	return !!Pa_IsStreamActive(stream);
 }
 
-std::unique_ptr<AudioPlayer> CreatePortAudioPlayer(agi::AudioProvider *provider, wxWindow *) {
+std::unique_ptr<AudioPlayer> CreatePortAudioPlayer(agi::AudioProvider *provider) {
 	return std::make_unique<PortAudioPlayer>(provider);
 }
 

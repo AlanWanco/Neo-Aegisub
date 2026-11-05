@@ -15,13 +15,15 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "font_file_lister.h"
+#include "localisation.h"
 
 #include <libaegisub/charset_conv_win.h>
 #include <libaegisub/log.h>
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <fontconfig/fontconfig.h>
-#include <wx/intl.h>
+
+#include <set>
 
 namespace {
 bool pattern_matches(FcPattern *pat, const char *field, std::string const& name) {
@@ -118,4 +120,17 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 
 	ret.paths.emplace_back((const char *)file);
 	return ret;
+}
+
+std::vector<std::string> GetFontFamilies() {
+	std::set<std::string> families;
+	FcFontSet *fonts = FcConfigGetFonts(FcConfigGetCurrent(), FcSetSystem);
+	if (fonts) {
+		for (int i = 0; i < fonts->nfont; ++i) {
+			FcChar8 *family = nullptr;
+			if (FcPatternGetString(fonts->fonts[i], FC_FAMILY, 0, &family) == FcResultMatch && family)
+				families.emplace(reinterpret_cast<char *>(family));
+		}
+	}
+	return {families.begin(), families.end()};
 }

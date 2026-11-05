@@ -19,6 +19,8 @@
 #include <libaegisub/charset_conv_win.h>
 
 #include <dwrite.h>
+
+#include <set>
 #include <wchar.h>
 #include <windowsx.h>
 
@@ -207,4 +209,21 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	ret.paths.push_back(agi::fs::path(normalized_path));
 
 	return ret;
+}
+
+std::vector<std::string> GetFontFamilies() {
+	std::set<std::string> families;
+	HDC dc = GetDC(nullptr);
+	if (dc) {
+		LOGFONTW font = {};
+		font.lfCharSet = DEFAULT_CHARSET;
+		EnumFontFamiliesExW(dc, &font, [](LOGFONTW const *lplf, TEXTMETRICW const *, DWORD, LPARAM param) -> int {
+			auto families = reinterpret_cast<std::set<std::string> *>(param);
+			if (lplf->lfFaceName[0] && lplf->lfFaceName[0] != L'@')
+				families->insert(agi::charset::ConvertU(lplf->lfFaceName));
+			return 1;
+		}, reinterpret_cast<LPARAM>(&families), 0);
+		ReleaseDC(nullptr, dc);
+	}
+	return {families.begin(), families.end()};
 }

@@ -33,81 +33,67 @@
 
 #include "../include/aegisub/context.h"
 #include "../gpui_bridge.h"
+#include "../utils.h"
 #include "../libresrc/libresrc.h"
 
 #include <stdexcept>
 
-#include <wx/utils.h>
 
 namespace {
 	using cmd::Command;
 
 struct help_bugs final : public Command {
 	CMD_NAME("help/bugs")
-	CMD_ICON(bugtracker_button)
 	STR_MENU("&Bug Tracker...")
 	STR_DISP("Bug Tracker")
 	STR_HELP("Visit Aegisub's bug tracker to report bugs and request new features")
 
 	void operator()(agi::Context *c) override {
-		if (wxGetMouseState().CmdDown()) {
-			if (wxGetMouseState().ShiftDown()) {
-				gpui::PushNotice("Crash Test", "Now crashing with an access violation...");
-				for (char *foo = (char*)nullptr;;) *foo++ = 42;
-			} else {
-				gpui::PushNotice("Crash Test", "Now crashing with an unhandled exception...");
-				throw std::runtime_error("unhandled exception test");
-			}
-		}
-		wxLaunchDefaultBrowser("https://github.com/TypesettingTools/Aegisub/issues", wxBROWSER_NEW_WINDOW);
+		OpenURL("https://github.com/TypesettingTools/Aegisub/issues");
 	}
 };
 
 struct help_contents final : public Command {
 	CMD_NAME("help/contents")
-	CMD_ICON(contents_button)
 	STR_MENU("&Contents")
 	STR_DISP("Contents")
 	STR_HELP("Help topics")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser("https://aegisub.org/docs/latest/", wxBROWSER_NEW_WINDOW);
+		OpenURL("https://aegisub.org/docs/latest/");
 	}
 };
 
 struct help_irc final : public Command {
 	CMD_NAME("help/irc")
-	CMD_ICON(irc_button)
 	STR_MENU("&IRC Channel")
 	STR_DISP("IRC Channel")
 	STR_HELP("Visit Aegisub's official IRC channel")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser("irc://irc.rizon.net/aegisub", wxBROWSER_NEW_WINDOW);
+		OpenURL("irc://irc.rizon.net/aegisub");
 	}
 };
 
 struct help_video final : public Command {
 	CMD_NAME("help/video")
-	CMD_ICON(visual_help)
 	STR_MENU("&Visual Typesetting")
 	STR_DISP("Visual Typesetting")
 	STR_HELP("Open the manual page for Visual Typesetting")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser("https://aegisub.org/docs/latest/visual_typesetting/", wxBROWSER_NEW_WINDOW);
+		OpenURL("https://aegisub.org/docs/latest/visual_typesetting/");
 	}
 };
 
 struct help_website final : public Command {
 	CMD_NAME("help/website")
-	CMD_ICON(website_button)
 	STR_MENU("&Website")
 	STR_DISP("Website")
 	STR_HELP("Visit Aegisub's official website")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser("https://aegisub.org/", wxBROWSER_NEW_WINDOW);
+		OpenURL("https://aegisub.org/");
 	}
 };
 }

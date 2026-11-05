@@ -308,7 +308,7 @@ int64_t OpenALPlayer::GetCurrentPosition()
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateOpenALPlayer(agi::AudioProvider *provider, wxWindow *)
+std::unique_ptr<AudioPlayer> CreateOpenALPlayer(agi::AudioProvider *provider)
 {
 	return std::make_unique<OpenALPlayer>(provider);
 }

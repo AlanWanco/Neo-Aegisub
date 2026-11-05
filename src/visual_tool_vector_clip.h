@@ -53,7 +53,7 @@ class VisualToolVectorClip final : public VisualTool<VisualToolVectorClipDraggab
 	std::set<Feature *> box_added;
 
 	void Save();
-	void Commit(wxString message="") override;
+	void Commit(std::string message="") override;
 
 	void MakeFeature(size_t idx);
 	void MakeFeatures();

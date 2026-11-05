@@ -6,10 +6,9 @@
 /// @ingroup files
 
 #include "autosave.h"
+#include "localisation.h"
 
-#include "compat.h"
 #include "options.h"
-#include <wx/translation.h>
 
 #include <libaegisub/path.h>
 
@@ -101,8 +100,8 @@ void populate(std::map<std::string, AutosaveFile>& files, std::string const& pat
 std::vector<AutosaveFile> GetAutosaveFiles() {
 	std::map<std::string, AutosaveFile> files;
 	populate(files, "Path/Auto/Save", ".AUTOSAVE.ass", "", "autosave");
-	populate(files, "Path/Auto/Backup", ".ORIGINAL.ass", from_wx(_(" [ORIGINAL BACKUP]")), "backup");
-	populate(files, "?user/recovered", ".ass", from_wx(_(" [RECOVERED]")), "recovered");
+	populate(files, "Path/Auto/Backup", ".ORIGINAL.ass", _(" [ORIGINAL BACKUP]"), "backup");
+	populate(files, "?user/recovered", ".ass", _(" [RECOVERED]"), "recovered");
 
 	std::vector<AutosaveFile> result;
 	for (auto& [name, file] : files) {

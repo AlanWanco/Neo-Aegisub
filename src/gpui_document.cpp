@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "gpui_document.h"
+#include "localisation.h"
 
-#include <wx/image.h>
 
 #include "ass_file.h"
 #include "autosave.h"
@@ -22,12 +22,30 @@
 #include "style_renamer.h"
 #include "selection_controller.h"
 #include "video_controller.h"
+#include "image_png.h"
+
+namespace {
+std::string base64(unsigned char const *data, size_t size) {
+	static char const alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	std::string out;
+	out.reserve((size + 2) / 3 * 4);
+	for (size_t i = 0; i < size; i += 3) {
+		unsigned value = static_cast<unsigned>(data[i]) << 16;
+		if (i + 1 < size) value |= static_cast<unsigned>(data[i + 1]) << 8;
+		if (i + 2 < size) value |= data[i + 2];
+		out += alphabet[(value >> 18) & 63];
+		out += alphabet[(value >> 12) & 63];
+		out += i + 1 < size ? alphabet[(value >> 6) & 63] : '=';
+		out += i + 2 < size ? alphabet[value & 63] : '=';
+	}
+	return out;
+}
+}
+
 #include "video_frame.h"
 #include "video_provider_dummy.h"
 #include "include/aegisub/subtitles_provider.h"
 
-#include <wx/base64.h>
-#include <wx/mstream.h>
 
 #include <libaegisub/cajun/writer.h>
 #include <libaegisub/audio/provider.h>
@@ -48,7 +66,6 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
-#include <wx/intl.h>
 
 namespace {
 const std::set<std::string, std::less<>> script_fields = {
@@ -186,17 +203,14 @@ std::string style_preview(agi::Context *context, json::Object const& request) {
 	video.GetFrame(0, frame);
 	provider->DrawSubtitles(frame, 0.1);
 
-	wxImage image = GetImage(frame);
-	wxMemoryOutputStream stream;
-	if (!image.SaveFile(stream, wxBITMAP_TYPE_PNG)) throw std::runtime_error("could not encode the style preview");
-	std::vector<unsigned char> bytes(stream.GetSize());
-	stream.CopyTo(bytes.data(), bytes.size());
+	RasterImage image = GetRgbImage(frame);
+	auto bytes = EncodePng(image.width, image.height, image.data.data(), false);
 
 	json::Object result;
 	result["ok"] = true;
 	result["width"] = std::to_string(width);
 	result["height"] = std::to_string(height);
-	result["image"] = std::string(wxBase64Encode(bytes.data(), bytes.size()).utf8_str());
+	result["image"] = base64(bytes.data(), bytes.size());
 	return encode(std::move(result));
 }
 

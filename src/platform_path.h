@@ -12,35 +12,14 @@
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 //
-// Aegisub Project https://aegisub.org/
-
-/// @file xdg_desktop_portal_utils.h
-/// @see xdg_desktop_portal_utils.cpp
-/// @ingroup utility linux
-///
+// Aegisub Project http://www.aegisub.org/
 
 #pragma once
 
-#ifdef WITH_LIBPORTAL
+#include <filesystem>
 
-#include <libportal/portal.h>
-
-#include <wx/window.h>
-
-#include <memory>
-
-namespace agi::xdp_utils {
-	extern XdpPortal *portal;
-	std::unique_ptr<XdpParent, decltype(&xdp_parent_free)> GetXdpParent(wxWindow *window);
-	void Initialize();
-	void Cleanup();
+namespace agi::util {
+/// Path of the running executable, or argv[0] resolved when the platform
+/// query is unavailable. Empty when neither can be resolved.
+std::filesystem::path ExecutablePath(char const *argv0 = nullptr);
 }
-
-#else // WITH_LIBPORTAL
-
-namespace agi::xdp_utils {
-	inline void Initialize() {}
-	inline void Cleanup() {}
-}
-
-#endif // WITH_LIBPORTAL

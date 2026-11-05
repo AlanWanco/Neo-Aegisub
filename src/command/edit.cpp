@@ -36,7 +36,6 @@
 #include "../ass_file.h"
 #include "../ass_karaoke.h"
 #include "../ass_style.h"
-#include "../compat.h"
 #include "../format.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
@@ -68,7 +67,6 @@
 #include <boost/regex.hpp>
 #include <boost/tokenizer.hpp>
 
-#include <wx/clipbrd.h>
 
 namespace {
 	using namespace boost::adaptors;
@@ -302,7 +300,7 @@ int normalize_pos(std::string const& text, int pos) {
 }
 
 template<typename Func>
-void update_lines(const agi::Context *c, wxString const& undo_msg, Func&& f) {
+void update_lines(const agi::Context *c, std::string const& undo_msg, Func&& f) {
 	const auto active_line = c->selectionController->GetActiveLine();
 	const int sel_start = c->textSelectionController->GetSelectionStart();
 	const int sel_end = c->textSelectionController->GetSelectionEnd();
@@ -327,7 +325,7 @@ void update_lines(const agi::Context *c, wxString const& undo_msg, Func&& f) {
 		c->textSelectionController->SetSelection(sel_start + active_sel_shift, sel_end + active_sel_shift);
 }
 
-void toggle_override_tag(const agi::Context *c, bool (AssStyle::*field), const char *tag, wxString const& undo_msg) {
+void toggle_override_tag(const agi::Context *c, bool (AssStyle::*field), const char *tag, std::string const& undo_msg) {
 	update_lines(c, undo_msg, [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
 		AssStyle const* const style = c->ass->GetStyle(line->Style);
 		bool state = style ? style->*field : AssStyle().*field;
@@ -440,7 +438,6 @@ void show_color_picker(agi::Context *, std::string const& kind) {
 
 struct edit_color_primary final : public Command {
 	CMD_NAME("edit/color/primary")
-	CMD_ICON(button_color_one)
 	STR_MENU("Primary Color...")
 	STR_DISP("Primary Color")
 	STR_HELP("Set the primary fill color (\\c) at the cursor position")
@@ -452,7 +449,6 @@ struct edit_color_primary final : public Command {
 
 struct edit_color_secondary final : public Command {
 	CMD_NAME("edit/color/secondary")
-	CMD_ICON(button_color_two)
 	STR_MENU("Secondary Color...")
 	STR_DISP("Secondary Color")
 	STR_HELP("Set the secondary (karaoke) fill color (\\2c) at the cursor position")
@@ -464,7 +460,6 @@ struct edit_color_secondary final : public Command {
 
 struct edit_color_outline final : public Command {
 	CMD_NAME("edit/color/outline")
-	CMD_ICON(button_color_three)
 	STR_MENU("Outline Color...")
 	STR_DISP("Outline Color")
 	STR_HELP("Set the outline color (\\3c) at the cursor position")
@@ -476,7 +471,6 @@ struct edit_color_outline final : public Command {
 
 struct edit_color_shadow final : public Command {
 	CMD_NAME("edit/color/shadow")
-	CMD_ICON(button_color_four)
 	STR_MENU("Shadow Color...")
 	STR_DISP("Shadow Color")
 	STR_HELP("Set the shadow color (\\4c) at the cursor position")
@@ -488,7 +482,6 @@ struct edit_color_shadow final : public Command {
 
 struct edit_style_bold final : public Command {
 	CMD_NAME("edit/style/bold")
-	CMD_ICON(button_bold)
 	STR_MENU("Toggle Bold")
 	STR_DISP("Toggle Bold")
 	STR_HELP("Toggle bold (\\b) for the current selection or at the current cursor position")
@@ -500,7 +493,6 @@ struct edit_style_bold final : public Command {
 
 struct edit_style_italic final : public Command {
 	CMD_NAME("edit/style/italic")
-	CMD_ICON(button_italics)
 	STR_MENU("Toggle Italics")
 	STR_DISP("Toggle Italics")
 	STR_HELP("Toggle italics (\\i) for the current selection or at the current cursor position")
@@ -512,7 +504,6 @@ struct edit_style_italic final : public Command {
 
 struct edit_style_underline final : public Command {
 	CMD_NAME("edit/style/underline")
-	CMD_ICON(button_underline)
 	STR_MENU("Toggle Underline")
 	STR_DISP("Toggle Underline")
 	STR_HELP("Toggle underline (\\u) for the current selection or at the current cursor position")
@@ -524,7 +515,6 @@ struct edit_style_underline final : public Command {
 
 struct edit_style_strikeout final : public Command {
 	CMD_NAME("edit/style/strikeout")
-	CMD_ICON(button_strikeout)
 	STR_MENU("Toggle Strikeout")
 	STR_DISP("Toggle Strikeout")
 	STR_HELP("Toggle strikeout (\\s) for the current selection or at the current cursor position")
@@ -536,7 +526,6 @@ struct edit_style_strikeout final : public Command {
 
 struct edit_font final : public Command {
 	CMD_NAME("edit/font")
-	CMD_ICON(button_fontname)
 	STR_MENU("Font Face...")
 	STR_DISP("Font Face")
 	STR_HELP("Select a font face and size")
@@ -548,7 +537,6 @@ struct edit_font final : public Command {
 
 struct edit_find_replace final : public Command {
 	CMD_NAME("edit/find_replace")
-	CMD_ICON(find_replace_menu)
 	STR_MENU("Find and R&eplace...")
 	STR_DISP("Find and Replace")
 	STR_HELP("Find and replace words in subtitles")
@@ -565,7 +553,7 @@ static void copy_lines(agi::Context *c) {
 		"\r\n"));
 }
 
-static void delete_lines(agi::Context *c, wxString const& commit_message) {
+static void delete_lines(agi::Context *c, std::string const& commit_message) {
 	auto const& sel = c->selectionController->GetSelectedSet();
 
 	// Find a line near the active line not being deleted to make the new active line
@@ -611,7 +599,6 @@ static void delete_lines(agi::Context *c, wxString const& commit_message) {
 
 struct edit_line_copy final : public validate_sel_nonempty {
 	CMD_NAME("edit/line/copy")
-	CMD_ICON(copy_button)
 	STR_MENU("&Copy Lines")
 	STR_DISP("Copy Lines")
 	STR_HELP("Copy subtitles to the clipboard")
@@ -623,7 +610,6 @@ struct edit_line_copy final : public validate_sel_nonempty {
 
 struct edit_line_cut: public validate_sel_nonempty {
 	CMD_NAME("edit/line/cut")
-	CMD_ICON(cut_button)
 	STR_MENU("Cu&t Lines")
 	STR_DISP("Cut Lines")
 	STR_HELP("Cut subtitles")
@@ -636,7 +622,6 @@ struct edit_line_cut: public validate_sel_nonempty {
 
 struct edit_line_delete final : public validate_sel_nonempty {
 	CMD_NAME("edit/line/delete")
-	CMD_ICON(delete_button)
 	STR_MENU("De&lete Lines")
 	STR_DISP("Delete Lines")
 	STR_HELP("Delete currently selected lines")
@@ -747,7 +732,7 @@ struct edit_line_duplicate_shift_back final : public validate_video_and_sel_none
 	}
 };
 
-static void combine_lines(agi::Context *c, void (*combiner)(AssDialogue *, AssDialogue *), wxString const& message) {
+static void combine_lines(agi::Context *c, void (*combiner)(AssDialogue *, AssDialogue *), std::string const& message) {
 	auto sel = c->selectionController->GetSortedSelection();
 
 	AssDialogue *first = sel[0];
@@ -843,19 +828,13 @@ static bool try_paste_lines(agi::Context *c) {
 
 struct edit_line_paste final : public Command {
 	CMD_NAME("edit/line/paste")
-	CMD_ICON(paste_button)
 	STR_MENU("&Paste Lines")
 	STR_DISP("Paste Lines")
 	STR_HELP("Paste subtitles")
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *) override {
-		bool can_paste = false;
-		if (wxTheClipboard->Open()) {
-			can_paste = wxTheClipboard->IsSupported(wxDF_TEXT) || wxTheClipboard->IsSupported(wxDF_UNICODETEXT);
-			wxTheClipboard->Close();
-		}
-		return can_paste;
+		return !GetClipboard().empty();
 	}
 
 	void operator()(agi::Context *c) override {
@@ -875,12 +854,7 @@ struct edit_line_paste_over final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		bool can_paste = !c->selectionController->GetSelectedSet().empty();
-		if (can_paste && wxTheClipboard->Open()) {
-			can_paste = wxTheClipboard->IsSupported(wxDF_TEXT) || wxTheClipboard->IsSupported(wxDF_UNICODETEXT);
-			wxTheClipboard->Close();
-		}
-		return can_paste;
+		return !c->selectionController->GetSelectedSet().empty() && !GetClipboard().empty();
 	}
 
 	void operator()(agi::Context *) override {
@@ -1115,16 +1089,15 @@ struct edit_line_split_video final : public validate_video_and_sel_nonempty {
 
 struct edit_redo final : public Command {
 	CMD_NAME("edit/redo")
-	CMD_ICON(redo_button)
 	STR_HELP("Redo last undone action")
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_DYNAMIC_NAME)
 
-	wxString StrMenu(const agi::Context *c) const override {
+	std::string StrMenu(const agi::Context *c) const override {
 		return c->subsController->IsRedoStackEmpty() ?
 			_("Nothing to &redo") :
 			fmt_tl("&Redo %s", c->subsController->GetRedoDescription());
 	}
-	wxString StrDisplay(const agi::Context *c) const override {
+	std::string StrDisplay(const agi::Context *c) const override {
 		return c->subsController->IsRedoStackEmpty() ?
 			_("Nothing to redo") :
 			fmt_tl("Redo %s", c->subsController->GetRedoDescription());
@@ -1141,16 +1114,15 @@ struct edit_redo final : public Command {
 
 struct edit_undo final : public Command {
 	CMD_NAME("edit/undo")
-	CMD_ICON(undo_button)
 	STR_HELP("Undo last action")
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_DYNAMIC_NAME)
 
-	wxString StrMenu(const agi::Context *c) const override {
+	std::string StrMenu(const agi::Context *c) const override {
 		return c->subsController->IsUndoStackEmpty() ?
 			_("Nothing to &undo") :
 			fmt_tl("&Undo %s", c->subsController->GetUndoDescription());
 	}
-	wxString StrDisplay(const agi::Context *c) const override {
+	std::string StrDisplay(const agi::Context *c) const override {
 		return c->subsController->IsUndoStackEmpty() ?
 			_("Nothing to undo") :
 			fmt_tl("Undo %s", c->subsController->GetUndoDescription());

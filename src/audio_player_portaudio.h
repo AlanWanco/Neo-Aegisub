@@ -46,7 +46,6 @@ extern "C" {
 #include <string>
 #include <vector>
 
-class wxArrayString;
 
 /// @class PortAudioPlayer
 /// @brief PortAudio Player
@@ -135,6 +134,6 @@ public:
 	double GetVolume() { return volume; }
 
 	/// Get list of available output devices
-	static wxArrayString GetOutputDevices();
+	static std::vector<std::string> GetOutputDevices();
 };
 #endif //ifdef WITH_PORTAUDIO

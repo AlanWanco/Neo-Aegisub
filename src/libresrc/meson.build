@@ -101,4 +101,4 @@ resrc += custom_target('default_config.{cpp,h}',
 
 libresrc_inc = include_directories('.')
 libresrc_headers = [resrc[0][1], resrc[1][1]]
-libresrc = static_library('resrc', 'libresrc.cpp', resrc, dependencies: deps)
+libresrc = static_library('resrc', resrc, dependencies: deps)

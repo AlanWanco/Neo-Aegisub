@@ -41,22 +41,25 @@
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/log.h>
 
+#include <thread>
+
 #include <mmsystem.h>
 #include <dsound.h>
 
 namespace {
 class DirectSoundPlayer;
 
-class DirectSoundPlayerThread final : public wxThread {
+class DirectSoundPlayerThread final {
 	DirectSoundPlayer *parent;
 	HANDLE stopnotify;
+	std::thread worker;
+
+	void Entry();
 
 public:
 	void Stop(); // Notify thread to stop audio playback. Thread safe.
 	DirectSoundPlayerThread(DirectSoundPlayer *parent);
 	~DirectSoundPlayerThread();
-
-	wxThread::ExitCode Entry();
 };
 
 class DirectSoundPlayer final : public AudioPlayer {
@@ -79,7 +82,7 @@ class DirectSoundPlayer final : public AudioPlayer {
 	DirectSoundPlayerThread *thread = nullptr;
 
 public:
-	DirectSoundPlayer(agi::AudioProvider *provider, wxWindow *parent);
+	DirectSoundPlayer(agi::AudioProvider *provider);
 	~DirectSoundPlayer();
 
 	void Play(int64_t start,int64_t count);
@@ -94,7 +97,7 @@ public:
 	void SetVolume(double vol) { volume = vol; }
 };
 
-DirectSoundPlayer::DirectSoundPlayer(agi::AudioProvider *provider, wxWindow *parent)
+DirectSoundPlayer::DirectSoundPlayer(agi::AudioProvider *provider)
 : AudioPlayer(provider)
 {
 	// Initialize the DirectSound object
@@ -103,7 +106,7 @@ DirectSoundPlayer::DirectSoundPlayer(agi::AudioProvider *provider, wxWindow *par
 	if (FAILED(res)) throw AudioPlayerOpenError("Failed initializing DirectSound");
 
 	// Set DirectSound parameters
-	directSound->SetCooperativeLevel(parent ? (HWND)parent->GetHandle() : GetDesktopWindow(), DSSCL_PRIORITY);
+	directSound->SetCooperativeLevel(GetDesktopWindow(), DSSCL_PRIORITY);
 
 	// Create the wave format structure
 	WAVEFORMATEX waveFormat;
@@ -255,8 +258,6 @@ void DirectSoundPlayer::Play(int64_t start,int64_t count) {
 	if (count*provider->GetBytesPerSample() > bufSize) {
 		// Start thread
 		thread = new DirectSoundPlayerThread(this);
-		thread->Create();
-		thread->Run();
 		play_flag = DSBPLAY_LOOPING;
 	}
 
@@ -270,10 +271,7 @@ void DirectSoundPlayer::Play(int64_t start,int64_t count) {
 void DirectSoundPlayer::Stop() {
 	// Stop the thread
 	if (thread) {
-		if (thread->IsAlive()) {
-			thread->Stop();
-			thread->Wait();
-		}
+		delete thread;
 		thread = nullptr;
 	}
 	// The thread is now guaranteed dead and there are no concurrency problems to worry about
@@ -303,16 +301,20 @@ int64_t DirectSoundPlayer::GetCurrentPosition() {
 	return startPos + tdiff * provider->GetSampleRate() / 1000;
 }
 
-DirectSoundPlayerThread::DirectSoundPlayerThread(DirectSoundPlayer *par) : wxThread(wxTHREAD_JOINABLE) {
+DirectSoundPlayerThread::DirectSoundPlayerThread(DirectSoundPlayer *par) {
 	parent = par;
 	stopnotify = CreateEvent(nullptr, true, false, nullptr);
+	worker = std::thread(&DirectSoundPlayerThread::Entry, this);
 }
 
 DirectSoundPlayerThread::~DirectSoundPlayerThread() {
+	Stop();
+	if (worker.joinable())
+		worker.join();
 	CloseHandle(stopnotify);
 }
 
-wxThread::ExitCode DirectSoundPlayerThread::Entry() {
+void DirectSoundPlayerThread::Entry() {
 	CoInitialize(0);
 
 	// Wake up thread every half second to fill buffer as needed
@@ -356,7 +358,6 @@ wxThread::ExitCode DirectSoundPlayerThread::Entry() {
 	parent->buffer->Stop();
 
 	CoUninitialize();
-	return 0;
 }
 
 void DirectSoundPlayerThread::Stop() {
@@ -365,8 +366,8 @@ void DirectSoundPlayerThread::Stop() {
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateDirectSoundPlayer(agi::AudioProvider *provider, wxWindow *parent) {
-	return std::make_unique<DirectSoundPlayer>(provider, parent);
+std::unique_ptr<AudioPlayer> CreateDirectSoundPlayer(agi::AudioProvider *provider) {
+	return std::make_unique<DirectSoundPlayer>(provider);
 }
 
 #endif // WITH_DIRECTSOUND

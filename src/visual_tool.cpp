@@ -15,11 +15,11 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "visual_tool.h"
+#include "localisation.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
-#include "compat.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "selection_controller.h"
@@ -111,7 +111,7 @@ bool VisualToolBase::IsDisplayed(AssDialogue *line) const {
 		&& c->videoController->FrameAtTime(line->End, agi::vfr::END) >= frame;
 }
 
-void VisualToolBase::Commit(wxString message) {
+void VisualToolBase::Commit(std::string message) {
 	file_changed_connection.Block();
 	if (message.empty())
 		message = _("visual typesetting");

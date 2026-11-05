@@ -36,7 +36,6 @@
 
 #include "ass_export_filter.h"
 #include "ass_file.h"
-#include "compat.h"
 #include "include/aegisub/context.h"
 #include "project.h"
 #include "subtitle_format.h"

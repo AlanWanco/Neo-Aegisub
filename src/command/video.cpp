@@ -33,7 +33,8 @@
 
 #include "../ass_dialogue.h"
 #include "../async_video_provider.h"
-#include "../compat.h"
+#include "../image_png.h"
+#include "../video_frame.h"
 #include "../format.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
@@ -164,7 +165,6 @@ struct video_aspect_wide final : public validator_video_loaded {
 
 struct video_close final : public validator_video_loaded {
 	CMD_NAME("video/close")
-	CMD_ICON(close_video_menu)
 	STR_MENU("&Close Video")
 	STR_DISP("Close Video")
 	STR_HELP("Close the currently open video file")
@@ -201,13 +201,12 @@ struct video_cycle_subtitles_provider final : public cmd::Command {
 		if (it == end(providers)) it = begin(providers);
 
 		OPT_SET("Subtitle/Provider")->SetString(*it);
-		gpui::PushStatus(from_wx(fmt_tl("Subtitles provider set to %s", *it)));
+		gpui::PushStatus(fmt_tl("Subtitles provider set to %s", *it));
 	}
 };
 
 struct video_detach final : public validator_video_loaded {
 	CMD_NAME("video/detach")
-	CMD_ICON(detach_video_menu)
 	STR_MENU("&Detach Video")
 	STR_DISP("Detach Video")
 	STR_HELP("Detach the video display from the main window, displaying it in a separate Window")
@@ -224,7 +223,6 @@ struct video_detach final : public validator_video_loaded {
 
 struct video_details final : public validator_video_loaded {
 	CMD_NAME("video/details")
-	CMD_ICON(show_video_details_menu)
 	STR_MENU("Show &Video Details")
 	STR_DISP("Show Video Details")
 	STR_HELP("Show video details")
@@ -235,23 +233,16 @@ struct video_details final : public validator_video_loaded {
 	}
 };
 
-wxImage get_image(agi::Context *c, bool raw, bool subsonly = false) {
-	auto frame = c->videoController->GetFrameN();
-	if (subsonly) {
-		return GetImageWithAlpha(c->project->VideoProvider()->GetSubtitles(c->project->Timecodes().TimeAtFrame(frame)));
-	} else {
-		return GetImage(*c->project->VideoProvider()->GetFrame(frame, c->project->Timecodes().TimeAtFrame(frame), raw));
-	}
-}
-
+// The front end owns both the rendered frame and the clipboard, so copying a
+// frame is a no-op in the headless host.
 struct video_frame_copy final : public validator_video_loaded {
 	CMD_NAME("video/frame/copy")
 	STR_MENU("Copy image to Clipboard")
 	STR_DISP("Copy image to Clipboard")
 	STR_HELP("Copy the currently displayed frame to the clipboard")
 
-	void operator()(agi::Context *c) override {
-		SetClipboard(wxBitmap(get_image(c, false), 24));
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/frame/copy");
 	}
 };
 
@@ -261,8 +252,8 @@ struct video_frame_copy_raw final : public validator_video_loaded {
 	STR_DISP("Copy image to Clipboard (no subtitles)")
 	STR_HELP("Copy the currently displayed frame to the clipboard, without the subtitles")
 
-	void operator()(agi::Context *c) override {
-		SetClipboard(wxBitmap(get_image(c, true), 24));
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/frame/copy/raw");
 	}
 };
 
@@ -272,8 +263,8 @@ struct video_frame_copy_subs final : public validator_video_loaded {
 	STR_DISP("Copy image to Clipboard (only subtitles)")
 	STR_HELP("Copy the currently displayed subtitles to the clipboard, with transparent background")
 
-	void operator()(agi::Context *c) override {
-		SetClipboard(wxBitmap(get_image(c, false, true), 32));
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/frame/copy/subs");
 	}
 };
 
@@ -458,7 +449,16 @@ static void save_snapshot(agi::Context *c, bool raw, bool subsonly = false) {
 		path = agi::format("%s_%03d_%d.png", basepath.string(), session_shot_count++, c->videoController->GetFrameN());
 	} while (agi::fs::FileExists(path));
 
-	get_image(c, raw, subsonly).SaveFile(to_wx(path), wxBITMAP_TYPE_PNG);
+	auto frame = c->videoController->GetFrameN();
+	double time = c->project->Timecodes().TimeAtFrame(frame);
+	VideoFrame image;
+	if (subsonly)
+		image = c->project->VideoProvider()->GetSubtitles(time);
+	else
+		image = *c->project->VideoProvider()->GetFrame(frame, time, raw);
+
+	RasterImage raster = subsonly ? GetRgbaImage(image) : GetRgbImage(image);
+	WritePng(path, raster.width, raster.height, raster.data.data(), subsonly);
 }
 
 struct video_frame_save final : public validator_video_loaded {
@@ -496,7 +496,6 @@ struct video_frame_save_subs final : public validator_video_loaded {
 
 struct video_jump final : public validator_video_loaded {
 	CMD_NAME("video/jump")
-	CMD_ICON(jumpto_button)
 	STR_MENU("&Jump to...")
 	STR_DISP("Jump to")
 	STR_HELP("Jump to frame or time")
@@ -509,7 +508,6 @@ struct video_jump final : public validator_video_loaded {
 
 struct video_jump_end final : public validator_video_loaded {
 	CMD_NAME("video/jump/end")
-	CMD_ICON(video_to_subend)
 	STR_MENU("Jump Video to &End")
 	STR_DISP("Jump Video to End")
 	STR_HELP("Jump the video to the end frame of current subtitle")
@@ -522,7 +520,6 @@ struct video_jump_end final : public validator_video_loaded {
 
 struct video_jump_start final : public validator_video_loaded {
 	CMD_NAME("video/jump/start")
-	CMD_ICON(video_to_substart)
 	STR_MENU("Jump Video to &Start")
 	STR_DISP("Jump Video to Start")
 	STR_HELP("Jump the video to the start frame of current subtitle")
@@ -535,7 +532,6 @@ struct video_jump_start final : public validator_video_loaded {
 
 struct video_open final : public Command {
 	CMD_NAME("video/open")
-	CMD_ICON(open_video_menu)
 	STR_MENU("&Open Video...")
 	STR_DISP("Open Video")
 	STR_HELP("Open a video file")
@@ -547,7 +543,6 @@ struct video_open final : public Command {
 
 struct video_open_dummy final : public Command {
 	CMD_NAME("video/open/dummy")
-	CMD_ICON(use_dummy_video_menu)
 	STR_MENU("&Use Dummy Video...")
 	STR_DISP("Use Dummy Video")
 	STR_HELP("Open a placeholder video clip with solid color")
@@ -559,7 +554,6 @@ struct video_open_dummy final : public Command {
 
 struct video_opt_autoscroll final : public Command {
 	CMD_NAME("video/opt/autoscroll")
-	CMD_ICON(toggle_video_autoscroll)
 	STR_MENU("Toggle autoscroll of video")
 	STR_DISP("Toggle autoscroll of video")
 	STR_HELP("Toggle automatically seeking video to the start time of selected lines")
@@ -576,7 +570,6 @@ struct video_opt_autoscroll final : public Command {
 
 struct video_play final : public validator_video_loaded {
 	CMD_NAME("video/play")
-	CMD_ICON(button_play)
 	STR_MENU("Play")
 	STR_DISP("Play")
 	STR_HELP("Play the video starting on this position")
@@ -588,7 +581,6 @@ struct video_play final : public validator_video_loaded {
 
 struct video_play_line final : public validator_video_loaded {
 	CMD_NAME("video/play/line")
-	CMD_ICON(button_playline)
 	STR_MENU("Play line")
 	STR_DISP("Play line")
 	STR_HELP("Play the video for the current line")
@@ -607,8 +599,8 @@ struct video_playback_rate final : public Command {
 	, index(index) { }
 
 	const char *name() const override { return command_name.c_str(); }
-	wxString StrMenu(const agi::Context *) const override { return wxString::FromUTF8(playback::labels[index]); }
-	wxString StrDisplay(const agi::Context *c) const override { return StrMenu(c); }
+	std::string StrMenu(const agi::Context *) const override { return playback::labels[index]; }
+	std::string StrDisplay(const agi::Context *c) const override { return StrMenu(c); }
 	STR_HELP("Set audio and video playback speed (changes audio pitch)")
 	CMD_TYPE(COMMAND_RADIO)
 
@@ -700,7 +692,6 @@ public:
 class video_stop: public validator_video_loaded {
 public:
 	CMD_NAME("video/stop")
-	CMD_ICON(button_pause)
 	STR_MENU("Stop video")
 	STR_DISP("Stop video")
 	STR_HELP("Stop video playback")
@@ -712,7 +703,6 @@ public:
 
 struct video_zoom_in final : public validator_video_attached {
 	CMD_NAME("video/zoom/in")
-	CMD_ICON(zoom_in_button)
 	STR_MENU("Zoom In")
 	STR_DISP("Zoom In")
 	STR_HELP("Zoom video in")
@@ -724,7 +714,6 @@ struct video_zoom_in final : public validator_video_attached {
 
 struct video_zoom_out final : public validator_video_attached {
 	CMD_NAME("video/zoom/out")
-	CMD_ICON(zoom_out_button)
 	STR_MENU("Zoom Out")
 	STR_DISP("Zoom Out")
 	STR_HELP("Zoom video out")

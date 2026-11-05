@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "resolution_resampler.h"
+#include "localisation.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
@@ -29,7 +30,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <wx/intl.h>
 
 enum {
 	LEFT = 0,

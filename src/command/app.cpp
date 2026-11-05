@@ -30,10 +30,10 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "command.h"
+#include "../localisation.h"
 
 #include <libaegisub/log.h>
 
-#include "../compat.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
@@ -46,7 +46,6 @@ namespace {
 
 struct app_about final : public Command {
 	CMD_NAME("app/about")
-	CMD_ICON(about_menu)
 	STR_MENU("&About")
 	STR_DISP("About")
 	STR_HELP("About Neo Aegisub")
@@ -146,7 +145,6 @@ struct app_exit final : public Command {
 
 struct app_language final : public Command {
 	CMD_NAME("app/language")
-	CMD_ICON(languages_menu)
 	STR_MENU("&Language...")
 	STR_DISP("Language")
 	STR_HELP("Select Neo Aegisub interface language")
@@ -158,7 +156,6 @@ struct app_language final : public Command {
 
 struct app_log final : public Command {
 	CMD_NAME("app/log")
-	CMD_ICON(about_menu)
 	STR_MENU("&Log window")
 	STR_DISP("Log window")
 	STR_HELP("View the event log")
@@ -170,7 +167,6 @@ struct app_log final : public Command {
 
 struct app_new_window final : public Command {
 	CMD_NAME("app/new_window")
-	CMD_ICON(new_window_menu)
 	STR_MENU("New &Window")
 	STR_DISP("New Window")
 	STR_HELP("Open a new application window")
@@ -182,7 +178,6 @@ struct app_new_window final : public Command {
 
 struct app_options final : public Command {
 	CMD_NAME("app/options")
-	CMD_ICON(options_button)
 	STR_MENU("&Options...")
 	STR_DISP("Options")
 	STR_HELP("Configure Neo Aegisub")
@@ -227,7 +222,6 @@ struct app_theme_dark final : public Command {
 
 struct app_toggle_global_hotkeys final : public Command {
 	CMD_NAME("app/toggle/global_hotkeys")
-	CMD_ICON(toggle_audio_medusa)
 	STR_MENU("Toggle global hotkey overrides")
 	STR_DISP("Toggle global hotkey overrides")
 	STR_HELP("Toggle global hotkey overrides (Medusa Mode)")
@@ -248,13 +242,13 @@ struct app_toggle_toolbar final : public Command {
 	STR_HELP("Toggle the main toolbar")
 	CMD_TYPE(COMMAND_DYNAMIC_NAME)
 
-	wxString StrMenu(const agi::Context *) const override {
+	std::string StrMenu(const agi::Context *) const override {
 		return OPT_GET("App/Show Toolbar")->GetBool() ?
 			_("Hide Toolbar") :
 			_("Show Toolbar");
 	}
 
-	wxString StrDisplay(const agi::Context *) const override {
+	std::string StrDisplay(const agi::Context *) const override {
 		return StrMenu(nullptr);
 	}
 

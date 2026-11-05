@@ -35,7 +35,6 @@
 #include "../async_video_provider.h"
 #include "../audio_controller.h"
 #include "../audio_timing.h"
-#include "../compat.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
@@ -62,7 +61,6 @@ namespace {
 
 struct audio_close final : public validate_audio_open {
 	CMD_NAME("audio/close")
-	CMD_ICON(close_audio_menu)
 	STR_MENU("&Close Audio")
 	STR_DISP("Close Audio")
 	STR_HELP("Close the currently open audio file")
@@ -74,7 +72,6 @@ struct audio_close final : public validate_audio_open {
 
 struct audio_open final : public Command {
 	CMD_NAME("audio/open")
-	CMD_ICON(open_audio_menu)
 	STR_MENU("&Open Audio File...")
 	STR_DISP("Open Audio File")
 	STR_HELP("Open an audio file")
@@ -108,7 +105,6 @@ struct audio_open_noise final : public Command {
 
 struct audio_open_video final : public Command {
 	CMD_NAME("audio/open/video")
-	CMD_ICON(open_audio_from_video_menu)
 	STR_MENU("Open Audio from &Video")
 	STR_DISP("Open Audio from Video")
 	STR_HELP("Open the audio from the current video file")
@@ -185,7 +181,6 @@ struct audio_play_current_selection final : public validate_audio_open {
 
 struct audio_play_current_line final : public validate_audio_open {
 	CMD_NAME("audio/play/line")
-	CMD_ICON(button_playline)
 	STR_MENU("Play current line")
 	STR_DISP("Play current line")
 	STR_HELP("Play the audio for the current line")
@@ -200,7 +195,6 @@ struct audio_play_current_line final : public validate_audio_open {
 
 struct audio_play_selection final : public validate_audio_open {
 	CMD_NAME("audio/play/selection")
-	CMD_ICON(button_playsel)
 	STR_MENU("Play audio selection")
 	STR_DISP("Play audio selection")
 	STR_HELP("Play audio until the end of the selection is reached")
@@ -229,7 +223,6 @@ struct audio_play_toggle final : public validate_audio_open {
 
 struct audio_stop final : public Command {
 	CMD_NAME("audio/stop")
-	CMD_ICON(button_stop)
 	STR_MENU("Stop playing")
 	STR_DISP("Stop playing")
 	STR_HELP("Stop audio and video playback")
@@ -247,7 +240,6 @@ struct audio_stop final : public Command {
 
 struct audio_play_before final : public validate_audio_open {
 	CMD_NAME("audio/play/selection/before")
-	CMD_ICON(button_playfivehbefore)
 	STR_MENU("Play 500 ms before selection")
 	STR_DISP("Play 500 ms before selection")
 	STR_HELP("Play 500 ms before selection")
@@ -261,7 +253,6 @@ struct audio_play_before final : public validate_audio_open {
 
 struct audio_play_after final : public validate_audio_open {
 	CMD_NAME("audio/play/selection/after")
-	CMD_ICON(button_playfivehafter)
 	STR_MENU("Play 500 ms after selection")
 	STR_DISP("Play 500 ms after selection")
 	STR_HELP("Play 500 ms after selection")
@@ -275,7 +266,6 @@ struct audio_play_after final : public validate_audio_open {
 
 struct audio_play_end final : public validate_audio_open {
 	CMD_NAME("audio/play/selection/end")
-	CMD_ICON(button_playlastfiveh)
 	STR_MENU("Play last 500 ms of selection")
 	STR_DISP("Play last 500 ms of selection")
 	STR_HELP("Play last 500 ms of selection")
@@ -289,7 +279,6 @@ struct audio_play_end final : public validate_audio_open {
 
 struct audio_play_begin final : public validate_audio_open {
 	CMD_NAME("audio/play/selection/begin")
-	CMD_ICON(button_playfirstfiveh)
 	STR_MENU("Play first 500 ms of selection")
 	STR_DISP("Play first 500 ms of selection")
 	STR_HELP("Play first 500 ms of selection")
@@ -305,7 +294,6 @@ struct audio_play_begin final : public validate_audio_open {
 
 struct audio_play_to_end final : public validate_audio_open {
 	CMD_NAME("audio/play/to_end")
-	CMD_ICON(button_playtoend)
 	STR_MENU("Play from selection start to end of file")
 	STR_DISP("Play from selection start to end of file")
 	STR_HELP("Play from selection start to end of file")
@@ -318,7 +306,6 @@ struct audio_play_to_end final : public validate_audio_open {
 
 struct audio_commit final : public validate_audio_open {
 	CMD_NAME("audio/commit")
-	CMD_ICON(button_audio_commit)
 	STR_MENU("Commit")
 	STR_DISP("Commit")
 	STR_HELP("Commit any pending audio timing changes")
@@ -377,7 +364,6 @@ struct audio_commit_stay final : public validate_audio_open {
 
 struct audio_go_to final : public validate_audio_open {
 	CMD_NAME("audio/go_to")
-	CMD_ICON(button_audio_goto)
 	STR_MENU("Go to selection")
 	STR_DISP("Go to selection")
 	STR_HELP("Scroll the audio display to center on the current audio selection")
@@ -437,7 +423,6 @@ static inline void toggle(const char *opt) {
 
 struct audio_autoscroll final : public Command {
 	CMD_NAME("audio/opt/autoscroll")
-	CMD_ICON(toggle_audio_autoscroll)
 	STR_MENU("Auto scroll audio display to selected line")
 	STR_DISP("Auto scroll audio display to selected line")
 	STR_HELP("Auto scroll audio display to selected line")
@@ -454,7 +439,6 @@ struct audio_autoscroll final : public Command {
 
 struct audio_autocommit final : public Command {
 	CMD_NAME("audio/opt/autocommit")
-	CMD_ICON(toggle_audio_autocommit)
 	STR_MENU("Automatically commit all changes")
 	STR_DISP("Automatically commit all changes")
 	STR_HELP("Automatically commit all changes")
@@ -471,7 +455,6 @@ struct audio_autocommit final : public Command {
 
 struct audio_autonext final : public Command {
 	CMD_NAME("audio/opt/autonext")
-	CMD_ICON(toggle_audio_nextcommit)
 	STR_MENU("Auto go to next line on commit")
 	STR_DISP("Auto go to next line on commit")
 	STR_HELP("Automatically go to next line on commit")
@@ -488,7 +471,6 @@ struct audio_autonext final : public Command {
 
 struct audio_toggle_spectrum final : public Command {
 	CMD_NAME("audio/opt/spectrum")
-	CMD_ICON(toggle_audio_spectrum)
 	STR_MENU("Spectrum analyzer mode")
 	STR_DISP("Spectrum analyzer mode")
 	STR_HELP("Spectrum analyzer mode")
@@ -505,7 +487,6 @@ struct audio_toggle_spectrum final : public Command {
 
 struct audio_vertical_link final : public Command {
 	CMD_NAME("audio/opt/vertical_link")
-	CMD_ICON(toggle_audio_link)
 	STR_MENU("Link vertical zoom and volume sliders")
 	STR_DISP("Link vertical zoom and volume sliders")
 	STR_HELP("Link vertical zoom and volume sliders")
@@ -522,7 +503,6 @@ struct audio_vertical_link final : public Command {
 
 struct audio_karaoke final : public Command {
 	CMD_NAME("audio/karaoke")
-	CMD_ICON(kara_mode)
 	STR_MENU("Toggle karaoke mode")
 	STR_DISP("Toggle karaoke mode")
 	STR_HELP("Toggle karaoke mode")

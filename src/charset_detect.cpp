@@ -28,14 +28,13 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "charset_detect.h"
+#include "localisation.h"
 
-#include "compat.h"
 #include "gpui_bridge.h"
 
 #include <libaegisub/charset.h>
 #include <libaegisub/charset_conv.h>
 
-#include <wx/translation.h>
 
 #include <stdexcept>
 #include <string>
@@ -50,8 +49,8 @@ std::string GetEncoding(agi::fs::path const& filename) {
 
 	auto choices = agi::charset::GetEncodingsList<std::vector<std::string>>();
 	int choice = gpui::AskChoice(
-		from_wx(_("Choose character set")),
-		from_wx(_("Neo Aegisub could not narrow down the character set to a single one.\nPlease pick one below:")),
+		_("Choose character set"),
+		_("Neo Aegisub could not narrow down the character set to a single one.\nPlease pick one below:"),
 		{}, "encoding", choices);
 	if (choice < 0 || static_cast<size_t>(choice) >= choices.size())
 		throw agi::UserCancelException("Cancelled encoding selection");

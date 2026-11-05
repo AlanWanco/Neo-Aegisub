@@ -19,10 +19,10 @@
 /// @ingroup visual_ts
 
 #include "visual_tool_drag.h"
+#include "localisation.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
-#include "compat.h"
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
@@ -34,7 +34,6 @@
 #include <algorithm>
 #include <boost/range/algorithm/binary_search.hpp>
 
-#include <wx/intl.h>
 
 
 static const DraggableFeatureType DRAG_ORIGIN = DRAG_BIG_TRIANGLE;

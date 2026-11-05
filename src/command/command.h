@@ -23,23 +23,19 @@
 #include <string>
 #include <vector>
 
-#include <wx/bmpbndl.h>
-#include <wx/intl.h>
-#include <wx/string.h>
+#include "format.h"
+
+#include <string>
 
 #include <libaegisub/exception.h>
 
 namespace agi { struct Context; }
 
 #define CMD_NAME(a) const char* name() const override { return a; }
-#define STR_MENU(a) wxString StrMenu(const agi::Context *) const override { return _(a); }
-#define STR_DISP(a) wxString StrDisplay(const agi::Context *) const override { return _(a); }
-#define STR_HELP(a) wxString StrHelp() const override { return _(a); }
+#define STR_MENU(a) std::string StrMenu(const agi::Context *) const override { return _(a); }
+#define STR_DISP(a) std::string StrDisplay(const agi::Context *) const override { return _(a); }
+#define STR_HELP(a) std::string StrHelp() const override { return _(a); }
 #define CMD_TYPE(a) int Type() const override { using namespace cmd; return a; }
-
-#define CMD_ICON(icon) wxBitmapBundle Icon(int height, wxLayoutDirection dir = wxLayout_LeftToRight) const override { \
-	return GETBUNDLEDIR(icon, height, dir); \
-}
 
 #define COMMAND_GROUP(cname, cmdname, menu, disp, help) \
 struct cname final : public Command {                   \
@@ -93,23 +89,19 @@ DEFINE_EXCEPTION(CommandNotFound, CommandError);
 		/// Command name
 		virtual const char* name() const=0;
 		/// String for menu purposes including accelerators, but not hotkeys
-		virtual wxString StrMenu(const agi::Context *) const=0;
+		virtual std::string StrMenu(const agi::Context *) const=0;
 		/// Plain string for display purposes; should normally be the same as StrMenu
 		/// but without accelerators
-		virtual wxString StrDisplay(const agi::Context *) const=0;
+		virtual std::string StrDisplay(const agi::Context *) const=0;
 		/// Short help string describing what the command does
-		virtual wxString StrHelp() const=0;
+		virtual std::string StrHelp() const=0;
 
 		/// Formats the Help text together with the registered hotkey
-		wxString GetTooltip(std::string ht_context) const;
+		std::string GetTooltip(std::string ht_context) const;
 
 		/// Get this command's type flags
 		/// @return Bitmask of CommandFlags
 		virtual int Type() const { return COMMAND_NORMAL; }
-
-		/// Request icon.
-		/// @param height Icon size.
-		virtual wxBitmapBundle Icon([[maybe_unused]] int height = 16, wxLayoutDirection = wxLayout_LeftToRight) const { return wxBitmapBundle{}; }
 
 		/// Command function
 		virtual void operator()(agi::Context *c)=0;

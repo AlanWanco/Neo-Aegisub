@@ -20,7 +20,6 @@
 
 #include "visual_tool_scale.h"
 
-#include "compat.h"
 #include "options.h"
 
 VisualToolScale::VisualToolScale(VisualToolHost *parent, agi::Context *context)

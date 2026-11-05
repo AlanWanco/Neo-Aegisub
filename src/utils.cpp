@@ -29,10 +29,8 @@
 
 #include "utils.h"
 
-#include "include/aegisub/context.h"
-#include "compat.h"
+#include "clipboard.h"
 #include "format.h"
-#include "options.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/fs.h>
@@ -40,42 +38,21 @@
 #include <libaegisub/path.h>
 
 #ifdef __UNIX__
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
+
+#ifdef _WIN32
+#include <libaegisub/charset_conv_win.h>
+#include <shellapi.h>
+#endif
 #include <algorithm>
+#include <limits>
 #include <map>
+#include <memory>
 #include <unicode/locid.h>
 #include <unicode/unistr.h>
-#include <wx/clipbrd.h>
-#include <wx/filedlg.h>
-#include <wx/stdpaths.h>
-#include <wx/window.h>
 
-#ifdef __APPLE__
-#include <libaegisub/util_osx.h>
-#include <CoreText/CTFont.h>
-#endif
-
-/// @brief There shall be no kiB, MiB stuff here Pretty reading of size
-wxString PrettySize(int bytes) {
-	const char *suffix[] = { "", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB" };
-
-	// Set size
-	size_t i = 0;
-	double size = bytes;
-	while (size > 1024 && i + 1 < sizeof(suffix) / sizeof(suffix[0])) {
-		size /= 1024.0;
-		i++;
-	}
-
-	// Set number of decimal places
-	const char *fmt = "%.0f";
-	if (size < 10)
-		fmt = "%.2f";
-	else if (size < 100)
-		fmt = "%1.f";
-	return agi::wxformat(fmt, size) + " " + suffix[i];
-}
 
 std::string float_to_string(double val, int precision) {
 	std::string fmt = "%." + std::to_string(precision) + "f";
@@ -86,84 +63,6 @@ std::string float_to_string(double val, int precision) {
 	return s;
 }
 
-int SmallestPowerOf2(int x) {
-	x--;
-	x |= (x >> 1);
-	x |= (x >> 2);
-	x |= (x >> 4);
-	x |= (x >> 8);
-	x |= (x >> 16);
-	x++;
-	return x;
-}
-
-#ifndef __WXMAC__
-void RestartAegisub() {
-	config::opt->Flush();
-
-#if defined(__WXMSW__)
-	wxExecute("\"" + wxStandardPaths::Get().GetExecutablePath() + "\"");
-#else
-	wxExecute(wxStandardPaths::Get().GetExecutablePath());
-#endif
-}
-#endif
-
-bool ForwardMouseWheelEvent([[maybe_unused]] wxWindow *source, [[maybe_unused]] wxMouseEvent &evt) {
-	// ForwardMouseWheelEvent is needed on Windows 8 and earlier because mouse wheel events
-	// are sent to the focused window rather than the window under the cursor on these versions.
-	// However, it breaks scrolling on other platforms, in particular on Wayland.
-	// After the next stable release we will drop support for Windows 8, but for now we just restrict this logic to Windows.
-#ifdef __WXMSW__
-	wxWindow *target = wxFindWindowAtPoint(wxGetMousePosition());
-	if (!target || target == source) return true;
-
-	// If the mouse is over a parent of the source window just pretend it's
-	// over the source window, so that the mouse wheel works on borders and such
-	wxWindow *parent = source->GetParent();
-	while (parent && parent != target) parent = parent->GetParent();
-	if (parent == target) return true;
-
-	// Otherwise send it to the new target
-	target->GetEventHandler()->ProcessEvent(evt);
-	evt.Skip(false);
-	return false;
-#else
-	return true;
-#endif
-}
-
-std::string GetClipboard() {
-	wxString data;
-	wxClipboard *cb = wxClipboard::Get();
-	if (cb->Open()) {
-		if (cb->IsSupported(wxDF_TEXT) || cb->IsSupported(wxDF_UNICODETEXT)) {
-			wxTextDataObject raw_data;
-			cb->GetData(raw_data);
-			data = raw_data.GetText();
-		}
-		cb->Close();
-	}
-	return from_wx(data);
-}
-
-void SetClipboard(std::string const& new_data) {
-	wxClipboard *cb = wxClipboard::Get();
-	if (cb->Open()) {
-		cb->SetData(new wxTextDataObject(to_wx(new_data)));
-		cb->Flush();
-		cb->Close();
-	}
-}
-
-void SetClipboard(wxBitmap const& new_data) {
-	wxClipboard *cb = wxClipboard::Get();
-	if (cb->Open()) {
-		cb->SetData(new wxBitmapDataObject(new_data));
-		cb->Flush();
-		cb->Close();
-	}
-}
 
 void CleanCache(agi::fs::path const& directory, std::string const& file_type, uint64_t max_size, uint64_t max_files) {
 	static std::unique_ptr<agi::dispatch::Queue> queue;
@@ -218,88 +117,30 @@ void CleanCache(agi::fs::path const& directory, std::string const& file_type, ui
 	});
 }
 
-#ifndef __WXOSX_COCOA__
-// OS X implementation in osx_utils.mm
-void AddFullScreenButton(wxWindow *) { }
-void SetFloatOnParent(wxWindow *) { }
-#endif
-
-#if !defined(__WXOSX_COCOA__) || !defined(WITH_INTERNAL_WXWIDGETS)
-// Proper implementation in scintilla_ime.mm
-namespace osx { namespace ime {
-	void inject(wxStyledTextCtrl *) { }
-	void invalidate(wxStyledTextCtrl *) { }
-	bool process_key_event(wxStyledTextCtrl *, wxKeyEvent&) { return false; }
-} }
-#endif
-
-wxString FontFace(std::string opt_prefix) {
-	opt_prefix += "/Font Face";
-	auto value = OPT_GET(opt_prefix)->GetString();
-#ifdef __WXOSX_COCOA__
-	if (value.empty()) {
-		auto default_font = CTFontCreateUIFontForLanguage(kCTFontUserFontType, 0, nullptr);
-		auto default_font_name = CTFontCopyPostScriptName(default_font);
-		CFRelease(default_font);
-
-		auto utf8_str = CFStringGetCStringPtr(default_font_name, kCFStringEncodingUTF8);
-		if (utf8_str)
-			value = utf8_str;
-		else {
-			char buffer[1024];
-			CFStringGetCString(default_font_name, buffer, sizeof(buffer), kCFStringEncodingUTF8);
-			buffer[1023] = '\0';
-			value = buffer;
-		}
-
-		CFRelease(default_font_name);
-	}
-#endif
-	return to_wx(value);
-}
-
-static agi::fs::path FileSelector(agi::Context *c, wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent, std::optional<std::string_view> path_anchor) {
-	wxString path;
-	if (!option_name.empty())
-		path = to_wx(c->path->Decode(OPT_GET(option_name)->GetString()).string());
-
-	agi::fs::path filename = from_wx(wxFileSelector(message, path, to_wx(default_filename), to_wx(default_extension), to_wx(wildcard), flags, parent));
-
-	if (!filename.empty() && !option_name.empty()) {
-		auto dir = filename.parent_path();
-		auto dir_str = dir.string();
-		if (path_anchor.has_value() && c->path->Decode(path_anchor.value()).lexically_normal() == dir.lexically_normal()) {
-			dir_str = path_anchor.value();
-		}
-
-		OPT_SET(option_name)->SetString(dir_str);
-	}
-	return filename;
-}
-
-agi::fs::path OpenFileSelector(agi::Context *c, wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, std::optional<std::string_view> path_anchor) {
-	return FileSelector(c, message, option_name, default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent, path_anchor);
-}
-
-agi::fs::path SaveFileSelector(agi::Context *c, wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(c, message, option_name, default_filename, default_extension, wildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT, parent, std::nullopt);
-}
-
-wxString LocalizedLanguageName(wxString const& lang) {
-	icu::Locale iculoc(lang.c_str());
-	if (!iculoc.isBogus()) {
-		icu::UnicodeString ustr;
-		iculoc.getDisplayName(iculoc, ustr);
-#ifdef _MSC_VER
-		return wxString((const wchar_t*)ustr.getBuffer());
+void OpenURL(std::string const& url) {
+#ifdef _WIN32
+	auto wide = agi::charset::ConvertW(url);
+	ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
-		std::string utf8;
-		ustr.toUTF8String(utf8);
-		return to_wx(utf8);
+	pid_t child = fork();
+	if (child == 0) {
+		setsid();
+#ifdef __APPLE__
+		execlp("open", "open", url.c_str(), (char *)nullptr);
+#else
+		execlp("xdg-open", "xdg-open", url.c_str(), (char *)nullptr);
 #endif
+		_exit(127);
 	}
+	if (child > 0)
+		waitpid(child, nullptr, 0);
+#endif
+}
 
-	if (auto info = wxLocale::FindLanguageInfo(lang))
-		return info->Description;
-	return lang;
+std::string GetClipboard() {
+	return clipboard::GetText();
+}
+
+void SetClipboard(std::string const& new_value) {
+	clipboard::SetText(new_value);
 }

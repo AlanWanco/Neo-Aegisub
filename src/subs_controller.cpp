@@ -22,7 +22,6 @@
 #include "ass_file.h"
 #include "ass_info.h"
 #include "ass_style.h"
-#include "compat.h"
 #include "command/command.h"
 #include "format.h"
 #include "include/aegisub/context.h"
@@ -50,7 +49,7 @@ namespace {
 }
 
 struct SubsController::UndoInfo {
-	wxString undo_description;
+	std::string undo_description;
 	int commit_id;
 
 	std::vector<std::pair<std::string, std::string>> script_info;
@@ -63,7 +62,7 @@ struct SubsController::UndoInfo {
 	int active_line_id = 0;
 	int pos = 0, sel_start = 0, sel_end = 0;
 
-	UndoInfo(const agi::Context *c, wxString const& d, int commit_id)
+	UndoInfo(const agi::Context *c, std::string const& d, int commit_id)
 	: undo_description(d)
 	, commit_id(commit_id)
 	, attachments(c->ass->Attachments)
@@ -237,15 +236,15 @@ void SubsController::Close() {
 
 int SubsController::TryToClose([[maybe_unused]] bool allow_cancel) const {
 	if (!IsModified())
-		return wxYES;
+		return 1;
 
 	// The host never opens a modal prompt: the front end shows this notice and the
 	// user saves or discards there. Until then the close is refused.
-	gpui::PushNotice(from_wx(_("Unsaved changes")),
-		from_wx(fmt_tl("Do you want to save changes to %s?", Filename())),
+	gpui::PushNotice(_("Unsaved changes"),
+		fmt_tl("Do you want to save changes to %s?", Filename()),
 		{},
 		"unsaved");
-	return wxCANCEL;
+	return -1;
 }
 
 void SubsController::AutoSave() {
@@ -258,12 +257,12 @@ void SubsController::AutoSave() {
 
 	auto name = filename.filename();
 	if (name.empty())
-		name = from_wx(_("Untitled"));
+		name = _("Untitled");
 
 	autosaved_commit_id = commit_id;
 	auto subs_copy = new AssFile(*context->ass);
 	autosave_queue->Async([subs_copy, name, directory] {
-		wxString msg;
+		std::string msg;
 		std::unique_ptr<AssFile> subs(subs_copy);
 
 		try {
@@ -274,14 +273,14 @@ void SubsController::AutoSave() {
 			msg = fmt_tl("File backup saved as \"%s\".", path);
 		}
 		catch (const agi::Exception& err) {
-			msg = _("Exception when attempting to autosave file: ") + to_wx(err.GetMessage());
+			msg = _("Exception when attempting to autosave file: ") + err.GetMessage();
 		}
 		catch (...) {
 			msg = _("Unhandled exception when attempting to autosave file.");
 		}
 
 		agi::dispatch::Main().Async([msg] {
-			gpui::PushStatus(from_wx(msg));
+			gpui::PushStatus(msg);
 		});
 	});
 }
@@ -383,12 +382,12 @@ void SubsController::Redo() {
 	text_selection_connection.Unblock();
 }
 
-wxString SubsController::GetUndoDescription() const {
-	return IsUndoStackEmpty() ? wxString() : undo_stack.back().undo_description;
+std::string SubsController::GetUndoDescription() const {
+	return IsUndoStackEmpty() ? std::string() : undo_stack.back().undo_description;
 }
 
-wxString SubsController::GetRedoDescription() const {
-	return IsRedoStackEmpty() ? wxString() : redo_stack.back().undo_description;
+std::string SubsController::GetRedoDescription() const {
+	return IsRedoStackEmpty() ? std::string() : redo_stack.back().undo_description;
 }
 
 agi::fs::path SubsController::Filename() const {
@@ -396,8 +395,8 @@ agi::fs::path SubsController::Filename() const {
 
 	// Apple HIG says "untitled" should not be capitalised
 #ifndef __WXMAC__
-	return from_wx(_("Untitled"));
+	return _("Untitled");
 #else
-	return from_wx(_("untitled"));
+	return _("untitled");
 #endif
 }

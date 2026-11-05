@@ -33,8 +33,8 @@
 ///
 
 #include "subtitles_provider_libass.h"
+#include "localisation.h"
 
-#include "compat.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "video_frame.h"
 
@@ -49,8 +49,7 @@
 #include <memory>
 #include <mutex>
 
-#include <wx/intl.h>
-#include <wx/thread.h>
+#include "gpui_loop.h"
 
 extern "C" {
 #include <ass/ass.h>
@@ -99,15 +98,15 @@ class LibassSubtitlesProvider final : public SubtitlesProvider {
 			if (shared->ready)
 				return;
 			br->Run([this](agi::ProgressSink *ps) {
-				ps->SetTitle(from_wx(_("Updating font index")));
-				ps->SetMessage(from_wx(_("This may take several minutes")));
+				ps->SetTitle(_("Updating font index"));
+				ps->SetMessage(_("This may take several minutes"));
 				ps->SetIndeterminate();
 				while (!shared->ready && !ps->IsCancelled())
 					agi::util::sleep_for(250);
 			});
 		};
 
-		if (wxThread::IsMain())
+		if (gpui::EventLoop::Current().OnLoopThread())
 			block();
 		else
 			agi::dispatch::Main().Sync(block);

@@ -39,7 +39,6 @@
 #include "ass_file.h"
 #include "ass_karaoke.h"
 #include "ass_style.h"
-#include "compat.h"
 
 #include <libaegisub/ass/karaoke.h>
 #include <libaegisub/exception.h>
@@ -696,7 +695,7 @@ namespace Automation4 {
 			PendingCommit& back = pending_commits.back();
 
 			back.modification_type = modification_type;
-			back.mesage = to_wx(check_string(L, 1));
+			back.mesage = check_string(L, 1);
 			back.lines = lines;
 			modification_type = 0;
 		}
@@ -712,7 +711,7 @@ namespace Automation4 {
 		return laf;
 	}
 
-	std::vector<AssEntry *> LuaAssFile::ProcessingComplete(wxString const& undo_description)
+	std::vector<AssEntry *> LuaAssFile::ProcessingComplete(std::string const& undo_description)
 	{
 		auto apply_lines = [&](std::vector<AssEntry *> const& lines) {
 			if (script_info_copied)

@@ -2,7 +2,7 @@ subdir('libresrc')
 
 gpui_host_src = files(
     'MatroskaParser.c',
-    'aegisublocale.cpp',
+    'localisation.cpp',
     'ass_attachment.cpp',
     'ass_dialogue.cpp',
     'ass_entry.cpp',
@@ -48,7 +48,6 @@ gpui_host_src = files(
     'command/tool.cpp',
     'command/video.cpp',
     'command/vis_tool.cpp',
-    'compat.cpp',
     'context.cpp',
     'ebu_export_settings.cpp',
     'export_fixstyle.cpp',
@@ -78,6 +77,7 @@ gpui_host_src = files(
     'mkv_wrap.cpp',
     'pen.cpp',
     'project.cpp',
+    'platform_path.cpp',
     'progress_runner.cpp',
     'provider_file_formats.cpp',
     'resolution_resampler.cpp',
@@ -111,6 +111,8 @@ gpui_host_src = files(
     'version_check.cpp',
     'video_controller.cpp',
     'video_properties.cpp',
+    'image_png.cpp',
+    'xml_dom.cpp',
     'video_frame.cpp',
     'video_provider_cache.cpp',
     'video_provider_dummy.cpp',
@@ -133,15 +135,18 @@ gpui_host_src = files(
 
 if host_machine.system() == 'darwin'
     gpui_host_src += files(
+        'clipboard_mac.mm',
         'font_file_lister_coretext.mm',
-        'osx/osx_utils.mm',
+        'text_extents_mac.mm',
     )
 
 elif host_machine.system() == 'windows'
     gpui_host_src += files(
         'avisynth_wrap.cpp',
         'crash_writer_minidump.cpp',
+        'clipboard_win.cpp',
         'font_file_lister_gdi.cpp',
+        'text_extents_win.cpp',
         'video_provider_avs.cpp',
     )
 
@@ -162,8 +167,13 @@ if host_machine.system() != 'windows'
     gpui_host_src += files('crash_writer.cpp')
 endif
 
+if host_machine.system() == 'linux'
+    gpui_host_src += files('clipboard_unix.cpp')
+endif
+
 if conf.has('WITH_FONTCONFIG')
-    gpui_host_src += files('font_file_lister_fontconfig.cpp')
+    gpui_host_src += files('font_file_lister_fontconfig.cpp', 'text_extents_fontconfig.cpp')
+    deps += dependency('freetype2')
 endif
 
 if conf.has('WITH_CSRI')
@@ -185,7 +195,6 @@ opt_src = [
 
     ['Hunspell', 'spellchecker_hunspell.cpp'],
 
-    ['libportal', 'xdg_desktop_portal_utils.cpp'],
 ]
 
 foreach opt: opt_src

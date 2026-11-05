@@ -72,7 +72,7 @@ class DirectSoundPlayer2 final : public AudioPlayer {
 
 public:
 	/// @brief Constructor
-	DirectSoundPlayer2(agi::AudioProvider *provider, wxWindow *parent);
+	DirectSoundPlayer2(agi::AudioProvider *provider );
 	/// @brief Destructor
 	~DirectSoundPlayer2();
 
@@ -241,7 +241,7 @@ public:
 	/// @param provider       Audio provider to take sample data from
 	/// @param WantedLatency Desired length in milliseconds to write ahead of the playback cursor
 	/// @param BufferLength  Multiplier for WantedLatency to get total buffer length
-	DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength, wxWindow *parent);
+	DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength );
 	/// @brief Destructor, waits for thread to have died
 	~DirectSoundPlayer2Thread();
 
@@ -657,7 +657,7 @@ void DirectSoundPlayer2Thread::CheckError()
 	}
 }
 
-DirectSoundPlayer2Thread::DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength, wxWindow *parent)
+DirectSoundPlayer2Thread::DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength )
 : parent(parent ? (HWND)parent->GetHandle() : GetDesktopWindow())
 , event_start_playback  (CreateEvent(0, FALSE, FALSE, 0))
 , event_stop_playback   (CreateEvent(0, FALSE, FALSE, 0))
@@ -797,7 +797,7 @@ bool DirectSoundPlayer2Thread::IsDead()
 	}
 }
 
-DirectSoundPlayer2::DirectSoundPlayer2(agi::AudioProvider *provider, wxWindow *parent)
+DirectSoundPlayer2::DirectSoundPlayer2(agi::AudioProvider *provider)
 : AudioPlayer(provider)
 {
 	// The buffer will hold BufferLength times WantedLatency milliseconds of audio
@@ -812,7 +812,7 @@ DirectSoundPlayer2::DirectSoundPlayer2(agi::AudioProvider *provider, wxWindow *p
 
 	try
 	{
-		thread = std::make_unique<DirectSoundPlayer2Thread>(provider, WantedLatency, BufferLength, parent);
+		thread = std::make_unique<DirectSoundPlayer2Thread>(provider, WantedLatency, BufferLength);
 	}
 	catch (const char *msg)
 	{
@@ -926,8 +926,8 @@ void DirectSoundPlayer2::SetVolume(double vol)
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateDirectSound2Player(agi::AudioProvider *provider, wxWindow *parent) {
-	return std::make_unique<DirectSoundPlayer2>(provider, parent);
+std::unique_ptr<AudioPlayer> CreateDirectSound2Player(agi::AudioProvider *provider) {
+	return std::make_unique<DirectSoundPlayer2>(provider);
 }
 
 #endif // WITH_DIRECTSOUND

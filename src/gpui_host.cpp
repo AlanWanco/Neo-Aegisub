@@ -10,10 +10,9 @@
 /// This file is the whole of the host's startup: build the configuration, open
 /// the document, start the socket, launch the frontend and pump the loop.
 
-#include "aegisublocale.h"
+#include "localisation.h"
 #include "auto4_base.h"
 #include "auto4_lua_factory.h"
-#include "compat.h"
 #include "command/command.h"
 #include "crash_writer.h"
 #include "export_fixstyle.h"
@@ -39,8 +38,6 @@
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
-#include <wx/image.h>
-#include <wx/init.h>
 
 #include <chrono>
 #include <csignal>
@@ -73,8 +70,6 @@ agi::Options *opt = nullptr;
 agi::MRUManager *mru = nullptr;
 Automation4::AutoloadScriptManager *global_scripts = nullptr;
 }
-
-AegisubLocale ui_locale;
 
 namespace {
 using namespace std::chrono_literals;
@@ -281,19 +276,13 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 #ifdef WITH_GPUI_DEFAULT
 	// The GPUI workspace only ships Chinese strings, so it runs in Chinese
 	// unless the stored language actually has a catalog.
-	if (language.empty() || !ui_locale.HasLanguage(language))
+	if (language.empty() || !agi::i18n::HasLanguage(language))
 		language = "zh_CN";
 #else
-	if (language.empty() || (language != "en_US" && !ui_locale.HasLanguage(language)))
-		language = ui_locale.RecommendLanguage();
+	if (language.empty() || (language != "en_US" && !agi::i18n::HasLanguage(language)))
+		language = agi::i18n::RecommendLanguage();
 #endif
-	ui_locale.Init(language);
-
-	StartupLog("Install image handlers");
-	wxImage::AddHandler(new wxPNGHandler);
-#if wxUSE_LIBJPEG
-	wxImage::AddHandler(new wxJPEGHandler);
-#endif
+	agi::i18n::SetLanguage(language);
 
 	StartupLog("Load plugins");
 	Automation4::ScriptFactory::Register(std::make_unique<Automation4::LuaScriptFactory>());
@@ -373,12 +362,6 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 }
 
 int main(int argc, char **argv) {
-	wxInitializer initializer;
-	if (!initializer.IsOk()) {
-		std::fprintf(stderr, "gpui-host: wxWidgets failed to initialise\n");
-		return 1;
-	}
-
 	std::vector<std::string> files;
 	for (int i = 1; i < argc; ++i)
 		files.emplace_back(argv[i]);

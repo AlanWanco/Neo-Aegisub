@@ -84,7 +84,7 @@ void AudioController::OnAudioPlayerChanged()
 	try
 	{
 		playback_provider = std::make_unique<agi::PlaybackAudioProvider>(provider, playback_rate);
-		player = AudioPlayerFactory::GetAudioPlayer(playback_provider.get(), nullptr);
+		player = AudioPlayerFactory::GetAudioPlayer(playback_provider.get());
 		player->SetVolume(volume);
 	}
 	catch (...)

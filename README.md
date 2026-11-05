@@ -92,7 +92,6 @@ fontconfig:  libfontconfig1-dev
 libass:      libass-dev
 boost:       libboost-chrono-dev libboost-locale-dev libboost-regex-dev libboost-system-dev libboost-thread-dev
 zlib:        zlib1g-dev
-WxWidgets:   wx3.2-headers libwxgtk3.2-dev
 ICU:         icu-devtools libicu-dev
 pulse-audio: libpulse-dev
 ALSA:        libasound2-dev
@@ -105,12 +104,11 @@ libcurl:     libcurl4-openssl-dev  or  libcurl4-gnutls-dev
 opengl:      libgl1-mesa-dev
 gtest:       libgtest-dev
 gmock:       libgmock-dev
-libportal:   libportal-gtk3-dev
 ```
 
 I.e. to install on Ubuntu 24.04 run this command:
 ``` bash
-sudo apt install build-essential pkg-config meson ninja-build gettext intltool libfontconfig1-dev libass-dev libboost-chrono-dev libboost-locale-dev libboost-regex-dev libboost-system-dev libboost-thread-dev zlib1g-dev wx3.2-headers libwxgtk3.2-dev icu-devtools libicu-dev libpulse-dev libasound2-dev libopenal-dev libffms2-dev libfftw3-dev libhunspell-dev libuchardet-dev libcurl4-gnutls-dev libgl1-mesa-dev libgtest-dev libgmock-dev libportal-gtk3-dev
+sudo apt install build-essential pkg-config meson ninja-build gettext intltool libfontconfig1-dev libass-dev libboost-chrono-dev libboost-locale-dev libboost-regex-dev libboost-system-dev libboost-thread-dev zlib1g-dev icu-devtools libicu-dev libpulse-dev libasound2-dev libopenal-dev libffms2-dev libfftw3-dev libhunspell-dev libuchardet-dev libcurl4-gnutls-dev libgl1-mesa-dev libgtest-dev libgmock-dev
 ```
 
 #### Build Neo Aegisub
@@ -130,8 +128,6 @@ If you are packaging Neo Aegisub for a Linux distribution, here are a few things
   For distributions that do not allow downloading additional sources at build time, the downloaded LuaJIT subproject is included in the source tarballs distributed with releases.
 - When linked against libstdc++, Neo Aegisub needs libstdc++ 6.0.32 or later due to https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95048.
   Neo Aegisub's tests will detect this bug, but if you're not running tests on packaging you'll need to make sure the libstdc++ version is recent enough.
-- Neo Aegisub uses OpenGL through wxWidgets. For Neo Aegisub to work directly on Wayland (as opposed to Xwayland), wxWidgets needs to be built with EGL enabled.
-  Neo Aegisub will automatically fall back to X11 when it detects missing EGL support.
 
 The following commands are an example for how to build Neo Aegisub with the goal of creating a distribution package:
 

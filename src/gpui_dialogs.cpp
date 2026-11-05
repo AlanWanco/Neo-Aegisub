@@ -3,7 +3,7 @@
 
 #include "gpui_dialogs.h"
 
-#include "aegisublocale.h"
+#include "localisation.h"
 #include "ass_dialogue.h"
 #include "ass_exporter.h"
 #include "ass_file.h"
@@ -11,9 +11,7 @@
 #include "font_file_lister.h"
 #include "command/edit.h"
 #include "include/aegisub/context.h"
-#include "compat.h"
 
-#include <wx/translation.h>
 #include "dialogs.h"
 #include "options.h"
 #include "version.h"
@@ -23,7 +21,6 @@
 #include <libaegisub/log.h>
 #include <libaegisub/split.h>
 
-#include <wx/fontenum.h>
 
 #include <filesystem>
 
@@ -68,9 +65,9 @@ json::Array log_entries() {
 }
 
 json::Array fonts() {
-	auto const faces = wxFontEnumerator::GetFacenames();
+	auto const faces = GetFontFamilies();
 	json::Array result;
-	for (auto const& face : faces) push(result, json::String(from_wx(face)));
+	for (auto const& face : faces) push(result, json::String(face));
 	return result;
 }
 
@@ -176,7 +173,7 @@ json::Object kanji_apply(agi::Context *context, json::Object const& request) {
 }
 
 json::Object font_collection(agi::Context *context) {
-	FontCollectorStatusCallback callback = [](wxString, int) {};
+	FontCollectorStatusCallback callback = [](std::string, int) {};
 	FontCollector collector(callback);
 	auto paths = collector.GetFontPaths(context->ass.get());
 	json::Array fonts;
@@ -196,12 +193,15 @@ json::Object font_collection(agi::Context *context) {
 json::Object languages() {
 	json::Object result;
 	json::Array items;
-	auto languages = ui_locale.GetAvailableLanguages();
+	std::vector<std::pair<std::string, std::string>> languages;
+	languages.emplace_back("en_US", agi::i18n::LanguageName("en_US"));
+	for (auto const& code : agi::i18n::AvailableLanguages())
+		languages.emplace_back(code, agi::i18n::LanguageName(code));
 #ifdef WITH_GPUI_DEFAULT
 	// Startup pins the language to zh_CN because the GPUI workspace only ships
 	// Chinese strings, so offering the other catalogs would be dead UI: picking
 	// one only reverts on the next start.
-	std::string const active = ui_locale.GetActiveLanguage();
+	std::string const active = agi::i18n::ActiveLanguage();
 	languages.erase(std::remove_if(languages.begin(), languages.end(),
 		[&](auto const& language) { return language.first != active; }), languages.end());
 	result["note"] = "GPUI 工作台目前只有中文界面，语言切换暂不可用。";
@@ -213,7 +213,7 @@ json::Object languages() {
 		push(items, std::move(item));
 	}
 	result["languages"] = std::move(items);
-	result["active"] = ui_locale.GetActiveLanguage();
+	result["active"] = agi::i18n::ActiveLanguage();
 	result["ok"] = true;
 	return result;
 }
@@ -236,7 +236,7 @@ std::string Dialog(agi::Context *context, json::Object const& request) {
 		std::string const& code = request.at("code");
 		OPT_SET("App/Language")->SetString(code);
 		result["ok"] = true;
-		result["restart"] = code != ui_locale.GetActiveLanguage();
+		result["restart"] = code != agi::i18n::ActiveLanguage();
 	}
 	else if (action == "updates") {
 		PerformVersionCheck(true);
@@ -285,7 +285,7 @@ std::string Dialog(agi::Context *context, json::Object const& request) {
 	else if (action == "kanji_apply") result = kanji_apply(context, request);
 	else if (action == "font_copy") {
 		std::string const& destination = request.at("destination");
-		FontCollectorStatusCallback callback = [](wxString, int) {};
+		FontCollectorStatusCallback callback = [](std::string, int) {};
 		FontCollector collector(callback);
 		int64_t copied = 0;
 		std::error_code error;

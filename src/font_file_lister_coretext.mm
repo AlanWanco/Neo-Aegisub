@@ -19,6 +19,8 @@
 
 #include "font_file_lister.h"
 
+#include <set>
+
 namespace {
 struct FontMatch {
 	NSURL *url = nil;
@@ -214,4 +216,26 @@ CollectionResult CoreTextFontFileLister::GetFontPaths(std::string const& facenam
 	}
 
 	return ret;
+}
+
+std::vector<std::string> GetFontFamilies() {
+	@autoreleasepool {
+		std::set<std::string> families;
+		CTFontCollectionRef collection = CTFontCollectionCreateFromAvailableFonts(nullptr);
+		CFArrayRef descriptors = CTFontCollectionCreateMatchingFontDescriptors(collection);
+		if (descriptors) {
+			for (CFIndex i = 0; i < CFArrayGetCount(descriptors); ++i) {
+				auto descriptor = static_cast<CTFontDescriptorRef>(CFArrayGetValueAtIndex(descriptors, i));
+				CFStringRef family = static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute));
+				if (!family) continue;
+				char buffer[512];
+				if (CFStringGetCString(family, buffer, sizeof buffer, kCFStringEncodingUTF8))
+					families.emplace(buffer);
+				CFRelease(family);
+			}
+			CFRelease(descriptors);
+		}
+		CFRelease(collection);
+		return {families.begin(), families.end()};
+	}
 }

@@ -15,7 +15,6 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "search_replace_engine.h"
-#include "compat.h"
 #include "utils.h"
 #include "gpui_bridge.h"
 
@@ -280,13 +279,13 @@ bool SearchReplaceEngine::ReplaceAll() {
 	auto count = ReplaceAllMatches();
 	if (gpui::FrontendAttached()) {
 		if (count)
-			gpui::PushNotice(from_wx(_("Replace")), from_wx(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", static_cast<int>(count))));
+			gpui::PushNotice(_("Replace"), fmt_plural(count, "One match was replaced.", "%d matches were replaced.", static_cast<int>(count)));
 		else
-			gpui::PushNotice(from_wx(_("Replace")), from_wx(_("No matches found.")));
+			gpui::PushNotice(_("Replace"), _("No matches found."));
 		return true;
 	}
-	if (count) gpui::PushStatus(from_wx(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", static_cast<int>(count))));
-	else gpui::PushStatus(from_wx(_("No matches found.")));
+	if (count) gpui::PushStatus(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", static_cast<int>(count)));
+	else gpui::PushStatus(_("No matches found."));
 	return true;
 }
 

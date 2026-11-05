@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "shift_times.h"
+#include "localisation.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
@@ -22,7 +23,6 @@
 #include <limits>
 #include <stdexcept>
 #include <vector>
-#include <wx/intl.h>
 
 json::Array LoadShiftTimesHistory() {
 	try {

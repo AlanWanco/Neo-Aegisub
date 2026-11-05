@@ -36,7 +36,6 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
-#include "compat.h"
 #include "format.h"
 #include "gpui_bridge.h"
 #include "subtitle_format_ass.h"
@@ -99,29 +98,29 @@ agi::vfr::Framerate SubtitleFormat::AskForFPS(bool allow_vfr, bool show_smpte, a
 	if (fps.IsLoaded()) {
 		vidLoaded = true;
 		if (!fps.IsVFR())
-			choices.push_back(from_wx(fmt_tl("From video (%g)", fps.FPS())));
+			choices.push_back(fmt_tl("From video (%g)", fps.FPS()));
 		else if (allow_vfr)
-			choices.push_back(from_wx(_("From video (VFR)")));
+			choices.push_back(_("From video (VFR)"));
 		else
 			vidLoaded = false;
 	}
 
 	// Standard FPS values
-	choices.push_back(from_wx(_("15.000 FPS")));
-	choices.push_back(from_wx(_("23.976 FPS (Decimated NTSC)")));
-	choices.push_back(from_wx(_("24.000 FPS (FILM)")));
-	choices.push_back(from_wx(_("25.000 FPS (PAL)")));
-	choices.push_back(from_wx(_("29.970 FPS (NTSC)")));
+	choices.push_back(_("15.000 FPS"));
+	choices.push_back(_("23.976 FPS (Decimated NTSC)"));
+	choices.push_back(_("24.000 FPS (FILM)"));
+	choices.push_back(_("25.000 FPS (PAL)"));
+	choices.push_back(_("29.970 FPS (NTSC)"));
 	if (show_smpte)
-		choices.push_back(from_wx(_("29.970 FPS (NTSC with SMPTE dropframe)")));
-	choices.push_back(from_wx(_("30.000 FPS")));
-	choices.push_back(from_wx(_("50.000 FPS (PAL x2)")));
-	choices.push_back(from_wx(_("59.940 FPS (NTSC x2)")));
-	choices.push_back(from_wx(_("60.000 FPS")));
-	choices.push_back(from_wx(_("119.880 FPS (NTSC x4)")));
-	choices.push_back(from_wx(_("120.000 FPS")));
+		choices.push_back(_("29.970 FPS (NTSC with SMPTE dropframe)"));
+	choices.push_back(_("30.000 FPS"));
+	choices.push_back(_("50.000 FPS (PAL x2)"));
+	choices.push_back(_("59.940 FPS (NTSC x2)"));
+	choices.push_back(_("60.000 FPS"));
+	choices.push_back(_("119.880 FPS (NTSC x4)"));
+	choices.push_back(_("120.000 FPS"));
 
-	int choice = gpui::AskChoice(from_wx(_("FPS")), from_wx(_("Please choose the appropriate FPS for the subtitles:")), {}, "fps", choices);
+	int choice = gpui::AskChoice(_("FPS"), _("Please choose the appropriate FPS for the subtitles:"), {}, "fps", choices);
 
 	using agi::vfr::Framerate;
 	if (choice == -1)
@@ -312,5 +311,5 @@ std::string SubtitleFormat::GetWildcards(int mode) {
 		agi::AppendJoin(final, ";", cur);
 	}
 
-	return agi::Str(from_wx(_("All Supported Formats")), " (", agi::Join(",", all), ")|", agi::Join(";", all), final);
+	return agi::Str(_("All Supported Formats"), " (", agi::Join(",", all), ")|", agi::Join(";", all), final);
 }

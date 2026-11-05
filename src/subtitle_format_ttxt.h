@@ -37,14 +37,14 @@
 #include "subtitle_format.h"
 
 class AssDialogue;
-class wxXmlNode;
+namespace xml { struct Node; }
 
 class TTXTSubtitleFormat final : public SubtitleFormat {
-	AssDialogue *ProcessLine(wxXmlNode *node, AssDialogue *prev, int version) const;
-	void ProcessHeader(wxXmlNode *node) const;
+	AssDialogue *ProcessLine(xml::Node *node, AssDialogue *prev, int version) const;
+	void ProcessHeader(xml::Node *node) const;
 
-	void WriteHeader(wxXmlNode *root) const;
-	void WriteLine(wxXmlNode *root, const AssDialogue *prev, const AssDialogue *line) const;
+	void WriteHeader(xml::Node *root) const;
+	void WriteLine(xml::Node *root, const AssDialogue *prev, const AssDialogue *line) const;
 
 	void ConvertToTTXT(AssFile &file) const;
 

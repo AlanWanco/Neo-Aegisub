@@ -28,6 +28,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "timing_processor.h"
+#include "localisation.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
@@ -41,7 +42,6 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
-#include <wx/intl.h>
 
 namespace {
 static int get_closest_kf(std::vector<int> const& kf, int frame) {

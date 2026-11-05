@@ -34,7 +34,6 @@
 #include "include/aegisub/audio_player.h"
 
 #include "audio_controller.h"
-#include "compat.h"
 #include "options.h"
 #include "utils.h"
 
@@ -42,9 +41,14 @@
 #include <libaegisub/log.h>
 
 #include <fcntl.h>
+
+#include <algorithm>
+#include <cstring>
+#include <vector>
 #include <sys/ioctl.h>
 #include <sys/param.h>
-#include <wx/thread.h>
+#include <atomic>
+#include <thread>
 
 #ifdef HAVE_SOUNDCARD_H
 #   include <soundcard.h>
@@ -53,16 +57,13 @@
 #endif
 
 namespace {
-class OSSPlayerThread;
-
 class OSSPlayer final : public AudioPlayer {
-    friend class OSSPlayerThread;
-
-    /// sample rate of audio
+    friend     /// sample rate of audio
     unsigned int rate = 0;
 
     /// Worker thread that does the actual writing
-    std::unique_ptr<OSSPlayerThread> thread;
+    std::thread thread;
+    std::atomic<bool> stop_requested {false};
 
     /// Is the player currently playing?
     volatile bool playing = false;
@@ -99,6 +100,25 @@ public:
         ::close(dspdev);
     }
 
+    /// Worker loop writing audio data to the output device
+    void Run() {
+        // Use small enough writes for good timing accuracy with all
+        // timing methods.
+        const unsigned long wsize = rate / 25;
+        std::vector<char> buf(wsize * bpf);
+
+        while (!stop_requested && cur_frame < end_frame) {
+            int rsize = std::min<unsigned long>(wsize, end_frame - cur_frame);
+            provider->GetAudioWithVolume(buf.data(), cur_frame, rsize, volume);
+            int written = ::write(dspdev, buf.data(), rsize * bpf);
+            if (written <= 0) break;
+            cur_frame += written / bpf;
+        }
+        cur_frame = end_frame;
+
+        LOG_D("player/audio/oss") << "Thread dead";
+    }
+
     void Play(int64_t start, int64_t count);
     void Stop();
     bool IsPlaying() { return playing; }
@@ -111,45 +131,15 @@ public:
     void SetVolume(double vol) { volume = vol; }
 };
 
-/// Worker thread to asynchronously write audio data to the output device
-class OSSPlayerThread final : public wxThread {
-    /// Parent player
-    OSSPlayer *parent;
 
-public:
-    /// Constructor
-    /// @param parent Player to get audio data and playback state from
-    OSSPlayerThread(OSSPlayer *parent) : wxThread(wxTHREAD_JOINABLE) , parent(parent) { }
-
-    /// Main thread entry point
-    wxThread::ExitCode Entry() {
-        // Use small enough writes for good timing accuracy with all
-        // timing methods.
-        const unsigned long wsize = parent->rate / 25;
-        void *buf = malloc(wsize * parent->bpf);
-
-        while (!TestDestroy() && parent->cur_frame < parent->end_frame) {
-            int rsize = std::min(wsize, parent->end_frame - parent->cur_frame);
-            parent->provider->GetAudioWithVolume(buf, parent->cur_frame,
-                                                 rsize, parent->volume);
-            int written = ::write(parent->dspdev, buf, rsize * parent->bpf);
-            parent->cur_frame += written / parent->bpf;
-        }
-        free(buf);
-        parent->cur_frame = parent->end_frame;
-
-        LOG_D("player/audio/oss") << "Thread dead";
-        return 0;
-    }
-};
 
 void OSSPlayer::OpenStream()
 {
     bpf = provider->GetChannels() * provider->GetBytesPerSample();
 
     // Open device
-    wxString device = to_wx(OPT_GET("Player/Audio/OSS/Device")->GetString());
-    dspdev = ::open(device.utf8_str(), O_WRONLY, 0);
+    std::string device = OPT_GET("Player/Audio/OSS/Device")->GetString();
+    dspdev = ::open(device.c_str(), O_WRONLY, 0);
     if (dspdev < 0) {
         throw AudioPlayerOpenError("OSS player: opening device failed");
     }
@@ -197,25 +187,20 @@ void OSSPlayer::Play(int64_t start, int64_t count)
     start_frame = cur_frame = start;
     end_frame = start + count;
 
-    thread = std::make_unique<OSSPlayerThread>(this);
-    thread->Create();
-    thread->Run();
+    stop_requested = false;
+    thread = std::thread(&OSSPlayer::Run, this);
 
     playing = true;
 }
 
 void OSSPlayer::Stop()
 {
-    if (!playing) return;
-
     // Stop the thread
-    if (thread) {
-        if (thread->IsAlive()) {
-            thread->Delete();
-        }
-        thread->Wait();
-        thread.reset();
-    }
+    stop_requested = true;
+    if (thread.joinable())
+        thread.join();
+
+    if (!playing) return;
 
     // errors can be ignored here
     ioctl(dspdev, SNDCTL_DSP_RESET, nullptr);
@@ -233,8 +218,7 @@ void OSSPlayer::SetEndPosition(int64_t pos)
 
     if (pos <= GetCurrentPosition()) {
         ioctl(dspdev, SNDCTL_DSP_RESET, nullptr);
-        if (thread && thread->IsAlive())
-            thread->Delete();
+        stop_requested = true;
     }
 }
 
@@ -278,7 +262,7 @@ int64_t OSSPlayer::GetCurrentPosition()
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateOSSPlayer(agi::AudioProvider *provider, wxWindow *) {
+std::unique_ptr<AudioPlayer> CreateOSSPlayer(agi::AudioProvider *provider) {
     return std::make_unique<OSSPlayer>(provider);
 }
 

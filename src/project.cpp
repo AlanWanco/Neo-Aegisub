@@ -23,7 +23,6 @@
 #include "audio_controller.h"
 #include "audio_provider_factory.h"
 #include "charset_detect.h"
-#include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/video_provider.h"
@@ -83,7 +82,7 @@ void Project::ReloadVideo() {
 }
 
 void Project::ShowError(std::string const& message) {
-	gpui::PushNotice(from_wx(_("Error loading file")), message, "", "error");
+	gpui::PushNotice(_("Error loading file"), message, "", "error");
 }
 
 void Project::SetPath(agi::fs::path& var, const char *token, const char *mru, agi::fs::path const& value) {
@@ -105,7 +104,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 	}
 	catch (agi::fs::FileNotFound const&) {
 		config::mru->Remove("Subtitle", path);
-		ShowError(from_wx(fmt_tl("%s not found.", path.string())));
+		ShowError(fmt_tl("%s not found.", path.string()));
 		return false;
 	}
 
@@ -124,7 +123,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileNotFound const&) {
 		config::mru->Remove("Subtitle", path);
-		ShowError(from_wx(fmt_tl("%s not found.", path.string())));
+		ShowError(fmt_tl("%s not found.", path.string()));
 		return false;
 	}
 	catch (agi::Exception const& e) {
@@ -136,7 +135,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		return false;
 	}
 	catch (...) {
-		ShowError(from_wx(_("Unknown error")));
+		ShowError(_("Unknown error"));
 		return false;
 	}
 
@@ -213,14 +212,14 @@ void Project::LoadUnloadFiles(ProjectProperties properties, bool ask) {
 			return;
 
 		if (ask) {
-		wxString str = _("Do you want to load/unload the associated files?");
+		std::string str = _("Do you want to load/unload the associated files?");
 		str += "\n";
 
-		auto append_file = [&](agi::fs::path const& p, wxString const& unload, wxString const& load) {
+		auto append_file = [&](agi::fs::path const& p, std::string const& unload, std::string const& load) {
 			if (p.empty())
 				str += "\n" + unload;
 			else
-				str += "\n" + agi::wxformat(load, p);
+				str += "\n" + agi::format(load, p);
 		};
 
 		if (audio != audio_file)
@@ -236,7 +235,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties, bool ask) {
 		// waits for this very call, so the files stay unloaded until the
 		// notice's buttons come back through ApplyLinkedFiles.
 		pending_linked = std::make_unique<ProjectProperties>(properties);
-		gpui::PushNotice(from_wx(_("(Un)Load files?")), from_wx(str), {}, "linked");
+		gpui::PushNotice(_("(Un)Load files?"), str, {}, "linked");
 		return;
 		}
 	}
@@ -247,18 +246,18 @@ void Project::LoadUnloadFiles(ProjectProperties properties, bool ask) {
 	bool avisynth_audio = is_linked_avisynth(audio, audio_file);
 	bool avisynth_video = is_linked_avisynth(video, video_file);
 	if (avisynth_audio || avisynth_video) {
-		wxString script_list;
+		std::string script_list;
 		if (avisynth_audio) {
 			script_list += "\n    ";
-			script_list += audio.wstring();
+			script_list += audio.string();
 		}
 		if (avisynth_video && (!avisynth_audio || video != audio)) {
 			script_list += "\n    ";
-			script_list += video.wstring();
+			script_list += video.string();
 		}
 
 		bool multiple_scripts = avisynth_audio && avisynth_video && audio != video;
-		wxString message = multiple_scripts
+		std::string message = multiple_scripts
 			? _("The subtitle file references AviSynth scripts. AviSynth scripts can execute arbitrary code with your user permissions. Only load them if you trust the subtitle's author. You do not need to load these scripts to view or edit this subtitle file.\n\nScripts:")
 			: _("The subtitle file references an AviSynth script. AviSynth scripts can execute arbitrary code with your user permissions. Only load it if you trust the subtitle's author. You do not need to load this script to view or edit this subtitle file.\n\nScript:");
 		message += script_list;
@@ -272,8 +271,8 @@ void Project::LoadUnloadFiles(ProjectProperties properties, bool ask) {
 			// on, so the question goes to the front end and the load runs again
 			// once it is answered.
 			pending_linked = std::make_unique<ProjectProperties>(properties);
-			gpui::PushChoice(from_wx(_("Load linked AviSynth script?")), from_wx(message), {}, "avisynth",
-				{from_wx(_("Trust author && load")), from_wx(_("Do not load"))},
+			gpui::PushChoice(_("Load linked AviSynth script?"), message, {}, "avisynth",
+				{_("Trust author && load"), _("Do not load")},
 				[this](int choice) {
 					avisynth_answer = choice;
 					auto properties = std::move(pending_linked);
@@ -349,7 +348,7 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 		}
 	}
 	catch (agi::fs::FileNotFound const& e) {
-		return ShowError(from_wx(_("The audio file was not found: ") + to_wx(e.GetMessage())));
+		return ShowError(_("The audio file was not found: ") + e.GetMessage());
 	}
 	catch (agi::AudioDataNotFound const& e) {
 		if (quiet) {
@@ -357,10 +356,10 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 			return;
 		}
 		else
-			return ShowError(from_wx(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n") + to_wx(e.GetMessage())));
+			return ShowError(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n") + e.GetMessage());
 	}
 	catch (agi::AudioProviderError const& e) {
-		return ShowError(from_wx(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n") + to_wx(e.GetMessage())));
+		return ShowError(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n") + e.GetMessage());
 	}
 	catch (agi::Exception const& e) {
 		return ShowError(e.GetMessage());
@@ -412,7 +411,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 	std::string warning = video_provider->GetWarning();
 	if (!warning.empty())
-		gpui::PushNotice(from_wx(_("Warning")), warning);
+		gpui::PushNotice(_("Warning"), warning);
 
 	video_has_subtitles = false;
 	if (agi::fs::HasExtension(path, "mkv"))
@@ -462,7 +461,7 @@ void Project::LoadTimecodes(agi::fs::path path) {
 		config::mru->Remove("Timecodes", path);
 	}
 	catch (agi::vfr::Error const& e) {
-		ShowError(from_wx(_("Failed to parse timecodes file: ") + to_wx(e.GetMessage())));
+		ShowError(_("Failed to parse timecodes file: ") + e.GetMessage());
 		config::mru->Remove("Timecodes", path);
 	}
 }
@@ -488,11 +487,11 @@ void Project::LoadKeyframes(agi::fs::path path) {
 		config::mru->Remove("Keyframes", path);
 	}
 	catch (agi::keyframe::KeyframeFormatParseError const& e) {
-		ShowError(from_wx(_("Failed to parse keyframes file: ") + to_wx(e.GetMessage())));
+		ShowError(_("Failed to parse keyframes file: ") + e.GetMessage());
 		config::mru->Remove("Keyframes", path);
 	}
 	catch (agi::keyframe::UnknownKeyframeFormatError const& e) {
-		ShowError(from_wx(_("Keyframes file in unknown format: ") + to_wx(e.GetMessage())));
+		ShowError(_("Keyframes file in unknown format: ") + e.GetMessage());
 		config::mru->Remove("Keyframes", path);
 	}
 }

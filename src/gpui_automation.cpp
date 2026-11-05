@@ -5,7 +5,6 @@
 
 #include "auto4_base.h"
 #include "command/command.h"
-#include "compat.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 
@@ -15,7 +14,6 @@
 #include <algorithm>
 #include <sstream>
 #include <stdexcept>
-#include <wx/log.h>
 
 namespace gpui {
 std::string AutomationManager(agi::Context *context, json::Object const& request) {
@@ -23,8 +21,6 @@ std::string AutomationManager(agi::Context *context, json::Object const& request
 	auto local = context->local_scripts.get();
 	Automation4::ScriptManager *global = config::global_scripts;
 	// Load failures and warnings are shown in the native script details below.
-	// Keep the shared loader's wx logging from opening a second modal error UI.
-	wxLogNull suppress_dialogs;
 	if (action == "add") {
 		agi::fs::path path(agi::fs::path(static_cast<std::string const&>(request.at("path"))).lexically_normal().string());
 		if (!path.is_absolute() || !agi::fs::FileExists(path))
@@ -83,8 +79,8 @@ std::string AutomationManager(agi::Context *context, json::Object const& request
 			for (auto macro : script->GetMacros()) {
 				json::Object item;
 				item["name"] = macro->name();
-				item["label"] = from_wx(macro->StrDisplay(context));
-				item["help"] = from_wx(macro->StrHelp());
+				item["label"] = macro->StrDisplay(context);
+				item["help"] = macro->StrHelp();
 				macros.emplace_back(std::move(item));
 			}
 			entry["macros"] = std::move(macros);

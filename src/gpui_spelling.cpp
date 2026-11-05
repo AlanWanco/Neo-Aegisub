@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "gpui_spelling.h"
+#include "localisation.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
@@ -22,7 +23,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
-#include <wx/intl.h>
 
 namespace gpui {
 struct Spelling::Impl {

@@ -31,16 +31,17 @@
 
 #include "ass_file.h"
 #include "ass_style.h"
-#include "compat.h"
 #include "gpui_bridge.h"
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "subs_controller.h"
+#include "text_extents.h"
 
 #include <libaegisub/ass/string_codec.h>
 #include <libaegisub/dispatch.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/log.h>
 #include <libaegisub/path.h>
 #include <libaegisub/split.h>
 #include <libaegisub/string.h>
@@ -49,122 +50,23 @@
 #include <future>
 #include <ranges>
 
-#include <wx/dcmemory.h>
-#include <wx/log.h>
-
-#ifdef __WINDOWS__
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
-#include <libaegisub/charset_conv_win.h>
-#endif
 
 namespace Automation4 {
 	bool CalculateTextExtents(AssStyle *style, std::string const& text, double &width, double &height, double &descent, double &extlead)
 	{
 		width = height = descent = extlead = 0;
 
-		double fontsize = style->fontsize * 64;
-		double spacing = style->spacing * 64;
-
-#ifdef WIN32
-		// This is almost copypasta from TextSub
-		auto dc = CreateCompatibleDC(nullptr);
-		if (!dc) return false;
-
-		SetMapMode(dc, MM_TEXT);
-
-		LOGFONTW lf = {0};
-		lf.lfHeight = (LONG)fontsize;
-		lf.lfWeight = style->bold ? FW_BOLD : FW_NORMAL;
-		lf.lfItalic = style->italic;
-		lf.lfUnderline = style->underline;
-		lf.lfStrikeOut = style->strikeout;
-		lf.lfCharSet = style->encoding;
-		lf.lfOutPrecision = OUT_TT_PRECIS;
-		lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
-		lf.lfQuality = ANTIALIASED_QUALITY;
-		lf.lfPitchAndFamily = DEFAULT_PITCH|FF_DONTCARE;
-		wcsncpy(lf.lfFaceName, agi::charset::ConvertW(style->font).c_str(), 31);
-
-		auto font = CreateFontIndirect(&lf);
-		if (!font) return false;
-
-		auto old_font = SelectObject(dc, font);
-
-		std::wstring wtext(agi::charset::ConvertW(text));
-		if (spacing != 0 ) {
-			width = 0;
-			for (auto c : wtext) {
-				SIZE sz;
-				GetTextExtentPoint32(dc, &c, 1, &sz);
-				width += sz.cx + spacing;
-				height = sz.cy;
-			}
-		}
-		else {
-			SIZE sz;
-			GetTextExtentPoint32(dc, &wtext[0], (int)wtext.size(), &sz);
-			width = sz.cx;
-			height = sz.cy;
-		}
-
-		TEXTMETRIC tm;
-		GetTextMetrics(dc, &tm);
-		descent = tm.tmDescent;
-		extlead = tm.tmExternalLeading;
-
-		SelectObject(dc, old_font);
-		DeleteObject(font);
-		DeleteObject(dc);
-
-#else // not WIN32
-		wxMemoryDC thedc;
-
-		// fix fontsize to be 72 DPI
-		//fontsize = -FT_MulDiv((int)(fontsize+0.5), 72, thedc.GetPPI().y);
-
-		// now try to get a font!
-		// use the font list to get some caching... (chance is the script will need the same font very often)
-		// USING wxTheFontList SEEMS TO CAUSE BAD LEAKS!
-		//wxFont *thefont = wxTheFontList->FindOrCreateFont(
-		wxFont thefont(
-			(int)fontsize,
-			wxFONTFAMILY_DEFAULT,
-			style->italic ? wxFONTSTYLE_ITALIC : wxFONTSTYLE_NORMAL,
-			style->bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL,
-			style->underline,
-			to_wx(style->font),
-			wxFONTENCODING_SYSTEM); // FIXME! make sure to get the right encoding here, make some translation table between windows and wx encodings
-		thedc.SetFont(thefont);
-
-		wxString wtext(to_wx(text));
-		if (spacing) {
-			// If there's inter-character spacing, kerning info must not be used, so calculate width per character
-			// NOTE: Is kerning actually done either way?!
-			for (auto const& wc : wtext) {
-				int a, b, c, d;
-				thedc.GetTextExtent(wc, &a, &b, &c, &d);
-				double scaling = fontsize / (double)(b > 0 ? b : 1); // semi-workaround for missing OS/2 table data for scaling
-				width += (a + spacing)*scaling;
-				height = b > height ? b*scaling : height;
-				descent = c > descent ? c*scaling : descent;
-				extlead = d > extlead ? d*scaling : extlead;
-			}
-		} else {
-			// If the inter-character spacing should be zero, kerning info can (and must) be used, so calculate everything in one go
-			wxCoord lwidth, lheight, ldescent, lextlead;
-			thedc.GetTextExtent(wtext, &lwidth, &lheight, &ldescent, &lextlead);
-			double scaling = fontsize / (double)(lheight > 0 ? lheight : 1); // semi-workaround for missing OS/2 table data for scaling
-			width = lwidth*scaling; height = lheight*scaling; descent = ldescent*scaling; extlead = lextlead*scaling;
-		}
-#endif
+		agi::text::Extents extents;
+		if (!agi::text::MeasureExtents(style->font, style->fontsize * 64,
+			style->bold, style->italic, style->underline, style->strikeout,
+			style->encoding, text, style->spacing * 64, extents))
+			return false;
 
 		// Compensate for scaling
-		width = style->scalex / 100 * width / 64;
-		height = style->scaley / 100 * height / 64;
-		descent = style->scaley / 100 * descent / 64;
-		extlead = style->scaley / 100 * extlead / 64;
+		width = style->scalex / 100 * extents.width / 64;
+		height = style->scaley / 100 * extents.height / 64;
+		descent = style->scaley / 100 * extents.descent / 64;
+		extlead = style->scaley / 100 * extents.extlead / 64;
 
 		return true;
 	}
@@ -279,16 +181,16 @@ namespace Automation4 {
 		}
 
 		if (error_count == 1) {
-			wxLogWarning(_("A script in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again."));
+			LOG_W("automation") << _("A script in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again.");
 		}
 		else if (error_count > 1) {
-			wxLogWarning(_("Multiple scripts in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again."));
+			LOG_W("automation") << _("Multiple scripts in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again.");
 		}
 		else if (warning_count == 1) {
-			wxLogWarning(_("A script in the Automation autoload directory loaded with warnings.\nPlease review the warnings, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again."));
+			LOG_W("automation") << _("A script in the Automation autoload directory loaded with warnings.\nPlease review the warnings, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again.");
 		}
 		else if (warning_count > 1) {
-			wxLogWarning(_("Multiple scripts in the Automation autoload directory loaded with warnings.\nPlease review the warnings, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again."));
+			LOG_W("automation") << _("Multiple scripts in the Automation autoload directory loaded with warnings.\nPlease review the warnings, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again.");
 		}
 
 		ScriptsChanged();
@@ -327,8 +229,8 @@ namespace Automation4 {
 				basepath = autobasefn;
 			} else if (first_char == '/') {
 			} else {
-				wxLogWarning(fmt_tl("Automation Script referenced with unknown location specifier character.\nLocation specifier found: %c\nFilename specified: %s",
-					first_char, to_wx(trimmed)));
+				LOG_W("automation") << fmt_tl("Automation Script referenced with unknown location specifier character.\nLocation specifier found: %c\nFilename specified: %s",
+					first_char, trimmed);
 				continue;
 			}
 			auto sfname = basepath/trimmed;
@@ -349,12 +251,12 @@ namespace Automation4 {
 			"List of scripts:\n\n%s\n\n"
 			"You should only load associated automation scripts if you trust their authors! "
 			"They are not required to view or edit the subtitle file."
-			, agi::Join("\n", std::views::transform(resolvedpaths, [](PathTuple const& paths) {return from_wx(fmt_tl("    %s (%s)", to_wx(std::get<0>(paths)), std::get<2>(paths).wstring()));})));
+			, agi::Join("\n", std::views::transform(resolvedpaths, [](PathTuple const& paths) {return fmt_tl("    %s (%s)", std::get<0>(paths), std::get<2>(paths).string());})));
 
 		// Loading trusts the script's author, so the question goes to the front
 		// end and the scripts load once the user answers it.
-		gpui::PushChoice(from_wx(_("Load associated automation scripts?")), from_wx(message), {}, "autoscripts",
-			{from_wx(_("Trust the authors && load scripts")), from_wx(_("No"))},
+		gpui::PushChoice(_("Load associated automation scripts?"), message, {}, "autoscripts",
+			{_("Trust the authors && load scripts"), _("No")},
 			[this, resolvedpaths, was_empty](int choice) {
 				if (choice != 0) {
 					if (!was_empty)
@@ -368,8 +270,8 @@ namespace Automation4 {
 					if (agi::fs::FileExists(sfname))
 						scripts.emplace_back(Automation4::ScriptFactory::CreateFromFile(sfname, true));
 					else {
-						wxLogWarning(fmt_tl("Automation Script referenced could not be found.\nFilename specified: %s\nSearched relative to: %s\nResolved filename: %s",
-							to_wx(tok), basepath.wstring(), sfname.wstring()));
+						LOG_W("automation") << fmt_tl("Automation Script referenced could not be found.\nFilename specified: %s\nSearched relative to: %s\nResolved filename: %s",
+							tok, basepath.string(), sfname.string());
 					}
 				}
 
@@ -430,17 +332,17 @@ namespace Automation4 {
 			auto s = factory->Produce(filename);
 			if (s) {
 				if (!s->GetLoadedState()) {
-					wxLogError(_("Failed to load Automation script '%s':\n%s"), filename.wstring(), to_wx(s->GetDescription()));
+					LOG_E("automation") << agi::format(_("Failed to load Automation script '%s':\n%s"), filename.string(), s->GetDescription());
 				}
 				for (auto const& warning : s->GetWarnings()) {
-					wxLogWarning(_("Warning when loading Automation script '%s':\n%s"), filename.wstring(), to_wx(warning));
+					LOG_W("automation") << agi::format(_("Warning when loading Automation script '%s':\n%s"), filename.string(), warning);
 				}
 				return s;
 			}
 		}
 
 		if (complain_about_unrecognised) {
-			wxLogError(_("The file was not recognised as an Automation script: %s"), filename.wstring());
+			LOG_E("automation") << agi::format(_("The file was not recognised as an Automation script: %s"), filename.string());
 		}
 
 		return create_unknown ? std::make_unique<UnknownScript>(filename) : nullptr;
@@ -469,18 +371,18 @@ namespace Automation4 {
 			fnfilter += agi::format("%s scripts (%s)|%s|", fact->GetEngineName(), fact->GetFilenamePattern(), filter);
 			catchall += filter + ";";
 		}
-		fnfilter += from_wx(_("All Files")) + " (*.*)|*.*";
+		fnfilter += _("All Files") + " (*.*)|*.*";
 
 		if (!catchall.empty())
 			catchall.pop_back();
 
 		if (Factories().size() > 1)
-			fnfilter = agi::Str(from_wx(_("All Supported Formats")), "|", catchall, "|", fnfilter);
+			fnfilter = agi::Str(_("All Supported Formats"), "|", catchall, "|", fnfilter);
 
 		return fnfilter;
 	}
 
 	std::string UnknownScript::GetDescription() const {
-		return from_wx(_("File was not recognized as a script"));
+		return _("File was not recognized as a script");
 	}
 }

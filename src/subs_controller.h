@@ -22,7 +22,6 @@
 #include <libaegisub/signal.h>
 
 #include <boost/container/list.hpp>
-#include <wx/timer.h>
 
 class SelectionController;
 namespace agi {
@@ -119,7 +118,7 @@ public:
 
 	/// If there are unsaved changes, asl the user if they want to save them
 	/// @param allow_cancel Let the user cancel the closing
-	/// @return wxYES, wxNO or wxCANCEL (note: all three are true in a boolean context)
+	/// @return 1 for yes, 0 for no, -1 for cancel
 	int TryToClose(bool allow_cancel = true) const;
 
 	/// Can the file be saved in its current format?
@@ -142,7 +141,7 @@ public:
 	/// Check if redo stack is empty
 	bool IsRedoStackEmpty() const { return redo_stack.empty(); };
 	/// Get the description of the first undoable change
-	wxString GetUndoDescription() const;
+	std::string GetUndoDescription() const;
 	/// Get the description of the first redoable change
-	wxString GetRedoDescription() const;
+	std::string GetRedoDescription() const;
 };

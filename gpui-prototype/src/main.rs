@@ -931,6 +931,8 @@ struct VideoView {
     pan: (f32, f32),
     /// Pointer position and pan at the start of a middle-button drag.
     pan_drag: Option<(f32, f32, (f32, f32))>,
+    /// Last pointer position inside the picture area, in window pixels.
+    pointer: Option<(f32, f32)>,
     /// Painted size of the picture area, read by the pan gesture.
     bounds: std::rc::Rc<std::cell::RefCell<gpui_kit::Bounds<gpui_kit::Pixels>>>,
 }
@@ -946,6 +948,7 @@ impl Default for VideoView {
             zoom: 1.,
             pan: (0., 0.),
             pan_drag: None,
+            pointer: None,
             bounds: Default::default(),
         }
     }
@@ -1322,6 +1325,9 @@ struct Workspace {
     /// Set when the user answered "save" on the unsaved-changes card: quit as
     /// soon as the document comes back clean.
     quit_after_save: bool,
+    /// Command to run once the document is clean again, e.g. closing it after
+    /// the user chose "save" on the unsaved-changes card.
+    after_save: Option<String>,
     /// 视图菜单里的容器开关：字幕区始终在，音频条和视频预览各自可选。
     show_audio: bool,
     show_video: bool,
@@ -1614,6 +1620,7 @@ impl Workspace {
             properties_dirty: false,
             properties_more: false,
             quit_after_save: false,
+            after_save: None,
             show_audio: true,
             show_video: true,
             video_popped: false,
@@ -1751,6 +1758,11 @@ impl Workspace {
             }
         }
         self.snapshot = snapshot;
+        if !self.snapshot.modified {
+            if let Some(action) = self.after_save.take() {
+                self.invoke(json!({"op": "command", "name": action, "direct": true}), cx);
+            }
+        }
         if command_state_changed {
             self.refresh_catalog(cx);
         }
@@ -2179,6 +2191,72 @@ impl Workspace {
             .collect::<Vec<_>>()
             .join("\n");
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+    }
+
+    /// Copies the displayed frame, or the host's raw/subtitles-only render, as
+    /// a PNG on the clipboard. The host owns frame decoding and PNG encoding.
+    fn copy_video_frame(&mut self, variant: &'static str, cx: &mut Context<Self>) {
+        let bridge = self.bridge.clone();
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+            let result = bridge
+                .raw_call(
+                    json!({"op": "video_frame", "since": -1, "variant": variant}),
+                    MAX_VIDEO_FRAME_BYTES,
+                )
+                .await;
+            match result {
+                Ok((_, bytes)) if !bytes.is_empty() => {
+                    let image = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, bytes);
+                    let _ = weak.update(cx, |view, cx| {
+                        cx.write_to_clipboard(gpui_kit::ClipboardItem {
+                            entries: vec![gpui_kit::ClipboardEntry::Image(image)],
+                        });
+                        view.status = "画面已复制到剪贴板".to_owned();
+                        cx.notify();
+                    });
+                }
+                Ok(_) => set_status(&weak, cx, "复制画面失败：主机没有返回图像".to_owned()),
+                Err(error) => set_status(&weak, cx, format!("复制画面失败：{error}")),
+            }
+        })
+        .detach();
+    }
+
+    /// Copies the pointer's position in the source video, the same `(x, y)`
+    /// text the old display produced.
+    fn copy_video_coordinates(&mut self, cx: &mut Context<Self>) {
+        let (Some((px, py)), Some(image)) = (self.video_view.pointer, &self.video_view.image)
+        else {
+            self.status = "指针不在画面上".to_owned();
+            cx.notify();
+            return;
+        };
+        let area = *self.video_view.bounds.borrow();
+        let aw = f32::from(area.size.width).max(1.);
+        let ah = f32::from(area.size.height).max(1.);
+        let size = image.size(0);
+        let iw = size.width.0.max(1) as f32;
+        let ih = size.height.0.max(1) as f32;
+        let zoom = self.video_view.zoom;
+        let (pan_x, pan_y) = self.video_view.pan;
+        let vw = aw * zoom;
+        let vh = ah * zoom;
+        let scale = (vw / iw).min(vh / ih);
+        let (dw, dh) = (iw * scale, ih * scale);
+        let left = aw * ((1. - zoom) / 2. + pan_x) + (vw - dw) / 2.;
+        let top = ah * ((1. - zoom) / 2. + pan_y) + (vh - dh) / 2.;
+        let x = ((px - left) / dw * iw).floor();
+        let y = ((py - top) / dh * ih).floor();
+        if x < 0. || y < 0. || x >= iw || y >= ih {
+            self.status = "指针不在画面上".to_owned();
+            cx.notify();
+            return;
+        }
+        let text = format!("({}, {})", x as i64, y as i64);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.clone()));
+        self.status = format!("已复制坐标 {text}");
+        cx.notify();
     }
 
     fn open_language(&mut self, cx: &mut Context<Self>) {
@@ -3954,12 +4032,32 @@ impl Workspace {
     }
 
     fn invoke(&mut self, mut payload: Value, cx: &mut Context<Self>) {
-        if payload["op"] == "command" {
+        let direct = payload["direct"].as_bool().unwrap_or(false);
+        if payload["op"] == "command" && !direct {
             match payload["name"].as_str() {
                 // These two belong to the front end: the host would answer them
                 // by opening its own wx window or frame.
                 Some("app/exit") => {
                     cx.quit();
+                    return;
+                }
+                Some(name @ ("subtitle/new" | "subtitle/close")) => {
+                    if self.snapshot.modified {
+                        self.after_save = Some(name.to_owned());
+                        self.invoke(
+                            json!({"op": "command", "name": "subtitle/save", "direct": true}),
+                            cx,
+                        );
+                        self.status = "正在保存修改，保存完成后继续".to_owned();
+                        cx.notify();
+                    } else {
+                        self.invoke(json!({"op": "command", "name": name, "direct": true}), cx);
+                    }
+                    return;
+                }
+                Some("audio/karaoke") => {
+                    self.status = "卡拉 OK 模式尚未移植到 GPUI 前端".to_owned();
+                    cx.notify();
                     return;
                 }
                 Some("app/new_window") => {
@@ -4090,6 +4188,52 @@ impl Workspace {
                 }
                 Some("video/open") => {
                     self.pick_file("video", cx);
+                    return;
+                }
+                Some("video/copy_coordinates") => {
+                    self.copy_video_coordinates(cx);
+                    return;
+                }
+                Some(
+                    name @ ("video/frame/copy" | "video/frame/copy/raw" | "video/frame/copy/subs"),
+                ) => {
+                    self.copy_video_frame(
+                        match name {
+                            "video/frame/copy/raw" => "raw",
+                            "video/frame/copy/subs" => "subs",
+                            _ => "display",
+                        },
+                        cx,
+                    );
+                    return;
+                }
+                Some("video/zoom/in") => {
+                    self.video_zoom_by(1., cx);
+                    return;
+                }
+                Some("video/zoom/out") => {
+                    self.video_zoom_by(-1., cx);
+                    return;
+                }
+                Some("video/zoom/100") => {
+                    self.video_view.zoom = 1.;
+                    cx.notify();
+                    return;
+                }
+                Some("video/reset_pan") => {
+                    self.video_view.pan = (0., 0.);
+                    cx.notify();
+                    return;
+                }
+                Some("video/detach") => {
+                    if self.video_popped {
+                        self.status = "视频画面已在独立窗口".to_owned();
+                    } else {
+                        self.open_tool(Panel::Video, cx, |_, _| {});
+                        self.video_popped = true;
+                        self.status = "视频画面已移到独立窗口".to_owned();
+                    }
+                    cx.notify();
                     return;
                 }
                 Some("audio/open") => {
@@ -4643,6 +4787,8 @@ impl Workspace {
             )
             .on_mouse_move(
                 cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                    view.video_view.pointer =
+                        Some((f32::from(event.position.x), f32::from(event.position.y)));
                     let Some((x, y, origin)) = view.video_view.pan_drag else {
                         return;
                     };

@@ -14,7 +14,6 @@
 
 #include "command.h"
 
-#include "compat.h"
 #include "format.h"
 
 #include <libaegisub/log.h>
@@ -22,7 +21,6 @@
 
 #include "include/aegisub/hotkey.h"
 
-#include <wx/intl.h>
 
 namespace cmd {
 using CommandMap = std::map<std::string, std::unique_ptr<Command>, std::less<>>;
@@ -35,12 +33,12 @@ static iterator find_command(std::string_view name) {
 	throw CommandNotFound(agi::format(_("'%s' is not a valid command name"), name));
 }
 
-wxString Command::GetTooltip(std::string ht_context) const {
-	wxString ret = StrHelp();
+std::string Command::GetTooltip(std::string ht_context) const {
+	std::string ret = StrHelp();
 
 	std::vector<std::string> hotkeys = hotkey::get_hotkey_strs(ht_context, name());
 	if (!hotkeys.empty())
-		ret += to_wx(" (" + agi::Join("/", hotkeys) + ")");
+		ret += " (" + agi::Join("/", hotkeys) + ")";
 
 	return ret;
 }

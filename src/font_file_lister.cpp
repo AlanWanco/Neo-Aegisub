@@ -19,7 +19,6 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
-#include "compat.h"
 #include "format.h"
 
 #include <libaegisub/format_flyweight.h>
@@ -28,28 +27,35 @@
 #include <algorithm>
 #include <tuple>
 #include <unicode/uchar.h>
-#include <wx/intl.h>
+#include <unicode/unistr.h>
+#include <unicode/utf16.h>
 
 namespace {
-wxString format_missing(wxString const& str) {
-	wxString printable;
-	wxString unprintable;
-	for (wxUniChar c : str) {
-		if (!u_isUWhiteSpace(c.GetValue()))
-			printable += c;
+std::string format_missing(std::string const& str) {
+	icu::UnicodeString text = icu::UnicodeString::fromUTF8(str);
+	icu::UnicodeString printable;
+	icu::UnicodeString unprintable;
+	for (int32_t i = 0; i < text.length();) {
+		UChar32 c = text.char32At(i);
+		i += U16_LENGTH(c);
+		if (!u_isUWhiteSpace(c))
+			printable.append(c);
 		else {
-			unprintable += fmt_wx("\n - U+%04X ", c.GetValue());
-			UErrorCode ec;
+			unprintable.append(icu::UnicodeString::fromUTF8(agi::format("\n - U+%04X ", c)));
+			UErrorCode ec = U_ZERO_ERROR;
 			char buf[1024];
-			auto len = u_charName(c.GetValue(), U_EXTENDED_CHAR_NAME, buf, sizeof buf, &ec);
+			auto len = u_charName(c, U_EXTENDED_CHAR_NAME, buf, sizeof buf, &ec);
 			if (len != 0 && U_SUCCESS(ec))
-				unprintable += to_wx(buf);
-			if (c.GetValue() == 0xA0)
-				unprintable += " (\\h)";
+				unprintable.append(icu::UnicodeString::fromUTF8(buf));
+			if (c == 0xA0)
+				unprintable.append(" (\\h)");
 		}
 	}
 
-	return printable + unprintable;
+	printable.append(unprintable);
+	std::string out;
+	printable.toUTF8String(out);
+	return out;
 }
 }
 
@@ -192,17 +198,17 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
 }
 
 void FontCollector::PrintUsage(UsageData const& data) {
-	wxString usage;
+	std::string usage;
 	if (data.styles.size()) {
 		usage = _("Used in styles:\n");
 		for (auto const& style : data.styles)
-			usage += fmt_wx("  - %s\n", style);
+			usage += agi::format("  - %s\n", style);
 	}
 
 	if (data.lines.size()) {
 		usage += _("Used on lines:");
 		for (int line : data.lines)
-			usage += fmt_wx(" %d", line);
+			usage += agi::format(" %d", line);
 		usage += "\n";
 	}
 	usage += "\n";

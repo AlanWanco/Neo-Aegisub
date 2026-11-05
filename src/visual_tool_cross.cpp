@@ -19,6 +19,7 @@
 /// @ingroup visual_ts
 
 #include "visual_tool_cross.h"
+#include "localisation.h"
 
 #include "gl_text.h"
 #include "include/aegisub/context.h"
@@ -27,7 +28,6 @@
 #include <libaegisub/color.h>
 #include <libaegisub/format.h>
 
-#include <wx/intl.h>
 
 VisualToolCross::VisualToolCross(VisualToolHost *parent, agi::Context *context)
 : VisualTool<VisualDraggableFeature>(parent, context)

@@ -36,7 +36,6 @@
 #include "include/aegisub/audio_player.h"
 
 #include "audio_controller.h"
-#include "compat.h"
 #include "options.h"
 
 #include <libaegisub/audio/provider.h>
@@ -345,7 +344,7 @@ int64_t AlsaPlayer::GetCurrentPosition()
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateAlsaPlayer(agi::AudioProvider *provider, wxWindow *)
+std::unique_ptr<AudioPlayer> CreateAlsaPlayer(agi::AudioProvider *provider)
 {
 	return std::make_unique<AlsaPlayer>(provider);
 }

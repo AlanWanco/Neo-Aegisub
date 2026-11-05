@@ -34,7 +34,8 @@ extern agi::hotkey::Hotkey *inst;
 void init();
 void clear();
 
-std::string keypress_to_str(int key_code, int modifier);
+/// Canonical names of every non-character key a hotkey can bind.
+std::vector<std::string> const& key_names();
 std::string_view get_hotkey_str_first(std::string_view context, std::string_view command);
 std::vector<std::string> get_hotkey_strs(std::string_view context, std::string_view command);
 

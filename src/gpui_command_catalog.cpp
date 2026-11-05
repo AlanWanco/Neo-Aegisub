@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "gpui_command_catalog.h"
+
+#include "localisation.h"
 #include "gpui_visual.h"
 
 #include "auto4_base.h"
 #include "command/command.h"
-#include "compat.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/menu.h"
@@ -17,31 +18,12 @@
 #include <libaegisub/cajun/writer.h>
 #include <libaegisub/hotkey.h>
 
-#include <wx/intl.h>
 
 #include <algorithm>
-#include <set>
 #include <sstream>
 
 namespace gpui {
 std::string_view CommandSurface(std::string_view name) {
-	static const std::set<std::string_view> dialogs = {
-		"am/manager", "am/meta", "app/language", "app/options",
-		"audio/open", "audio/save/clip", "edit/find_replace", "edit/line/paste/over",
-		"keyframe/open", "keyframe/save", "subtitle/attachment", "subtitle/find", "subtitle/open",
-		"subtitle/open/autosave", "subtitle/open/charset", "subtitle/open/video", "subtitle/properties",
-		"subtitle/save", "subtitle/save/as", "time/shift", "timecode/open", "timecode/save",
-		"tool/export", "tool/font_collector", "tool/line/select", "tool/resampleres", "tool/style/assistant",
-		"tool/style/manager", "tool/time/kanji", "tool/time/postprocess", "tool/translation_assistant",
-		"video/aspect/custom", "video/details", "video/jump", "video/open", "video/open/dummy", "subtitle/find/next",
-		"edit/font", "edit/color/primary", "edit/color/secondary", "edit/color/outline", "edit/color/shadow"
-	};
-	static const std::set<std::string_view> wx_controls = {
-		"app/bring_to_front", "app/hide", "app/hide_others", "app/maximize", "app/minimize", "app/show_all",
-		"subtitle/close",
-		"video/copy_coordinates", "video/detach", "video/focus_seek",
-		"edit/line/paste/over"
-	};
 	if (name == "app/about" || name == "app/log" || name == "app/updates") return "native";
 	if (name.starts_with("video/zoom/") || name == "video/reset_pan" || name == "video/show_overscan") return "native";
 	if (name == "app/toggle/toolbar" || name == "subtitle/spellcheck" || name == "subtitle/open/charset" || name == "subtitle/open/autosave" ||
@@ -59,15 +41,12 @@ std::string_view CommandSurface(std::string_view name) {
 		name == "video/aspect/custom" || name == "video/details" || name == "audio/open" ||
 		name == "tool/style/manager" || name == "subtitle/save" || name == "subtitle/save/as" ||
 		name == "audio/karaoke" || name == "audio/view/waveform" || name == "audio/view/spectrum" ||
-		name == "audio/opt/vertical_link") return "native";
+		name == "audio/opt/vertical_link" || name == "app/language" ||
+		name.starts_with("edit/color/") || name == "edit/font" || name == "subtitle/open/video" ||
+		name == "tool/export" || name == "tool/font_collector" || name == "tool/time/kanji" ||
+		name == "subtitle/close" || name == "video/copy_coordinates" || name == "video/detach")
+		return "native";
 	if (name == "app/launch/gpui") return "internal";
-	if (wx_controls.count(name)) return "wx-control";
-	if (dialogs.count(name)) return "dialog";
-	if (name.starts_with("video/zoom/") ||
-		name.starts_with("audio/go_to") || name.starts_with("audio/scroll/") ||
-		name.starts_with("grid/tags/") || name == "grid/tag/cycle_hiding" ||
-		name.starts_with("tool/translation_assistant/") || name.starts_with("tool/styling_assistant/"))
-		return "wx-control";
 	if (name.starts_with("automation/lua/")) return "automation";
 	return "shared";
 }
@@ -85,8 +64,8 @@ std::string CommandCatalog(agi::Context *context, Visual const& visual) {
 		int const flags = command->Type();
 		json::Object entry;
 		entry["name"] = name;
-		entry["label"] = from_wx(command->StrDisplay(context));
-		entry["help"] = from_wx(command->StrHelp());
+		entry["label"] = command->StrDisplay(context);
+		entry["help"] = command->StrHelp();
 		entry["surface"] = CommandSurface(name);
 		bool enabled = command->Validate(context);
 		if (name.starts_with("tool/translation_assistant/") || name.starts_with("tool/styling_assistant/")) enabled = context->selectionController->GetActiveLine() != nullptr;
@@ -137,14 +116,14 @@ std::string CommandCatalog(agi::Context *context, Visual const& visual) {
 		json::Array items;
 		for (auto const& item : static_cast<json::Array const&>(value)) {
 			auto const& object = static_cast<json::Object const&>(item);
-			wxString context;
+			std::string context;
 			if (auto ctx = object.find("context"); ctx != object.end())
-				context = to_wx(static_cast<json::String const&>(ctx->second));
+				context = static_cast<json::String const&>(ctx->second);
 			json::Object entry;
 			for (auto const& [key, field] : object) {
 				auto text = static_cast<json::String const&>(field);
 				if (key == "text")
-					text = from_wx(wxGetTranslation(to_wx(text), wxString(), context));
+					text = agi::i18n::TranslateContext(context.c_str(), text.c_str());
 				entry[key] = json::String(std::move(text));
 			}
 			items.emplace_back(std::move(entry));

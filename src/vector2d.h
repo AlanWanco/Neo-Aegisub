@@ -23,7 +23,6 @@
 
 #include <cmath>
 #include <string>
-#include <wx/gdicmn.h>
 
 class Vector2D {
 	float x, y;
@@ -34,7 +33,6 @@ public:
 
 	Vector2D();
 	Vector2D(float x, float y) : x(x), y(y) { }
-	Vector2D(wxPoint pt) : x(pt.x), y(pt.y) { }
 	Vector2D(Vector2D x, Vector2D y) : x(x.x), y(y.y) { }
 	Vector2D(float x, Vector2D y) : x(x), y(y.y) { }
 	Vector2D(Vector2D x, float y) : x(x.x), y(y) { }

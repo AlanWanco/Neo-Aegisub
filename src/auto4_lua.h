@@ -33,11 +33,8 @@
 
 #include <deque>
 #include <vector>
-#include <wx/string.h>
 
 class AssEntry;
-class wxControl;
-class wxWindow;
 struct lua_State;
 
 namespace Automation4 {
@@ -45,7 +42,7 @@ namespace Automation4 {
 	/// @brief Object wrapping an AssFile object for modification through Lua
 	class LuaAssFile {
 		struct PendingCommit {
-			wxString mesage;
+			std::string mesage;
 			int modification_type;
 			std::vector<AssEntry*> lines;
 		};
@@ -128,7 +125,7 @@ namespace Automation4 {
 		/// @param undo_description If there's any uncommitted changes to the
 		///                         file, they will be automatically committed
 		///                         with this description
-		std::vector<AssEntry *> ProcessingComplete(wxString const& undo_description = wxString());
+		std::vector<AssEntry *> ProcessingComplete(std::string const& undo_description = std::string());
 
 		/// End processing without applying any changes made
 		void Cancel();

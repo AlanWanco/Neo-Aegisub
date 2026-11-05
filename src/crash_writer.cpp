@@ -22,48 +22,31 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/util.h>
 
+#include <execinfo.h>
+
+#include <cstdio>
 #include <fstream>
-#include <wx/string.h>
-#include <wx/stackwalk.h>
 
 using namespace agi;
 
 namespace {
 agi::fs::path crashlog_path;
 
-#if wxUSE_STACKWALKER == 1
-class StackWalker : public wxStackWalker {
-	std::ofstream fp;
+void dump_stack(std::ofstream &fp, std::string const& cause) {
+	fp << util::strftime("--- %y-%m-%d %H:%M:%S ------------------\n");
+	fp << agi::format("VER - %s\n", GetAegisubLongVersionString());
+	fp << agi::format("FTL - Beginning stack dump for \"%s\": \n", cause);
 
-public:
-	StackWalker(std::string const& cause)
-	: fp(crashlog_path, std::ios::app)
-	{
-		if (!fp.good()) return;
+	void *frames[128];
+	int count = backtrace(frames, 128);
+	char **symbols = backtrace_symbols(frames, count);
+	for (int i = 0; i < count; ++i)
+		fp << agi::format("%03d - %s\n", i, symbols[i] ? symbols[i] : "?");
+	free(symbols);
 
-		fp << util::strftime("--- %y-%m-%d %H:%M:%S ------------------\n");
-		fp << agi::format("VER - %s\n", GetAegisubLongVersionString());
-		fp << agi::format("FTL - Beginning stack dump for \"%s\": \n", cause);
-	}
-
-	~StackWalker() {
-		if (!fp.good()) return;
-
-		fp << "End of stack dump.\n";
-		fp << "----------------------------------------\n\n";
-	}
-
-	void OnStackFrame(wxStackFrame const& frame) override final {
-		if (!fp.good()) return;
-
-		fp << agi::format("%03u - %p: %s", frame.GetLevel(), frame.GetAddress(), frame.GetName().utf8_str().data());
-		if (frame.HasSourceLocation())
-			fp << agi::format(" on %s:%u", frame.GetFileName().utf8_str().data(), frame.GetLine());
-
-		fp << "\n";
-	}
-};
-#endif
+	fp << "End of stack dump.\n";
+	fp << "----------------------------------------\n\n";
+}
 }
 
 namespace crash_writer {
@@ -74,10 +57,9 @@ void Initialize(agi::fs::path const& path) {
 void Cleanup() { }
 
 void Write() {
-#if wxUSE_STACKWALKER == 1
-	StackWalker walker("Fatal exception");
-	walker.WalkFromException();
-#endif
+	std::ofstream file(crashlog_path, std::ios::app);
+	if (file.is_open())
+		dump_stack(file, "Fatal exception");
 }
 
 void Write(std::string const& error) {

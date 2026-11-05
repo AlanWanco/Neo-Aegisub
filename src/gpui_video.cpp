@@ -9,6 +9,7 @@
 #include "options.h"
 #include "project.h"
 #include "video_controller.h"
+#include "image_png.h"
 #include "video_frame.h"
 #include "video_provider_dummy.h"
 
@@ -167,6 +168,38 @@ RawReply VideoFrames::Frame(json::Object const& request) {
     int64_t since = -1;
     if (auto it = request.find("since"); it != request.end())
         since = static_cast<json::Integer const&>(it->second);
+
+    std::string variant = "display";
+    if (auto it = request.find("variant"); it != request.end())
+        variant = static_cast<json::String const&>(it->second);
+
+    if (variant != "display") {
+        if (!impl->context->project->VideoProvider())
+            throw std::runtime_error("no video is open");
+        bool raw = variant == "raw";
+        bool subsonly = variant == "subs";
+        if (!raw && !subsonly)
+            throw std::runtime_error("unknown video frame variant");
+
+        int64_t frame_number = impl->context->videoController->GetFrameN();
+        double time = impl->context->project->Timecodes().TimeAtFrame(frame_number);
+        VideoFrame image = subsonly
+            ? impl->context->project->VideoProvider()->GetSubtitles(time)
+            : *impl->context->project->VideoProvider()->GetFrame(static_cast<int>(frame_number), time, raw);
+        RasterImage raster = subsonly ? GetRgbaImage(image) : GetRgbImage(image);
+        std::vector<unsigned char> png = EncodePng(raster.width, raster.height, raster.data.data(), subsonly);
+
+        json::Object result;
+        result["ok"] = true;
+        result["pixel_format"] = std::string("png");
+        result["serial"] = impl->serial;
+        result["frame"] = frame_number;
+        result["width"] = static_cast<int64_t>(raster.width);
+        result["height"] = static_cast<int64_t>(raster.height);
+        result["byte_length"] = static_cast<int64_t>(png.size());
+        result["unchanged"] = false;
+        return {Encode(result), std::move(png)};
+    }
 
     json::Object result;
     result["ok"] = true;

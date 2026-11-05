@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "gpui_search.h"
+#include "localisation.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
@@ -18,7 +19,6 @@
 #include <iterator>
 #include <sstream>
 #include <stdexcept>
-#include <wx/intl.h>
 
 namespace gpui {
 std::string Search(agi::Context *context, json::Object const& request) {

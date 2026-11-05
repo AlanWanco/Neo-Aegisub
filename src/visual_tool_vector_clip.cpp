@@ -15,9 +15,9 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "visual_tool_vector_clip.h"
+#include "localisation.h"
 
 #include "ass_dialogue.h"
-#include "compat.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "selection_controller.h"
@@ -194,7 +194,7 @@ void VisualToolVectorClip::Save() {
 	}
 }
 
-void VisualToolVectorClip::Commit(wxString message) {
+void VisualToolVectorClip::Commit(std::string message) {
 	Save();
 	VisualToolBase::Commit(message);
 }

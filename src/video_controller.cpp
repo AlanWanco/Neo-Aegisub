@@ -32,7 +32,6 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "audio_controller.h"
-#include "compat.h"
 #include "format.h"
 #include "gpui_bridge.h"
 #include "include/aegisub/context.h"
@@ -47,7 +46,6 @@
 
 #include <cmath>
 #include <limits>
-#include <wx/log.h>
 
 VideoController::VideoController(agi::Context *c)
 : context(c)
@@ -322,10 +320,10 @@ void VideoController::FrameReady(std::shared_ptr<VideoFrame> frame, double at, i
 
 void VideoController::VideoError(std::string message) {
 	gpui::PushNotice("Video Error",
-		from_wx(fmt_tl("Failed seeking video. The video file may be corrupt or incomplete.\nError message reported: %s", message)));
+		fmt_tl("Failed seeking video. The video file may be corrupt or incomplete.\nError message reported: %s", message));
 }
 
 void VideoController::SubtitlesError(std::string message) {
 	gpui::PushNotice("Subtitle Renderer Error",
-		from_wx(fmt_tl("Failed rendering subtitles.\nError message reported: %s", message)));
+		fmt_tl("Failed rendering subtitles.\nError message reported: %s", message));
 }

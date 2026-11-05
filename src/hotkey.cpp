@@ -18,14 +18,12 @@
 
 #include "libresrc/libresrc.h"
 #include "command/command.h"
-#include "compat.h"
 #include "options.h"
 
 #include <libaegisub/path.h>
 
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/iterator_range.hpp>
-#include <wx/intl.h>
 
 namespace {
 	const char *added_hotkeys_7035[][3] = {
@@ -46,7 +44,7 @@ namespace {
 		{nullptr}
 	};
 
-#ifdef __WXMAC__
+#ifdef __APPLE__
 	const char *added_hotkeys_minimize[][3] = {
 		{"app/minimize", "Default", "Ctrl-M"},
 		{nullptr}
@@ -115,7 +113,7 @@ void init() {
 		migrations.emplace_back("duplicate -> split");
 	}
 
-#ifdef __WXMAC__
+#ifdef __APPLE__
 	if (boost::find(migrations, "app/minimize") == end(migrations)) {
 		migrate_hotkeys(added_hotkeys_minimize);
 		migrations.emplace_back("app/minimize");
@@ -129,123 +127,23 @@ void clear() {
 	delete inst;
 }
 
-static const char *keycode_name(int code) {
-	switch (code) {
-	case WXK_BACK:            return "Backspace";
-	case WXK_TAB:             return "Tab";
-	case WXK_RETURN:          return "Enter";
-	case WXK_ESCAPE:          return "Escape";
-	case WXK_SPACE:           return "Space";
-	case WXK_DELETE:          return "Delete";
-	case WXK_SHIFT:           return "Shift";
-	case WXK_ALT:             return "Alt";
-	case WXK_CONTROL:         return "Control";
-	case WXK_PAUSE:           return "Pause";
-	case WXK_END:             return "End";
-	case WXK_HOME:            return "Home";
-	case WXK_LEFT:            return "Left";
-	case WXK_UP:              return "Up";
-	case WXK_RIGHT:           return "Right";
-	case WXK_DOWN:            return "Down";
-	case WXK_PRINT:           return "Print";
-	case WXK_INSERT:          return "Insert";
-	case WXK_NUMPAD0:         return "KP_0";
-	case WXK_NUMPAD1:         return "KP_1";
-	case WXK_NUMPAD2:         return "KP_2";
-	case WXK_NUMPAD3:         return "KP_3";
-	case WXK_NUMPAD4:         return "KP_4";
-	case WXK_NUMPAD5:         return "KP_5";
-	case WXK_NUMPAD6:         return "KP_6";
-	case WXK_NUMPAD7:         return "KP_7";
-	case WXK_NUMPAD8:         return "KP_8";
-	case WXK_NUMPAD9:         return "KP_9";
-	case WXK_MULTIPLY:        return "Asterisk";
-	case WXK_ADD:             return "Plus";
-	case WXK_SUBTRACT:        return "Hyphen";
-	case WXK_DECIMAL:         return "Period";
-	case WXK_DIVIDE:          return "Slash";
-	case WXK_F1:              return "F1";
-	case WXK_F2:              return "F2";
-	case WXK_F3:              return "F3";
-	case WXK_F4:              return "F4";
-	case WXK_F5:              return "F5";
-	case WXK_F6:              return "F6";
-	case WXK_F7:              return "F7";
-	case WXK_F8:              return "F8";
-	case WXK_F9:              return "F9";
-	case WXK_F10:             return "F10";
-	case WXK_F11:             return "F11";
-	case WXK_F12:             return "F12";
-	case WXK_F13:             return "F13";
-	case WXK_F14:             return "F14";
-	case WXK_F15:             return "F15";
-	case WXK_F16:             return "F16";
-	case WXK_F17:             return "F17";
-	case WXK_F18:             return "F18";
-	case WXK_F19:             return "F19";
-	case WXK_F20:             return "F20";
-	case WXK_F21:             return "F21";
-	case WXK_F22:             return "F22";
-	case WXK_F23:             return "F23";
-	case WXK_F24:             return "F24";
-	case WXK_NUMLOCK:         return "Num_Lock";
-	case WXK_SCROLL:          return "Scroll_Lock";
-	case WXK_PAGEUP:          return "PageUp";
-	case WXK_PAGEDOWN:        return "PageDown";
-	case WXK_NUMPAD_SPACE:    return "KP_Space";
-	case WXK_NUMPAD_TAB:      return "KP_Tab";
-	case WXK_NUMPAD_ENTER:    return "KP_Enter";
-	case WXK_NUMPAD_F1:       return "KP_F1";
-	case WXK_NUMPAD_F2:       return "KP_F2";
-	case WXK_NUMPAD_F3:       return "KP_F3";
-	case WXK_NUMPAD_F4:       return "KP_F4";
-	case WXK_NUMPAD_HOME:     return "KP_Home";
-	case WXK_NUMPAD_LEFT:     return "KP_Left";
-	case WXK_NUMPAD_UP:       return "KP_Up";
-	case WXK_NUMPAD_RIGHT:    return "KP_Right";
-	case WXK_NUMPAD_DOWN:     return "KP_Down";
-	case WXK_NUMPAD_PAGEUP:   return "KP_PageUp";
-	case WXK_NUMPAD_PAGEDOWN: return "KP_PageDown";
-	case WXK_NUMPAD_END:      return "KP_End";
-	case WXK_NUMPAD_BEGIN:    return "KP_Begin";
-	case WXK_NUMPAD_INSERT:   return "KP_insert";
-	case WXK_NUMPAD_DELETE:   return "KP_Delete";
-	case WXK_NUMPAD_EQUAL:    return "KP_Equal";
-	case WXK_NUMPAD_MULTIPLY: return "KP_Multiply";
-	case WXK_NUMPAD_ADD:      return "KP_Add";
-	case WXK_NUMPAD_SUBTRACT: return "KP_Subtract";
-	case WXK_NUMPAD_DECIMAL:  return "KP_Decimal";
-	case WXK_NUMPAD_DIVIDE:   return "KP_Divide";
-	default: return "";
-	}
-}
-
-std::string keypress_to_str(int key_code, int modifier) {
-	std::string combo;
-	if ((modifier != wxMOD_NONE)) {
-		if ((modifier & wxMOD_CMD) != 0) combo.append("Ctrl-");
-		if ((modifier & wxMOD_ALT) != 0) combo.append("Alt-");
-		if ((modifier & wxMOD_SHIFT) != 0) combo.append("Shift-");
-	}
-
-	if (key_code > 32 && key_code < 127)
-		combo += (char)key_code;
-	else
-		combo += keycode_name(key_code);
-
-	return combo;
-}
-
-static bool check(std::string_view context, agi::Context *c, int key_code, int modifier) {
-	std::string combo = keypress_to_str(key_code, modifier);
-	if (combo.empty()) return false;
-
-	auto command = inst->Scan(context, combo, OPT_GET("Audio/Medusa Timing Hotkeys")->GetBool());
-	if (!command.empty()) {
-		cmd::call(command, c);
-		return true;
-	}
-	return false;
+std::vector<std::string> const& key_names() {
+	static std::vector<std::string> const names = {
+		"Backspace", "Tab", "Enter", "Escape", "Space", "Delete", "Shift",
+		"Alt", "Control", "Pause", "End", "Home", "Left", "Up", "Right",
+		"Down", "Print", "Insert", "KP_0", "KP_1", "KP_2", "KP_3", "KP_4",
+		"KP_5", "KP_6", "KP_7", "KP_8", "KP_9", "Asterisk", "Plus",
+		"Hyphen", "Period", "Slash", "F1", "F2", "F3", "F4", "F5", "F6",
+		"F7", "F8", "F9", "F10", "F11", "F12", "F13", "F14", "F15", "F16",
+		"F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24", "Num_Lock",
+		"Scroll_Lock", "PageUp", "PageDown", "KP_Space", "KP_Tab",
+		"KP_Enter", "KP_F1", "KP_F2", "KP_F3", "KP_F4", "KP_Home",
+		"KP_Left", "KP_Up", "KP_Right", "KP_Down", "KP_PageUp",
+		"KP_PageDown", "KP_End", "KP_Begin", "KP_insert", "KP_Delete",
+		"KP_Equal", "KP_Multiply", "KP_Add", "KP_Subtract", "KP_Decimal",
+		"KP_Divide"
+	};
+	return names;
 }
 
 std::vector<std::string> get_hotkey_strs(std::string_view context, std::string_view command) {

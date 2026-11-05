@@ -16,51 +16,41 @@
 
 #include "video_frame.h"
 
-#include <boost/gil.hpp>
-#include <wx/image.h>
-
-namespace {
-	// We actually have bgr_, not bgra, so we need a custom converter which ignores the alpha channel
-	struct color_converter {
-		template <typename P1, typename P2>
-		void operator()(P1 const& src, P2& dst) const {
-			using namespace boost::gil;
-			dst = rgb8_pixel_t(
-				get_color(src, red_t()),
-				get_color(src, green_t()),
-				get_color(src, blue_t()));
-		}
-	};
-}
-
-wxImage GetImage(VideoFrame const& frame) {
-	using namespace boost::gil;
-
-	wxImage img(frame.width, frame.height);
-	auto src = interleaved_view(frame.width, frame.height, (bgra8_pixel_t*)frame.data.data(), frame.pitch);
-	auto dst = interleaved_view(frame.width, frame.height, (rgb8_pixel_t*)img.GetData(), 3 * frame.width);
-	if (frame.flipped)
-		src = flipped_up_down_view(src);
-	copy_and_convert_pixels(src, dst, color_converter());
-	return img;
-}
-
-wxImage GetImageWithAlpha(VideoFrame const &frame) {
-	wxImage img = GetImage(frame);
-	img.InitAlpha();
-	uint8_t *dst = img.GetAlpha();
-	const uint8_t *src = frame.data.data() + 3;
-	for (int y = 0; y < frame.height; y++) {
-		for (int x = 0; x < frame.width; x++) {
-			*(dst++) = *src;
-			src += 4;
+RasterImage GetRgbImage(VideoFrame const& frame) {
+	RasterImage out;
+	out.width = frame.width;
+	out.height = frame.height;
+	out.channels = 3;
+	out.data.resize(static_cast<size_t>(frame.width) * frame.height * 3);
+	for (int y = 0; y < frame.height; ++y) {
+		int const row = frame.flipped ? frame.height - 1 - y : y;
+		unsigned char const *src = frame.data.data() + static_cast<size_t>(row) * frame.pitch;
+		unsigned char *dst = out.data.data() + static_cast<size_t>(y) * frame.width * 3;
+		for (int x = 0; x < frame.width; ++x) {
+			dst[x * 3 + 0] = src[x * 4 + 2];
+			dst[x * 3 + 1] = src[x * 4 + 1];
+			dst[x * 3 + 2] = src[x * 4 + 0];
 		}
 	}
-	return img;
+	return out;
 }
 
-wxImage GetImageShrunk(VideoFrame const& frame, int target_width, int target_height) {
-	wxImage img(target_width, target_height);
-	ShrinkFrameToRgb(frame, img.GetData(), target_width, target_height);
-	return img;
+RasterImage GetRgbaImage(VideoFrame const& frame) {
+	RasterImage out;
+	out.width = frame.width;
+	out.height = frame.height;
+	out.channels = 4;
+	out.data.resize(static_cast<size_t>(frame.width) * frame.height * 4);
+	for (int y = 0; y < frame.height; ++y) {
+		int const row = frame.flipped ? frame.height - 1 - y : y;
+		unsigned char const *src = frame.data.data() + static_cast<size_t>(row) * frame.pitch;
+		unsigned char *dst = out.data.data() + static_cast<size_t>(y) * frame.width * 4;
+		for (int x = 0; x < frame.width; ++x) {
+			dst[x * 4 + 0] = src[x * 4 + 2];
+			dst[x * 4 + 1] = src[x * 4 + 1];
+			dst[x * 4 + 2] = src[x * 4 + 0];
+			dst[x * 4 + 3] = src[x * 4 + 3];
+		}
+	}
+	return out;
 }

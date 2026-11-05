@@ -35,7 +35,6 @@
 #include "../ass_file.h"
 #include "../audio_controller.h"
 #include "../audio_timing.h"
-#include "../compat.h"
 #include "../format.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
@@ -60,7 +59,6 @@ struct grid_line_next final : public Command {
 
 struct grid_line_next_create final : public Command {
 	CMD_NAME("grid/line/next/create")
-	CMD_ICON(button_audio_commit)
 	STR_MENU("Next Line")
 	STR_DISP("Next Line")
 	STR_HELP("Move to the next subtitle line, creating a new one if needed")
@@ -251,7 +249,6 @@ struct grid_sort_style_selected final : public validate_sel_multiple {
 
 struct grid_tag_cycle_hiding final : public Command {
 	CMD_NAME("grid/tag/cycle_hiding")
-	CMD_ICON(toggle_tag_hiding)
 	STR_MENU("Cycle Tag Hiding Mode")
 	STR_DISP("Cycle Tag Hiding Mode")
 	STR_HELP("Cycle through tag hiding modes")
@@ -263,11 +260,11 @@ struct grid_tag_cycle_hiding final : public Command {
 		tagMode = (tagMode+1)%3;
 
 		// Show on status bar
-		wxString message;
+		std::string message;
 		if (tagMode == 0) message = _("ASS Override Tag mode set to show full tags.");
 		if (tagMode == 1) message = _("ASS Override Tag mode set to simplify tags.");
 		if (tagMode == 2) message = _("ASS Override Tag mode set to hide tags.");
-		gpui::PushStatus(from_wx(message));
+		gpui::PushStatus(message);
 
 		// Set option
 		OPT_SET("Subtitle/Grid/Hide Overrides")->SetInt(tagMode);
@@ -380,7 +377,6 @@ struct grid_move_down final : public Command {
 
 struct grid_swap final : public Command {
 	CMD_NAME("grid/swap")
-	CMD_ICON(arrow_sort)
 	STR_MENU("Swap Lines")
 	STR_DISP("Swap Lines")
 	STR_HELP("Swap the two selected lines")

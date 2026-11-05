@@ -74,7 +74,7 @@ struct recent_subtitle_entry : public Command {
 	STR_HELP("Open recent subtitles")
 
 	void operator()(agi::Context *c, int id) {
-		if (c->subsController->TryToClose() == wxCANCEL) return;
+		if (c->subsController->TryToClose() == -1) return;
 		c->project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
 	}
 };

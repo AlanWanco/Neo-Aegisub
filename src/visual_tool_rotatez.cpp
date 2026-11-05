@@ -20,7 +20,6 @@
 
 #include "visual_tool_rotatez.h"
 
-#include "compat.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "selection_controller.h"

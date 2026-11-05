@@ -30,9 +30,9 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "command.h"
+#include "../localisation.h"
 
 #include "../auto4_base.h"
-#include "../compat.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
@@ -51,7 +51,7 @@ struct reload_all final : public Command {
 	void operator()(agi::Context *c) override {
 		config::global_scripts->Reload();
 		c->local_scripts->Reload();
-		gpui::PushStatus(from_wx(_("Reloaded all Automation scripts")));
+		gpui::PushStatus(_("Reloaded all Automation scripts"));
 	}
 };
 
@@ -63,13 +63,12 @@ struct reload_autoload final : public Command {
 
 	void operator()([[maybe_unused]] agi::Context *c) override {
 		config::global_scripts->Reload();
-		gpui::PushStatus(from_wx(_("Reloaded autoload Automation scripts")));
+		gpui::PushStatus(_("Reloaded autoload Automation scripts"));
 	}
 };
 
 struct open_manager final : public Command {
 	CMD_NAME("am/manager")
-	CMD_ICON(automation_toolbutton)
 	STR_MENU("&Automation...")
 	STR_DISP("Automation")
 	STR_HELP("Open automation manager")
@@ -81,7 +80,6 @@ struct open_manager final : public Command {
 
 struct meta final : public Command {
 	CMD_NAME("am/meta")
-	CMD_ICON(automation_toolbutton)
 	STR_MENU("&Automation...")
 	STR_DISP("Automation")
 	STR_HELP("Open automation manager. Ctrl: Rescan autoload folder. Ctrl+Shift: Rescan autoload folder and reload all automation scripts")

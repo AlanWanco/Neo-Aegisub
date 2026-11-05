@@ -31,7 +31,6 @@
 #include <Windows.h>
 #include <DbgHelp.h>
 
-extern EXCEPTION_POINTERS *wxGlobalSEInformation;
 
 namespace {
 wchar_t crash_dump_path[MAX_PATH];
@@ -98,6 +97,18 @@ struct dump_thread_state {
 };
 
 std::unique_ptr<dump_thread_state> dump_thread;
+LPTOP_LEVEL_EXCEPTION_FILTER previous_filter;
+
+LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
+	if (dump_thread) {
+		dump_thread->ep = ep;
+		dump_thread->thread_id = GetCurrentThreadId();
+		dump_thread->start_cv.notify_all();
+		dump_thread->thread.join();
+		dump_thread.reset();
+	}
+	return previous_filter ? previous_filter(ep) : EXCEPTION_CONTINUE_SEARCH;
+}
 }
 
 namespace crash_writer {
@@ -121,18 +132,13 @@ void Initialize(agi::fs::path const& path) {
 
 	if (!dump_thread)
 		dump_thread = std::make_unique<dump_thread_state>();
+	previous_filter = SetUnhandledExceptionFilter(crash_filter);
 }
 
 void Cleanup() {
+	SetUnhandledExceptionFilter(previous_filter);
+	if (!dump_thread) return;
 	dump_thread->exit = true;
-	dump_thread->start_cv.notify_all();
-	dump_thread->thread.join();
-	dump_thread.reset();
-}
-
-void Write() {
-	dump_thread->ep = wxGlobalSEInformation;
-	dump_thread->thread_id = GetCurrentThreadId();
 	dump_thread->start_cv.notify_all();
 	dump_thread->thread.join();
 	dump_thread.reset();

@@ -6,7 +6,6 @@
 #include "ass_style_storage.h"
 #include "audio_provider_factory.h"
 #include "command/command.h"
-#include "compat.h"
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/subtitles_provider.h"
@@ -32,7 +31,6 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
-#include <wx/intl.h>
 
 namespace {
 struct Field {
@@ -63,14 +61,14 @@ void backup(const char *filename) {
 std::set<std::string, std::less<>> const& valid_hotkeys() {
 	static std::set<std::string, std::less<>> const keys = [] {
 		std::set<std::string, std::less<>> keys;
-		// Use the same names and modifier order as the wx keyboard handler.
-		for (int mask = 0; mask < 8; ++mask) {
-			int modifiers = (mask & 1 ? wxMOD_CMD : 0) | (mask & 2 ? wxMOD_ALT : 0) | (mask & 4 ? wxMOD_SHIFT : 0);
-			for (int code = 8; code <= WXK_SPECIAL20; ++code) {
-				if (code == WXK_SHIFT || code == WXK_ALT || code == WXK_CONTROL || (code >= 'a' && code <= 'z')) continue;
-				auto candidate = hotkey::keypress_to_str(code, modifiers);
-				if (!candidate.empty() && !hotkey::keypress_to_str(code, wxMOD_NONE).empty()) keys.insert(candidate);
+		for (char const *prefix : {"", "Ctrl-", "Alt-", "Ctrl-Alt-", "Shift-", "Ctrl-Shift-", "Alt-Shift-", "Ctrl-Alt-Shift-"}) {
+			for (int code = 33; code < 127; ++code) {
+				if (code >= 'a' && code <= 'z') continue;
+				keys.insert(std::string(prefix) + static_cast<char>(code));
 			}
+			keys.insert(std::string(prefix) + "Space");
+			for (auto const& name : hotkey::key_names())
+				keys.insert(std::string(prefix) + name);
 		}
 		return keys;
 	}();
@@ -140,7 +138,7 @@ std::vector<std::string> choices(std::string const& name) {
 #ifdef WITH_PORTAUDIO
 	if (name == "Player/Audio/PortAudio/Device Name") {
 		std::vector<std::string> result;
-		for (auto const& device : PortAudioPlayer::GetOutputDevices()) result.push_back(from_wx(device));
+		for (auto const& device : PortAudioPlayer::GetOutputDevices()) result.push_back(device);
 		return result;
 	}
 #endif
@@ -206,7 +204,7 @@ std::string Appearance() {
 	for (auto key : {"Colour/Subtitle Grid/Standard", "Colour/Subtitle Grid/Background/Background", "Colour/Subtitle Grid/Selection", "Colour/Subtitle Grid/Background/Selection", "Colour/Subtitle Grid/Background/Comment", "Colour/Subtitle Grid/Background/Selected Comment", "Colour/Subtitle Grid/Background/Inframe", "Colour/Subtitle Grid/Lines", "Colour/Subtitle Grid/Header", "Colour/Subtitle/Background", "Colour/Subtitle/Syntax/Normal", "Colour/Audio Display/Play Cursor", "Colour/Audio Display/Line boundary Start", "Colour/Audio Display/Line boundary End", "Colour/Audio Display/Line Boundary Inactive Line"}) {
 		auto color = ui::OptionColour(key);
 		if (std::string_view(key).starts_with("Colour/Subtitle") && OPT_GET(key)->IsDefault()) default_colors.emplace_back(key);
-		colors[key] = static_cast<int64_t>((uint32_t(color.Red()) << 24) | (uint32_t(color.Green()) << 16) | (uint32_t(color.Blue()) << 8) | color.Alpha());
+		colors[key] = static_cast<int64_t>((uint32_t(color.r) << 24) | (uint32_t(color.g) << 16) | (uint32_t(color.b) << 8) | color.a);
 	}
 	json::Object result;
 	result["colors"] = std::move(colors);
@@ -355,7 +353,7 @@ std::string Preferences(json::Object const& request) {
 		auto option = OPT_GET(field.name);
 		json::Object item;
 		item["name"] = field.name;
-		item["label"] = from_wx(wxGetTranslation(field.label));
+		item["label"] = _(field.label);
 		item["group"] = field.group;
 		item["type"] = option->GetType() == agi::OptionType::Bool ? "bool" : option->GetType() == agi::OptionType::Int ? "int" : option->GetType() == agi::OptionType::Double ? "double" : option->GetType() == agi::OptionType::Color ? "color" : "string";
 		item["value"] = value(option);

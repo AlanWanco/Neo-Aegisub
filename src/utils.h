@@ -36,19 +36,8 @@
 #include <string>
 #include <string_view>
 
-#include <wx/bitmap.h>
-#include <wx/string.h>
-
-class wxFrame;
-class wxKeyEvent;
-class wxMenu;
-class wxMouseEvent;
-class wxStyledTextCtrl;
-class wxWindow;
 
 namespace agi { struct Context; }
-
-wxString PrettySize(int bytes);
 
 std::string float_to_string(double val, int precision = 3);
 
@@ -56,23 +45,6 @@ std::string float_to_string(double val, int precision = 3);
 ///
 /// Algorithm from http://bob.allegronetwork.com/prog/tricks.html
 int SmallestPowerOf2(int x);
-
-/// @brief Launch a new copy of Aegisub.
-///
-/// Contrary to what the name suggests, this does not close the currently
-/// running process.
-void RestartAegisub();
-
-/// Add the OS X 10.7+ full-screen button to a window
-void AddFullScreenButton(wxWindow *window);
-
-void SetFloatOnParent(wxWindow *window);
-
-/// Forward a mouse wheel event to the window under the mouse if needed
-/// @param source The initial target of the wheel event
-/// @param evt The event
-/// @return Should the calling code process the event?
-bool ForwardMouseWheelEvent(wxWindow *source, wxMouseEvent &evt);
 
 /// Clean up the given cache directory, limiting the size to max_size
 /// @param directory Directory to clean
@@ -90,48 +62,10 @@ template<typename T> inline T mid(T a, T b, T c) {
 	return a > b ? a : (b > c ? c : b);
 }
 
+/// Open a URL in the user's default handler.
+void OpenURL(std::string const& url);
+
 /// Get the text contents of the clipboard, or empty string on failure
 std::string GetClipboard();
 /// Try to set the clipboard to the given string
 void SetClipboard(std::string const& new_value);
-void SetClipboard(wxBitmap const& new_value);
-
-wxString FontFace(std::string opt_prefix);
-
-/// Opens a file open dialog
-/// @param c Project context
-/// @param message Title of the file selector
-/// @param option_name Name of the option storing the directory of the most recently opened file
-/// @param default_filename Default filename, or empty string
-/// @param default_extension Default extension, or empty string
-/// @param wildcard File pattern to filter for
-/// @param parent Parent window
-/// @param path_anchor A path token like "?script". If set, when files from this directory are opened, the directory is saved in option_name as its token rather than its absolute path.
-agi::fs::path OpenFileSelector(agi::Context *c, wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, std::optional<std::string_view> path_anchor = std::nullopt);
-agi::fs::path SaveFileSelector(agi::Context *c, wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent);
-
-wxString LocalizedLanguageName(wxString const& lang);
-
-namespace osx {
-	/// Make the given menu the OS X Window menu
-	void make_windows_menu(wxMenu *wxmenu);
-	/// Activate a top-level document window other than the given one
-	bool activate_top_window_other_than(wxFrame *wx);
-	// Bring all windows to the front, maintaining relative z-order
-	void bring_to_front();
-	// Hide the application
-	void hide_application();
-	// Hide all other applications
-	void hide_other_applications();
-	// Unhide all applications
-	void show_all_applications();
-
-namespace ime {
-	/// Inject the IME helper into the given wxSTC
-	void inject(wxStyledTextCtrl *ctrl);
-	/// Invalidate any pending text from the IME
-	void invalidate(wxStyledTextCtrl *ctrl);
-	/// Give the IME a chance to process a key event and return whether it did
-	bool process_key_event(wxStyledTextCtrl *ctrl, wxKeyEvent &);
-}
-}

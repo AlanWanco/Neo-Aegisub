@@ -31,7 +31,6 @@
 #include "dialogs.h"
 #include "command/command.h"
 #include "command/edit.h"
-#include "compat.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "project.h"
@@ -281,6 +280,9 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		}
 		catch (std::exception const& error) {
 			Reply(client, "{\"ok\":false,\"error\":" + quote_json(error.what()) + "}");
+		}
+		catch (agi::Exception const& error) {
+			Reply(client, "{\"ok\":false,\"error\":" + quote_json(error.GetMessage()) + "}");
 		}
 		catch (...) {
 			Reply(client, R"({"ok":false,"error":"unknown bridge error"})");
@@ -795,7 +797,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 					agi::charset::IconvWrapper validate(encoding.c_str(), "UTF-8", false);
 				}
 			}
-			if (context->subsController->TryToClose() == wxCANCEL)
+			if (context->subsController->TryToClose() == -1)
 				return R"({"ok":false,"error":"opening subtitles was cancelled"})";
 			context->project->LoadSubtitles(path, encoding);
 			return R"({"ok":true})";
@@ -827,12 +829,12 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 			if (!is_json_string(path_it->second))
 				return R"({"ok":false,"error":"save path must be a string"})";
 			std::string const& path = path_it->second;
-			if (wxFileExists(wxString::FromUTF8(path))) {
+			if (agi::fs::FileExists(agi::fs::path(path))) {
 				// A modal prompt inside the bridge handler would block the front
 				// end that is waiting for this response.
-				gpui::PushNotice(from_wx(_("Confirm Save As")),
-					from_wx(wxString::Format(_("The file %s already exists. Replace it?"), wxString::FromUTF8(path))) +
-					"\n\n" + from_wx(_("Pick a different name, or delete the old file first.")));
+				gpui::PushNotice(_("Confirm Save As"),
+					agi::format(_("The file %s already exists. Replace it?"), path) +
+					"\n\n" + _("Pick a different name, or delete the old file first."));
 				return R"({"ok":false,"error":"save was cancelled"})";
 			}
 			context->subsController->Save(agi::fs::path(path));
@@ -900,7 +902,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		if (name == "edit/line/cut") { cmd::CutSelectedLines(context); return R"({"ok":true})"; }
 		if (name == "edit/line/paste") { cmd::PasteLines(context); return R"({"ok":true})"; }
 		if (name == "subtitle/open" || name == "subtitle/open/charset" || name == "subtitle/open/autosave" || name.starts_with("recent/subtitle/")) {
-			if (context->subsController->TryToClose() == wxCANCEL)
+			if (context->subsController->TryToClose() == -1)
 				return R"({"ok":false,"error":"opening subtitles was cancelled"})";
 			agi::fs::path path;
 			std::string encoding;
@@ -921,7 +923,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 			return R"({"ok":true})";
 		}
 		if (name == "subtitle/new") {
-			if (context->subsController->TryToClose() == wxCANCEL)
+			if (context->subsController->TryToClose() == -1)
 				return R"({"ok":false,"error":"new subtitles was cancelled"})";
 			context->project->CloseSubtitles();
 			return R"({"ok":true})";

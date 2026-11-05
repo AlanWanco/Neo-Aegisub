@@ -31,7 +31,6 @@
 
 #include "command.h"
 
-#include "../compat.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
@@ -46,7 +45,6 @@ namespace {
 
 struct keyframe_close final : public Command {
 	CMD_NAME("keyframe/close")
-	CMD_ICON(close_keyframes_menu)
 	STR_MENU("Close Keyframes")
 	STR_DISP("Close Keyframes")
 	STR_HELP("Discard the currently loaded keyframes and use those from the video, if any")
@@ -63,7 +61,6 @@ struct keyframe_close final : public Command {
 
 struct keyframe_open final : public Command {
 	CMD_NAME("keyframe/open")
-	CMD_ICON(open_keyframes_menu)
 	STR_MENU("Open Keyframes...")
 	STR_DISP("Open Keyframes")
 	STR_HELP("Open a keyframe list file")
@@ -75,7 +72,6 @@ struct keyframe_open final : public Command {
 
 struct keyframe_save final : public Command {
 	CMD_NAME("keyframe/save")
-	CMD_ICON(save_keyframes_menu)
 	STR_MENU("Save Keyframes...")
 	STR_DISP("Save Keyframes")
 	STR_HELP("Save the current list of keyframes to a file")

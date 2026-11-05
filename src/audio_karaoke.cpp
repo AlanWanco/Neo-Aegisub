@@ -23,7 +23,6 @@
 #include "ass_karaoke.h"
 #include "audio_controller.h"
 #include "audio_timing.h"
-#include "compat.h"
 #include "format.h"
 #include "project.h"
 #include "selection_controller.h"

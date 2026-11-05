@@ -30,10 +30,10 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "command.h"
+#include "../localisation.h"
 
 #include "../ass_dialogue.h"
 #include "../ass_file.h"
-#include "../compat.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
@@ -69,7 +69,6 @@ struct validate_nonempty_selection_video_loaded : public Command {
 
 struct subtitle_attachment final : public Command {
 	CMD_NAME("subtitle/attachment")
-	CMD_ICON(attach_button)
 	STR_MENU("A&ttachments...")
 	STR_DISP("Attachments")
 	STR_HELP("Open the attachment manager dialog")
@@ -81,7 +80,6 @@ struct subtitle_attachment final : public Command {
 
 struct subtitle_find final : public Command {
 	CMD_NAME("subtitle/find")
-	CMD_ICON(find_button)
 	STR_MENU("&Find...")
 	STR_DISP("Find")
 	STR_HELP("Search for text in the subtitles")
@@ -93,7 +91,6 @@ struct subtitle_find final : public Command {
 
 struct subtitle_find_next final : public Command {
 	CMD_NAME("subtitle/find/next")
-	CMD_ICON(find_next_menu)
 	STR_MENU("Find &Next")
 	STR_DISP("Find Next")
 	STR_HELP("Find next match of last search")
@@ -210,7 +207,6 @@ struct subtitle_insert_before_videotime final : public validate_nonempty_selecti
 
 struct subtitle_new final : public Command {
 	CMD_NAME("subtitle/new")
-	CMD_ICON(new_toolbutton)
 	STR_MENU("&New Subtitles")
 	STR_DISP("New Subtitles")
 	STR_HELP("New subtitles")
@@ -226,19 +222,21 @@ struct subtitle_new final : public Command {
 
 struct subtitle_close final : public Command {
 	CMD_NAME("subtitle/close")
-	CMD_ICON(new_toolbutton)
 	STR_MENU("Close")
 	STR_DISP("Close")
 	STR_HELP("Close")
 
-	void operator()([[maybe_unused]] agi::Context *c) override {
-		gpui::PushCommand("subtitle/close");
+	void operator()(agi::Context *c) override {
+		if (c->subsController->IsModified()) {
+			gpui::PushCommand("subtitle/close");
+			return;
+		}
+		c->project->CloseSubtitles();
 	}
 };
 
 struct subtitle_open final : public Command {
 	CMD_NAME("subtitle/open")
-	CMD_ICON(open_toolbutton)
 	STR_MENU("&Open Subtitles...")
 	STR_DISP("Open Subtitles")
 	STR_HELP("Open a subtitles file")
@@ -261,7 +259,6 @@ struct subtitle_open_autosave final : public Command {
 
 struct subtitle_open_charset final : public Command {
 	CMD_NAME("subtitle/open/charset")
-	CMD_ICON(open_with_toolbutton)
 	STR_MENU("Open Subtitles with &Charset...")
 	STR_DISP("Open Subtitles with Charset")
 	STR_HELP("Open a subtitles file with a specific file encoding")
@@ -293,7 +290,6 @@ struct subtitle_open_video final : public Command {
 
 struct subtitle_properties final : public Command {
 	CMD_NAME("subtitle/properties")
-	CMD_ICON(properties_toolbutton)
 	STR_MENU("&Properties...")
 	STR_DISP("Properties")
 	STR_HELP("Open script properties window")
@@ -308,16 +304,15 @@ static void save_subtitles(agi::Context *c, agi::fs::path const& filename) {
 		c->subsController->Save(filename);
 	}
 	catch (const agi::Exception& err) {
-		gpui::PushNotice(from_wx(_("Error")), err.GetMessage());
+		gpui::PushNotice(_("Error"), err.GetMessage());
 	}
 	catch (...) {
-		gpui::PushNotice(from_wx(_("Error")), from_wx(_("Unknown error")));
+		gpui::PushNotice(_("Error"), _("Unknown error"));
 	}
 }
 
 struct subtitle_save final : public Command {
 	CMD_NAME("subtitle/save")
-	CMD_ICON(save_toolbutton)
 	STR_MENU("&Save Subtitles")
 	STR_DISP("Save Subtitles")
 	STR_HELP("Save the current subtitles")
@@ -338,7 +333,6 @@ struct subtitle_save final : public Command {
 
 struct subtitle_save_as final : public Command {
 	CMD_NAME("subtitle/save/as")
-	CMD_ICON(save_as_toolbutton)
 	STR_MENU("Save Subtitles &as...")
 	STR_DISP("Save Subtitles as")
 	STR_HELP("Save subtitles with another name")
@@ -363,7 +357,6 @@ struct subtitle_select_all final : public Command {
 
 struct subtitle_select_visible final : public Command {
 	CMD_NAME("subtitle/select/visible")
-	CMD_ICON(select_visible_button)
 	STR_MENU("Select Visible")
 	STR_DISP("Select Visible")
 	STR_HELP("Select all dialogue lines that are visible on the current video frame")
@@ -395,7 +388,6 @@ struct subtitle_select_visible final : public Command {
 
 struct subtitle_spellcheck final : public Command {
 	CMD_NAME("subtitle/spellcheck")
-	CMD_ICON(spellcheck_toolbutton)
 	STR_MENU("Spell &Checker...")
 	STR_DISP("Spell Checker")
 	STR_HELP("Open spell checker")

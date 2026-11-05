@@ -32,7 +32,6 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "async_video_provider.h"
-#include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "project.h"
@@ -42,8 +41,8 @@
 #include <utility>
 
 AssTransformFramerateFilter::AssTransformFramerateFilter()
-: AssExportFilter(from_wx(_("Transform Framerate")),
-	from_wx(_("Transform subtitle times, including those in override tags, from an input framerate to an output framerate.\n\nThis is useful for converting regular time subtitles to VFRaC time subtitles for hardsubbing.\nIt can also be used to convert subtitles to a different speed video, such as NTSC to PAL speedup.")),
+: AssExportFilter(_("Transform Framerate"),
+	_("Transform subtitle times, including those in override tags, from an input framerate to an output framerate.\n\nThis is useful for converting regular time subtitles to VFRaC time subtitles for hardsubbing.\nIt can also be used to convert subtitles to a different speed video, such as NTSC to PAL speedup."),
 	1000)
 {
 }

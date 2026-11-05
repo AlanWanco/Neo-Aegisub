@@ -23,13 +23,12 @@
 #include <iostream>
 
 #include "command/command.h"
-#include "compat.h"
 #include "format.h"
+#include "localisation.h"
 
 #include <boost/algorithm/string/replace.hpp>
 
-#include <wx/arrstr.h>
-#include <wx/intl.h>
+#include <vector>
 
 namespace cmd {
 
@@ -40,25 +39,18 @@ std::string yaml_quote(std::string_view input) {
 }
 
 void ExportCommands(agi::Context *c) {
-	wxArrayString langs = wxTranslations::Get()->GetAvailableTranslations("aegisub");
-
-	langs.Sort();
+	std::vector<std::string> langs = agi::i18n::AvailableLanguages();
 	langs.insert(langs.begin(), "en_US");
 
 	auto commands = cmd::get_registered_commands();
+	std::string const restore = agi::i18n::ActiveLanguage();
 
 	for (auto const& lang : langs) {
-		auto info = wxLocale::FindLanguageInfo(lang);
+		agi::i18n::SetLanguage(lang);
 
-		std::cout << agi::wxformat(" - locale: %s\n", lang);
-		std::cout << agi::wxformat("   name: %s\n", info->Description);
+		std::cout << agi::format(" - locale: %s\n", lang);
+		std::cout << agi::format("   name: %s\n", agi::i18n::LanguageName(lang));
 		std::cout << "   commands:\n";
-
-		wxTranslations *translations = new wxTranslations();
-		wxTranslations::Set(translations);
-		translations->SetLanguage(lang);
-		translations->AddCatalog("aegisub");
-		translations->AddStdCatalog();
 
 		for (auto const& name : commands) {
 			if (name.starts_with("automation/"))
@@ -67,10 +59,12 @@ void ExportCommands(agi::Context *c) {
 			auto command = cmd::get(name);
 
 			std::cout << agi::format("    - name: %s\n", name);
-			std::cout << agi::format("      display: %s\n", yaml_quote(from_wx(command->StrDisplay(c))));
-			std::cout << agi::format("      help: %s\n", yaml_quote(from_wx(command->StrHelp())));
+			std::cout << agi::format("      display: %s\n", yaml_quote(command->StrDisplay(c)));
+			std::cout << agi::format("      help: %s\n", yaml_quote(command->StrHelp()));
 			std::cout << "\n";
 		}
 	}
+
+	agi::i18n::SetLanguage(restore);
 }
 }

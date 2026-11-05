@@ -19,7 +19,6 @@
 
 #include "ass_file.h"
 #include "async_video_provider.h"
-#include "compat.h"
 #include "format.h"
 #include "gpui_bridge.h"
 #include "options.h"
@@ -146,7 +145,7 @@ bool update_ycbcr_matrix(AssFile *file, const AsyncVideoProvider *new_provider) 
 			"\n \n"
 			"Consider tagging your video with a color matrix to ensure that your video displays consistently in all players and that subtitle colors can reliably match video colors."
 			, ycbcr::matrix_to_string(guessCM));
-		gpui::PushNotice(from_wx(_("Untagged video")), from_wx(untagged));
+		gpui::PushNotice(_("Untagged video"), untagged);
 	}
 
 	if (new_provider->IsHDRorWCG() && OPT_GET("Video/HDR Video Warning")->GetBool()) {
@@ -155,7 +154,7 @@ bool update_ycbcr_matrix(AssFile *file, const AsyncVideoProvider *new_provider) 
 			"While ordinary dialogue subtitles will work fine on such videos, "
 			"matching video colors using subtitles will not be possible on HDR and/or WCG footage."
 			);
-		gpui::PushNotice(from_wx(_("HDR and/or WCG video")), from_wx(hdr));
+		gpui::PushNotice(_("HDR and/or WCG video"), hdr);
 	}
 
 	auto script_matrix = file->GetYCbCrMatrix();
@@ -175,14 +174,14 @@ bool update_ycbcr_matrix(AssFile *file, const AsyncVideoProvider *new_provider) 
 				}
 			};
 			int Choice = prompt_choice_dialog(
-				from_wx(fmt_tl(
+				fmt_tl(
 					"The current subtitle file has no YCbCr Matrix set.\n\n"
 					"If you plan to use this subtitle file on this newly loaded video file,\nyou should set the subtitle file's YCbCr Matrix to the video's color space (\"%s\").\n\n"
 					"If you plan to use a different video file, you may want to\nleave the YCbCr Matrix unset until you load the correct video file.\n\n"
 					"This prompt can be configured in the preferences.",
-				recommended_matrix.to_string().value())),
-				from_wx(_("Set script's YCbCr Matrix?")),
-				{from_wx(_("Leave YCbCr Matrix unset")), from_wx(fmt_tl("Set script's YCbCr Matrix to the video's (\"%s\")", recommended_matrix.to_string().value()))},
+				recommended_matrix.to_string().value()),
+				_("Set script's YCbCr Matrix?"),
+				{_("Leave YCbCr Matrix unset"), fmt_tl("Set script's YCbCr Matrix to the video's (\"%s\")", recommended_matrix.to_string().value())},
 				OPT_GET("Video/Last No YCbCr Matrix in Script Choice")->GetInt(),
 				"Video/No YCbCr Matrix in Script",
 				apply_choice
@@ -244,13 +243,13 @@ bool update_ycbcr_matrix(AssFile *file, const AsyncVideoProvider *new_provider) 
 				}
 			};
 			int Choice = prompt_choice_dialog(
-				from_wx(fmt_tl(
+				fmt_tl(
 					"This video's recommended YCbCr Matrix (\"%s\") differs from the subtitle file's YCbCr Matrix (\"%s\").\n\n"
 					"If this new video's colors look identical to the video the subtitle file was originally authored for,\n"
 					"then the subtitle file's YCbCr Matrix should be set to the video's YCbCr Matrix.",
-				recommended_matrix.to_string().value(), script_matrix.to_string().value())),
-				from_wx(_("YCbCr Matrix mismatch")),
-				{from_wx(fmt_tl("Leave script's YCbCr Matrix as it is (\"%s\")", script_matrix.to_string().value())), from_wx(fmt_tl("Set script's YCbCr Matrix to the video's (\"%s\")", recommended_matrix.to_string().value()))},
+				recommended_matrix.to_string().value(), script_matrix.to_string().value()),
+				_("YCbCr Matrix mismatch"),
+				{fmt_tl("Leave script's YCbCr Matrix as it is (\"%s\")", script_matrix.to_string().value()), fmt_tl("Set script's YCbCr Matrix to the video's (\"%s\")", recommended_matrix.to_string().value())},
 				OPT_GET("Video/Last YCbCr Matrix Mismatch Choice")->GetInt(),
 				{},
 				apply_choice
@@ -330,25 +329,25 @@ bool update_play_res(AssFile *file, const AsyncVideoProvider *new_provider) {
 		std::vector<std::string> choices;
 		if (ar_changed) {
 			choices = {
-				from_wx(_("Leave resolution as it is")),
-				from_wx(_("Resample script (stretch to new aspect ratio)")),
-				from_wx(_("Resample script (add borders)")),
-				from_wx(_("Resample script (remove borders)"))
+				_("Leave resolution as it is"),
+				_("Resample script (stretch to new aspect ratio)"),
+				_("Resample script (add borders)"),
+				_("Resample script (remove borders)")
 			};
 		} else {
 			choices = {
-				from_wx(_("Leave resolution as it is")),
-				from_wx(_("Resample script")),
+				_("Leave resolution as it is"),
+				_("Resample script"),
 			};
 		}
 
 		int res = prompt_choice_dialog(
-			from_wx(fmt_tl(
+			fmt_tl(
 				"The resolution of the loaded video and the resolution specified for the subtitles don't match.\n\n"
 				"Video resolution:\t%d \u00D7 %d\n"     // U+00D7 multiplication sign
 				"Script resolution:\t%d \u00D7 %d\n\n"
-				"Change subtitles resolution to match video?", vx, vy, sx, sy)),
-			from_wx(_("Resolution mismatch")),
+				"Change subtitles resolution to match video?", vx, vy, sx, sy),
+			_("Resolution mismatch"),
 			std::move(choices),
 			OPT_GET("Video/Last PlayRes Mismatch Choice")->GetInt()
 		);
@@ -406,7 +405,7 @@ bool update_layout_res(AssFile *file, const AsyncVideoProvider *new_provider) {
 				}
 			};
 			int Choice = prompt_choice_dialog(
-				from_wx(fmt_tl(
+				fmt_tl(
 					"The current subtitle file has no layout resolution set.\n\n"
 					"If you plan to use this subtitle file on this newly loaded video file,\n"
 					"you should set the subtitle file's layout resolution to the video's display resolution.\n"
@@ -420,11 +419,11 @@ bool update_layout_res(AssFile *file, const AsyncVideoProvider *new_provider) {
 					"Often, this is the same as the file's script resolution. (%d \u00D7 %d)\n"
 					"\n"
 					"This prompt can be configured in the preferences."
-				, spx, spy)),
-				from_wx(_("Set script's layout resolution?")),
-				{from_wx(_("Leave layout resolution unset")),
-				 from_wx(fmt_tl("Set script's layout resolution to the video's (%d \u00D7 %d)", vx, vy)), // U+00D7 multiplication sign
-				 from_wx(fmt_tl("Set script's layout resolution to its script resolution (%d \u00D7 %d)", spx, spy))},
+				, spx, spy),
+				_("Set script's layout resolution?"),
+				{_("Leave layout resolution unset"),
+				 fmt_tl("Set script's layout resolution to the video's (%d \u00D7 %d)", vx, vy), // U+00D7 multiplication sign
+				 fmt_tl("Set script's layout resolution to its script resolution (%d \u00D7 %d)", spx, spy)},
 				OPT_GET("Video/Last No LayoutRes in Script Choice")->GetInt(),
 				"Video/No LayoutRes in Script",
 				apply_choice
@@ -510,9 +509,9 @@ bool update_layout_res(AssFile *file, const AsyncVideoProvider *new_provider) {
 			}
 		};
 		int Choice = prompt_choice_dialog(
-			from_wx(prompt),
-			from_wx(_("Layout resolution mismatch")),
-			{from_wx(fmt_tl("Leave layout resolution as it is (%d \u00D7 %d)", sx, sy)), from_wx(fmt_tl("Set script's layout resolution to the video's (%d \u00D7 %d)", vx, vy))}, // U+00D7 multiplication sign
+			prompt,
+			_("Layout resolution mismatch"),
+			{fmt_tl("Leave layout resolution as it is (%d \u00D7 %d)", sx, sy), fmt_tl("Set script's layout resolution to the video's (%d \u00D7 %d)", vx, vy)}, // U+00D7 multiplication sign
 			OPT_GET("Video/Last LayoutRes Mismatch Choice")->GetInt(),
 			{},
 			apply_choice

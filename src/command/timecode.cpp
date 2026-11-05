@@ -32,7 +32,6 @@
 #include "command.h"
 
 #include "../async_video_provider.h"
-#include "../compat.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
@@ -45,7 +44,6 @@ namespace {
 
 struct timecode_close final : public Command {
 	CMD_NAME("timecode/close")
-	CMD_ICON(close_timecodes_menu)
 	STR_MENU("Close Timecodes File")
 	STR_DISP("Close Timecodes File")
 	STR_HELP("Close the currently open timecodes file")
@@ -62,7 +60,6 @@ struct timecode_close final : public Command {
 
 struct timecode_open final : public Command {
 	CMD_NAME("timecode/open")
-	CMD_ICON(open_timecodes_menu)
 	STR_MENU("Open Timecodes File...")
 	STR_DISP("Open Timecodes File")
 	STR_HELP("Open a VFR timecodes v1 or v2 file")
@@ -74,7 +71,6 @@ struct timecode_open final : public Command {
 
 struct timecode_save final : public Command {
 	CMD_NAME("timecode/save")
-	CMD_ICON(save_timecodes_menu)
 	STR_MENU("Save Timecodes File...")
 	STR_DISP("Save Timecodes File")
 	STR_HELP("Save a VFR timecodes v2 file")

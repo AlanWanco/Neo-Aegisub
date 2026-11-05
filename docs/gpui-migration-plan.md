@@ -1,20 +1,21 @@
 # Neo Aegisub GPUI 功能移植计划
 
-目标：以当前 wxWidgets 版 Aegisub 的真实工作流为验收基线，逐步用 GPUI 替换交互界面，继续复用 C++ ASS 文档、选择/撤销、媒体后端与 Lua Automation。只有在 GPUI 中完成交互并验证的功能才记为原生移植；调用现有 wx 对话框记为“旧界面兼容入口”。
+目标：宿主只保留 C++ ASS 文档、选择/撤销、媒体后端、Automation 与命令行服务，全部界面由 GPUI 前端绘制；宿主以回环桥接接收前端请求，不再包含任何 wxWidgets 窗口或控件。只有在 GPUI 中完成交互并验证的功能才记为原生移植。
 
 ## 当前基线
 
 - [x] 基础提交 `9f90e5bf5`：独立 GPUI 窗口、认证回环桥接、真实字幕列表/文本、文件操作、视频帧、播放和退出清理。
-- [x] macOS arm64 / wxWidgets 3.3.4 / Rust 1.95 增量构建和桌面联调。
-- [x] macOS 正常关闭宿主窗口后宿主及 GPUI 子进程均退出；可再次启动。
-- [ ] Windows、Linux 构建及桌面验证；wxWidgets 3.2 兼容验证。
+- [x] 宿主彻底移除 wxWidgets：源码不再包含 wx 头文件，Meson 不再查找或链接 wx，`otool -L build-ui-gpui/aegisub` 无 wx 库。
+- [x] macOS arm64 / Rust 1.95 增量构建和桌面联调。
+- [x] macOS 正常关闭 GPUI 前端后宿主及子进程均退出；可再次启动。
+- [ ] Windows、Linux 构建及桌面验证。
 - [ ] Windows 栈溢出需要匹配版本的桌面复测；历史 Windows CI 构建通过不代表运行故障已修复。
 
 ## 命令、字幕与文档
 
 - [x] 从实际 C++ 注册表提供命令名称、帮助、可用/选中状态、原有快捷键和上下文绑定。
 - [x] GPUI 显示平台/用户合并后的菜单、MRU 与可搜索命令入口；支持运行时 Automation 宏。
-- [x] 显式区分 GPUI 交互、共享项目操作、Lua 宏、旧版对话框、仍需旧版控件的命令。
+- [x] 显式区分 GPUI 交互、共享项目操作、Lua 宏与仍待移植的命令；旧版对话框入口已随 wx 宿主一并删除。
 - [x] 工作台统一深浅主题、紧凑侧栏、标题和文件名同排。视频画布、音频、视频和字幕编辑保持同窗，全部由 GPUI 绘制；播放与视觉工具控件也在 GPUI 内。保留编辑区高度分隔条和上下微调按钮；音频图默认高 80 px。
 - [x] 字幕多选、按字段批量修改、注释、复制/剪切/粘贴、光标处分行与共享撤销/重做。
 - [x] 编辑层、起止时间、样式、角色、效果和边距；完整补丁先校验再修改。
@@ -34,9 +35,9 @@
 - [x] 原生按字段覆盖粘贴：11 个字段、预设、单行向后/多选逐行覆盖、末尾截断、保留行 ID 与撤销。
 - [x] 原生附件管理：字体/图像批量添加、导出、确认删除、过期列表拒绝、逐字节导出与共享撤销。
 - [x] 原生指定编码打开：当前 iconv 支持列表、编码检测与常用编码；GB18030、Shift-JIS、UTF-16/32 大小端 BOM 验证。
-- [x] 原生自动保存恢复：与 wx 对话框共用扫描、文件名解析、分组和排序；自动保存/原始备份/异常恢复三类版本、筛选和桌面打开。
+- [x] 原生自动保存恢复：沿用原有扫描、文件名解析、分组和排序；自动保存/原始备份/异常恢复三类版本、筛选和桌面打开。
 - [x] 原生拼写检查：复用平台 `SpellChecker` 工厂与 ASS token 解析，支持多语言、跳过项、替换/全部替换、忽略、建议和个人词典操作。本机实际使用 macOS 系统拼写服务，后端回归和个人词典桌面操作已验证；Hunspell 构建尚未实测。
-- [ ] 原生导出和过滤器设置；导出仍通过旧版对话框/Automation 过滤器。
+- [x] 原生导出面板：格式、编码与过滤器的选择由 GPUI 完成；宿主经桥接接收导出请求。
 
 ## 音频和卡拉 OK
 
@@ -48,6 +49,7 @@
 - 波形和频谱支持以鼠标位置为中心滚轮缩放；缩放按钮从左到右为缩小、放大，以视图中心缩放。显示增益与播放音量分别使用波形、扬声器 SVG 图标，提示说明二者用途。
 - 音频操作保留在字幕编辑工作区；独立“音频调时”侧栏入口、窗口路由及专用页面控件已移除。
 - [x] 卡拉 OK 音节卡片、Unicode 分割/合并、应用/取消、`\\k` / `\\kf` / `\\ko` 与撤销。
+- [ ] 旧版 `audio/karaoke` 全屏卡拉 OK 预览随 wx 画布删除；前端目前仅提示尚未移植，打轴用的音节卡片不受影响。
 - [ ] 自动跟随、吸附和提交前进的组合操作、长文件解码/失败反馈、音量与增益联动验收。
 - [x] 原生音频剪辑保存：按选中字幕的完整时间范围调用既有 PCM 写入器，WAV 参数/采样逐字节核对，桌面文件选择及覆盖授权。
 
@@ -82,13 +84,13 @@
 - [x] 主题、工具栏、字幕列表/编辑字体与颜色、软换行快捷键、音频配色/频谱设置/吸附距离同步；未接入的 GPUI 控件行为逐项注明。
 - [x] 修复 GPUI 获得焦点时修改热键导致 macOS 全局菜单以空文档上下文计算撤销名称的崩溃。
 - [ ] 偏好项逐项对照后端行为；带“仍待移植/重新打开媒体后生效”说明的条目仍未迁移对应 GPUI 控件行为。面板桌面已验证搜索、主题动态下拉、应用和即时深浅色切换；快捷键页已验证录入、空命令屏蔽、移除。剩余控件行为仍需逐项对照。
-- [ ] 跨平台打包与 wxWidgets 3.2 验收；日志与帮助已改为 GPUI 原生窗口（见 2026-11-01 帮助窗口条目）。
+- [ ] 跨平台打包；日志与帮助已改为 GPUI 原生窗口（见 2026-11-01 帮助窗口条目）。
 
 ## 验证证据和边界
 
 源代码中有 241 处显式 `CMD_NAME` 定义；运行时还包括生成、平台、MRU 和 Automation 命令，不能把静态计数当成完成比例。当前测试环境加载七个自带宏；命令分类数量随注册表和项目状态变化。标记 `native` 表示 GPUI 已接管入口，不能替代逐工作流验收。本轮从 macOS 当前运行时导出的命令目录含 334 条：78 个原生入口、219 个共享操作、7 个 Lua 宏、13 个旧对话框入口、16 个仍依赖旧控件、1 个内部入口。平台、媒体、项目与 Automation 状态会改变命令目录；分类仅描述此次注册表，不代表工作流覆盖率。完整目录保存在忽略的 `build-ui-gpui/command-catalog-runtime.json`。
 
-本机回归脚本和结果存放于忽略的 `build-ui-gpui/`：命令/文档、音频/视觉、样式库、翻译/样式助手、平移/后处理、Automation 管理器、重采样、搜索、覆盖粘贴、视频设置、附件、偏好/热键、媒体保存、拼写及文件恢复各有独立检查。拼写、偏好、热键和恢复面板本轮追加了真实窗口操作；截图记录在同一目录。其余只由协议覆盖的条目不视为桌面端完整验收。
+本机回归脚本和结果存放于忽略的 `build-ui-gpui/`：命令/文档、音频/视觉、样式库、翻译/样式助手、平移/后处理、Automation 管理器、重采样、搜索、覆盖粘贴、视频设置、附件、偏好/热键、媒体保存、拼写及文件恢复各有独立检查。拼写、偏好、热键和恢复面板本轮追加了真实窗口操作；截图记录在同一目录。去 wx 后重新导出的命令目录共 324 条：225 个共享操作、92 个 GPUI 原生入口、7 个 Lua 宏，不再有旧对话框或旧控件分类；完整目录保存在 `build-ui-gpui/command-catalog-runtime.json`。其余只由协议覆盖的条目不视为桌面端完整验收。
 
 最新视频批次通过 Rust fmt/check、七项 release 测试和 release 构建、C++ 宿主增量构建；顺序通过 `video-overscan-check.py`、`video-settings-check.py`、`video-view-check.py` 和 `visual-port-check.py`。此前桌面回归结果为 `video-view-desktop-results.json` 和 `video-cancel-desktop-results.json`，对应缩放/平移后 ASS 坐标、单次撤销、视口外释放、窗口变化及滚轮期间取消；这些结果早于安全区新增。直接发送视觉协议请求时，GPUI 必须停在非排版页，避免排版页同时请求不同尺寸画布。打开新样本前关闭视频，避免测试触发关联媒体询问。共享预览上的有状态回归必须顺序执行。
 
@@ -130,7 +132,7 @@ macOS 个人词典属于系统状态，隔离 profile 不能隔离学习词。�
 
 2026-11-01 视频卡顿：两个独立缺陷叠加。其一是视频帧纹理泄漏——每帧的 `RenderImage` 都会进 sprite atlas，而 `replace_frame_image` 直接覆盖旧值从不释放，播放时进程按每帧一张图的速率膨胀（实测 1.8 秒 135MB→412MB 后被系统杀掉），现在换图前 `cx.drop_image(previous, None)`，清空时同样释放，同样负载下 RSS 稳定在 143–155MB。其二是大响应被截断——`OnSocket` 把 `socket->Error()` 当作致命错误，而一次写满 socket 缓冲留下的 `wxSOCKET_WOULDBLOCK` 会留在错误状态里，下一次 OUTPUT 事件到达时就被当成断线，于是 2000 行工程约 700KB 的快照只写出 319020 字节就关连接，前端 JSON 解析失败、连错 5 次自杀；现在只有 `wxSOCKET_LOST` 才算断线，写错误由 `WriteResponse` 自己判断，`BeginResponse` 也把 `response_offset` 归零。实测 2000 行工程 + 1080p30 视频 + 噪声音频连续播放 15 秒：进程存活、`frame/produced` 间隔 p50 31.0ms、步进 1（≈32fps）、RSS 143MB、零桥接失败（修复前同一负载 0.8–4 秒内必死）。
 
-打开字幕时询问关联媒体、未保存确认、加载关联脚本的信任提示，以及未移植的对话框仍可能进入 wx 原生模态循环；桥接等待此时不等于程序崩溃。输入法、Windows 栈溢出和跨平台运行仍为未验证项。
+打开字幕时的关联媒体询问、未保存确认与关联脚本信任提示均由 GPUI 提示卡完成，宿主不再进入任何原生模态循环。输入法、Windows 栈溢出和跨平台运行仍为未验证项。
 
 ## 提交边界
 
@@ -243,4 +245,7 @@ macOS 用用户提供的实际 MP4 对比同一时间片，波形和频谱输出
 
 2026-11-05 宿主错误日志不再弹出模态框：GPUI 接管界面后 wx 主窗口是隐藏的，`wxLogGui` 仍会把错误日志排成对话框，`wxMessageBox` 在不可见窗口上 `NSAlert runModal` 直接把主线程和桥接一起卡死（复现：视频上下文按下帮助键，浏览器启动失败后整机无响应，`sample` 停在 `wxLogGui::Flush`）。`src/main.cpp` 新增 `FrontendLogTarget`，`gpui::FrontendAttached()` 为真时把日志写到 stderr，否则交回 `wxLogGui`。验证：同一操作现在只输出 `wx log: 无法在默认浏览器中打开 URL "http://docs.aegisub.org/3.5/Main_Page/"。（错误 2：No such file or directory）`，桥接持续应答，视频上下文空格键播放／暂停连续五次切换均生效。
 
-2026-11-05 去 wxWidgets 界面：宿主不再包含任何 wx 窗口，改成纯服务进程 `aegisub`（`meson.build` 的 `gpui_host`）。它启动后创建单个 `agi::Context`、启动回环桥接，再以 `--bridge`/`--token` 拉起 GPUI 前端；前端退出即宿主退出。删除 100 余个 wx 界面文件（主窗口、菜单、工具栏、全部 `dialog_*`、音频/视频控件、字幕网格、查找替换等），命令层统一改为 `gpui::PushCommand`/`PushStatus`，提示与询问改为 `PushNotice`/`PushChoice`，需要同步答案的编码、音轨、FPS 选择走 `gpui::AskChoice`（在自己的事件循环上等待前端 `notice_choice`）。帧回调改为 `AsyncVideoSink` + `agi::signal`，播放计时与桥接轮询改用 `gpui::Timer`/`EventLoop`。音频渲染不再依赖 `wxBitmap`，改为自有 BGRA8 `AudioCanvas`；音频标记样式改为 `agi::Color` + 宽度/虚线；字幕格显示文本、自动保存扫描、EBU 设置、版本检查、进度对话框都改为无 wx 实现。验证：`ninja -C build-ui-gpui aegisub` 通过，Meson 两组测试通过；真实进程烟雾测试覆盖打开/编辑/撤销/保存 ASS、音频频谱与波形像素、MicroDVD 的 FPS 询问往返、导出过滤器与 58 种编码列表、253 个字体名，宿主随 SIGTERM 退出。仍链接 wx 的部分仅剩文本尺寸估算、图像编码/剪贴板、字体枚举、`wxString`/本地化等基础类型，界面路径已无 wx 窗口或模态循环。
+2026-11-05 去 wxWidgets 界面：宿主不再包含任何 wx 窗口，改成纯服务进程 `aegisub`（`meson.build` 的 `gpui_host`）。它启动后创建单个 `agi::Context`、启动回环桥接，再以 `--bridge`/`--token` 拉起 GPUI 前端；前端退出即宿主退出。删除 100 余个 wx 界面文件（主窗口、菜单、工具栏、全部 `dialog_*`、音频/视频控件、字幕网格、查找替换等），命令层统一改为 `gpui::PushCommand`/`PushStatus`，提示与询问改为 `PushNotice`/`PushChoice`，需要同步答案的编码、音轨、FPS 选择走 `gpui::AskChoice`（在自己的事件循环上等待前端 `notice_choice`）。帧回调改为 `AsyncVideoSink` + `agi::signal`，播放计时与桥接轮询改用 `gpui::Timer`/`EventLoop`。音频渲染不再依赖 `wxBitmap`，改为自有 BGRA8 `AudioCanvas`；音频标记样式改为 `agi::Color` + 宽度/虚线；字幕格显示文本、自动保存扫描、EBU 设置、版本检查、进度对话框都改为无 wx 实现。验证：`ninja -C build-ui-gpui aegisub` 通过，Meson 两组测试通过；真实进程烟雾测试覆盖打开/编辑/撤销/保存 ASS、音频频谱与波形像素、MicroDVD 的 FPS 询问往返、导出过滤器与 58 种编码列表、253 个字体名，宿主随 SIGTERM 退出。当时仍链接 wx 的部分只剩文本尺寸估算、图像编码/剪贴板、字体枚举、本地化等基础类型；后续已全部替换。
+
+
+2026-11-05 去 wxWidgets 基础层：上一批之后继续清空所有非界面 wx 依赖。文本尺寸估算改为 CoreText／GDI／fontconfig+FreeType，字体家族枚举改为 CoreText／GDI／fontconfig，剪贴板改为 NSPasteboard／CF_UNICODETEXT／`wl-copy`+`xclip`，PNG 编码改用 zlib 自有实现；本地化改为直接解析 `.mo`，热键、TTXT XML、配置文件默认值、崩溃回溯、音频播放器线程、DirectSound/OSS 线程和 macOS 崩溃报告也全部去 wx。`src/audio_player_portaudio.{h,cpp}` 的输出设备列表由 `wxArrayString` 改为 `std::vector<std::string>`。Meson 删除 wx 依赖、PCH 中的 wx 头文件与 `wx_version` 选项；`otool -L build-ui-gpui/aegisub` 已无 wx 库，`src/` 中不再有 wx 头文件引用。验证：宿主与前端 release 构建通过；桥接实测 `video_frame` 的 `display` 返回 1920×1080 BGRA8，`raw`/`subs` 返回同尺寸 PNG（PNG 魔数正确），前端帧复制、坐标复制和缩放/复位命令已接入；命令 `subtitle/close` 在文档干净时直接关闭，有修改时转由前端先保存。Lua 宏 `validate()` 现在允许只返回布尔值（此前命令目录生成会在可选帮助字符串缺失时抛出 `agi::lua::error_tag`，前端显示“unknown bridge error”），目录恢复为 324 条；`video/detach` 现在真正打开独立视频窗口，实测窗口数 6→7。Meson 测试通过（旧的 wx 语言匹配测试和已删除的缩帧辅助测试一并移除）。
