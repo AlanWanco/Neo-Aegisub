@@ -112,8 +112,3 @@ public:
 	/// Save export settings to options
 	void Save() const;
 };
-
-/// Show a dialog box for getting an export configuration for EBU Tech 3264-1991
-/// @param owner Parent window of the dialog
-/// @param s Struct with initial values and to fill with the chosen settings
-int ShowEbuExportConfigurationDialog(wxWindow *owner, EbuExportSettings &s);

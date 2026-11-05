@@ -38,7 +38,6 @@
 #include <libaegisub/line_wrap.h>
 
 #include <boost/algorithm/string/replace.hpp>
-#include <wx/utils.h>
 
 namespace
 {
@@ -599,20 +598,11 @@ namespace
 		return gsi;
 	}
 
-	EbuExportSettings get_export_config(wxWindow *parent)
+	EbuExportSettings get_export_config()
 	{
-		EbuExportSettings s("Subtitle Format/EBU STL");
-
-		// Disable the busy cursor set by the exporter while the dialog is visible
-		wxEndBusyCursor();
-		int res = ShowEbuExportConfigurationDialog(parent, s);
-		wxBeginBusyCursor();
-
-		if (res != wxID_OK)
-			throw agi::UserCancelException("EBU/STL export");
-
-		s.Save();
-		return s;
+		// The export settings live in Preferences now that the host has no
+		// dialog window of its own.
+		return EbuExportSettings("Subtitle Format/EBU STL");
 	}
 
 } // namespace {
@@ -624,8 +614,8 @@ Ebu3264SubtitleFormat::Ebu3264SubtitleFormat()
 
 void Ebu3264SubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const&, const char *) const
 {
-	// collect data from user
-	EbuExportSettings export_settings = get_export_config(nullptr);
+	// collect the settings saved in Preferences
+	EbuExportSettings export_settings = get_export_config();
 	AssFile copy(*src);
 
 	std::vector<EbuSubtitle> subs_list = convert_subtitles(copy, export_settings);

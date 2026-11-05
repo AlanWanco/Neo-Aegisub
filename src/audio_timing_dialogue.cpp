@@ -45,7 +45,6 @@
 
 #include <boost/range/algorithm.hpp>
 
-#include <wx/pen.h>
 
 namespace {
 class TimeableLine;
@@ -73,7 +72,7 @@ class DialogueTimingMarker final : public AudioMarker {
 
 public:
 	int       GetPosition() const override { return position; }
-	wxPen     GetStyle()    const override { return *style; }
+	AudioMarkerStyle GetStyle() const override { return {style->Colour(), style->Width(), style->Dotted()}; }
 	FeetStyle GetFeet()     const override { return feet; }
 
 	/// Move the marker to a new position
@@ -403,7 +402,7 @@ public:
 	void OnMarkerDrag(std::vector<AudioMarker*> const& markers, int new_position, int snap_range) override;
 
 	// We have no warning messages currently, maybe add the old "Modified" message back later?
-	wxString GetWarningMessage() const override { return wxString(); }
+	std::string GetWarningMessage() const override { return {}; }
 	TimeRange GetIdealVisibleTimeRange() const override { return active_line; }
 	TimeRange GetPrimaryPlaybackRange() const override { return active_line; }
 	TimeRange GetActiveLineRange() const override { return active_line; }

@@ -31,12 +31,13 @@
 
 #include "command.h"
 
-#include "../help_button.h"
 #include "../include/aegisub/context.h"
+#include "../gpui_bridge.h"
 #include "../libresrc/libresrc.h"
 
+#include <stdexcept>
 
-#include <wx/msgdlg.h>
+#include <wx/utils.h>
 
 namespace {
 	using cmd::Command;
@@ -51,11 +52,11 @@ struct help_bugs final : public Command {
 	void operator()(agi::Context *c) override {
 		if (wxGetMouseState().CmdDown()) {
 			if (wxGetMouseState().ShiftDown()) {
-				 wxMessageBox("Now crashing with an access violation...");
+				gpui::PushNotice("Crash Test", "Now crashing with an access violation...");
 				for (char *foo = (char*)nullptr;;) *foo++ = 42;
 			} else {
-				wxMessageBox("Now crashing with an unhandled exception...");
-				throw c->parent;
+				gpui::PushNotice("Crash Test", "Now crashing with an unhandled exception...");
+				throw std::runtime_error("unhandled exception test");
 			}
 		}
 		wxLaunchDefaultBrowser("https://github.com/TypesettingTools/Aegisub/issues", wxBROWSER_NEW_WINDOW);
@@ -70,7 +71,7 @@ struct help_contents final : public Command {
 	STR_HELP("Help topics")
 
 	void operator()(agi::Context *) override {
-		HelpButton::OpenPage("Main");
+		wxLaunchDefaultBrowser("https://aegisub.org/docs/latest/", wxBROWSER_NEW_WINDOW);
 	}
 };
 
@@ -94,7 +95,7 @@ struct help_video final : public Command {
 	STR_HELP("Open the manual page for Visual Typesetting")
 
 	void operator()(agi::Context *) override {
-		HelpButton::OpenPage("Visual Typesetting");
+		wxLaunchDefaultBrowser("https://aegisub.org/docs/latest/visual_typesetting/", wxBROWSER_NEW_WINDOW);
 	}
 };
 

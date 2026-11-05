@@ -37,7 +37,6 @@
 
 #include "audio_controller.h"
 #include "compat.h"
-#include "frame_main.h"
 #include "options.h"
 
 #include <libaegisub/audio/provider.h>

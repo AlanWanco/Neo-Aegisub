@@ -27,7 +27,6 @@
 #include <libaegisub/color.h>
 #include <libaegisub/format.h>
 
-#include <wx/colour.h>
 #include <wx/intl.h>
 
 VisualToolCross::VisualToolCross(VisualToolHost *parent, agi::Context *context)
@@ -68,7 +67,7 @@ void VisualToolCross::Draw() {
 
 	// Draw cross
 	gl.SetInvert();
-	gl.SetLineColour(*wxWHITE, 1.0, 1);
+	gl.SetLineColour(agi::Color(255, 255, 255), 1.0f, 1);
 	float lines[] = {
 		0.f, mouse_pos.Y(),
 		canvas_size.X(), mouse_pos.Y(),

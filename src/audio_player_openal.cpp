@@ -36,6 +36,7 @@
 #include "include/aegisub/audio_player.h"
 
 #include "audio_controller.h"
+#include "gpui_loop.h"
 #include "utils.h"
 
 #include <libaegisub/audio/provider.h>
@@ -53,7 +54,6 @@
 #endif
 
 #include <vector>
-#include <wx/timer.h>
 
 // Auto-link to OpenAL lib for MSVC
 #ifdef _MSC_VER
@@ -61,7 +61,7 @@
 #endif
 
 namespace {
-class OpenALPlayer final : public AudioPlayer, wxTimer {
+class OpenALPlayer final : public AudioPlayer {
 	/// Number of OpenAL buffers to use
 	static const ALsizei num_buffers = 8;
 
@@ -98,11 +98,14 @@ class OpenALPlayer final : public AudioPlayer, wxTimer {
 	/// Fill count OpenAL buffers
 	void FillBuffers(ALsizei count);
 
-	/// wxTimer override to periodically fill available buffers
-	void Notify() override;
+	/// Timer callback, periodically fills available buffers
+	void Notify();
 
 	void InitContext();
 	void TeardownContext();
+
+	/// Periodically tops up the free buffers while playing
+	gpui::Timer timer;
 
 public:
 	OpenALPlayer(agi::AudioProvider *provider);
@@ -126,6 +129,7 @@ OpenALPlayer::OpenALPlayer(agi::AudioProvider *provider)
 {
 	device = alcOpenDevice(nullptr);
 	if (!device) throw AudioPlayerOpenError("Failed opening default OpenAL device");
+	timer.on_tick = [this] { Notify(); };
 
 	// Determine buffer length
 	decode_buffer.resize(samplerate * bpf / num_buffers / 2); // buffers for half a second of audio
@@ -206,7 +210,7 @@ void OpenALPlayer::Play(int64_t start, int64_t count)
 
 	// And go!
 	alSourcePlay(source);
-	wxTimer::Start(100);
+	timer.Start(100);
 }
 
 void OpenALPlayer::Stop()
@@ -215,7 +219,7 @@ void OpenALPlayer::Stop()
 	if (!playing) return;
 
 	// Reset data
-	wxTimer::Stop();
+	timer.Stop();
 	playing = false;
 	start_frame = 0;
 	cur_frame = 0;

@@ -30,13 +30,16 @@
 #include "charset_detect.h"
 
 #include "compat.h"
+#include "gpui_bridge.h"
 
 #include <libaegisub/charset.h>
 #include <libaegisub/charset_conv.h>
 
-#include <wx/arrstr.h>
-#include <wx/choicdlg.h>
-#include <wx/intl.h>
+#include <wx/translation.h>
+
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace CharSetDetect {
 
@@ -45,13 +48,14 @@ std::string GetEncoding(agi::fs::path const& filename) {
 	if (!encoding.empty())
 		return encoding;
 
-	auto choices = agi::charset::GetEncodingsList<wxArrayString>();
-	int choice = wxGetSingleChoiceIndex(
-		_("Neo Aegisub could not narrow down the character set to a single one.\nPlease pick one below:"),
-		_("Choose character set"),
-		choices);
-	if (choice == -1) throw agi::UserCancelException("Cancelled encoding selection");
-	return from_wx(choices[choice]);
+	auto choices = agi::charset::GetEncodingsList<std::vector<std::string>>();
+	int choice = gpui::AskChoice(
+		from_wx(_("Choose character set")),
+		from_wx(_("Neo Aegisub could not narrow down the character set to a single one.\nPlease pick one below:")),
+		{}, "encoding", choices);
+	if (choice < 0 || static_cast<size_t>(choice) >= choices.size())
+		throw agi::UserCancelException("Cancelled encoding selection");
+	return choices[choice];
 }
 
 }

@@ -27,33 +27,26 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+/// @file ass_exporter.h
+/// @see ass_exporter.cpp
+/// @ingroup export
+///
+
 #pragma once
 
 #include <libaegisub/fs.h>
-#include <map>
 #include <string>
 #include <vector>
 
 class AssExportFilter;
 namespace agi { struct Context; }
-class wxSizer;
-class wxWindow;
 
 class AssExporter {
-	typedef std::vector<AssExportFilter*>::const_iterator filter_iterator;
-
-	/// Sizers for configuration panels
-	std::map<std::string, wxSizer*> Sizers;
-
 	/// Filters which will be applied to the subtitles
 	std::vector<AssExportFilter*> filters;
 
 	/// Input context
 	agi::Context *c;
-
-	/// Have the config windows been created, or should filters simply use
-	/// their default settings
-	bool is_default = true;
 
 public:
 	AssExporter(agi::Context *c);
@@ -68,16 +61,7 @@ public:
 	/// Apply selected export filters and save with the given charset
 	/// @param file Target filename
 	/// @param charset Target charset
-	/// @param parent_window Parent window the filters should use when opening dialogs
-	void Export(agi::fs::path const& file, const char *charset, wxWindow *parent_window= nullptr);
-
-	/// Add configuration panels for all registered filters to the target sizer
-	/// @param parent Parent window for controls
-	/// @param target_sizer Sizer to add configuration panels to
-	void DrawSettings(wxWindow *parent, wxSizer *target_sizer);
-
-	/// Get the sizer created by DrawSettings for a specific filter
-	wxSizer *GetSettingsSizer(std::string const& name);
+	void Export(agi::fs::path const& file, const char *charset);
 
 	/// Get the description of the named export filter
 	/// @throws std::string if filter is not found

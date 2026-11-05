@@ -16,67 +16,12 @@
 
 #pragma once
 
-#include <libaegisub/color.h>
 #include <libaegisub/cajun/elements.h>
 
-#include <functional>
-#include <string>
-#include <wx/string.h>
-
-class AssFile;
-class AsyncVideoProvider;
-class wxArrayInt;
-class wxArrayString;
-class wxWindow;
-namespace agi { struct Context; }
-struct ResampleSettings;
-
-/// @brief Get a color from the user via a color picker dialog
-/// @param parent Parent window
-/// @param original Initial color to select
-/// @param alpha Include controls for alpha
-/// @param callback Function called whenever the selected color changes
-/// @return Did the user accept the new color?
-bool GetColorFromUser(wxWindow *parent, agi::Color original, bool alpha, std::function<void (agi::Color)> callback);
-
-/// Ask the user to pick an autosaved file to open
-/// @return Path to file or empty string if canceled
-std::string PickAutosaveFile(wxWindow *parent);
 /// Check the AlanWanco/Neo-Aegisub GitHub releases, sharing any check already in progress.
-/// Interactive checks bypass automatic preferences and scheduling. wx displays the
-/// result; GPUI reads GetVersionCheckState(). Automatic checks only display updates.
+/// Interactive checks bypass automatic preferences and scheduling. Automatic checks only
+/// announce updates in the front end.
 void PerformVersionCheck(bool interactive);
 /// Thread-safe snapshot: enabled, checking, status, current_version, source,
 /// message, and releases (name/url/description). Available in disabled builds too.
 json::Object GetVersionCheckState();
-
-/// Ask the user to pick settings for a script resampling
-/// @return Does the user want to proceed with the resampling?
-bool PromptForResampleSettings(agi::Context *c, ResampleSettings &settings);
-
-/// Update the video properties for a newly opened video, possibly prompting the user about what to do
-void UpdateVideoProperties(AssFile *file, const AsyncVideoProvider *new_provider, wxWindow *parent);
-
-int GetSelectedChoices(wxWindow *parent, wxArrayInt& selections, wxString const& message, wxString const& caption, wxArrayString const& choices);
-
-std::string CreateDummyVideo(wxWindow *parent);
-
-bool ShowPasteOverDialog(wxWindow *parent);
-bool ShowPlainTextImportDialog();
-void ShowAboutDialog(wxWindow *parent);
-void ShowAttachmentsDialog(agi::Context *c);
-void ShowAutomationDialog(agi::Context *c);
-void ShowExportDialog(agi::Context *c);
-void ShowFontsCollectorDialog(agi::Context *c);
-void ShowJumpToDialog(agi::Context *c);
-void ShowKanjiTimerDialog(agi::Context *c);
-void ShowLogWindow(agi::Context *c);
-void ShowPreferences(wxWindow *parent);
-void ShowPropertiesDialog(agi::Context *c);
-void ShowSearchReplaceDialog(agi::Context *c, bool replace);
-void ShowSelectLinesDialog(agi::Context *c);
-void ShowShiftTimesDialog(agi::Context *c);
-void ShowSpellcheckerDialog(agi::Context *c);
-void ShowStyleManagerDialog(agi::Context *c);
-void ShowTimingProcessorDialog(agi::Context *c);
-void ShowVideoDetailsDialog(agi::Context *c);

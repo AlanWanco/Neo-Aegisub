@@ -36,9 +36,8 @@
 
 #pragma once
 
+#include <cstdint>
 #include <vector>
-
-#include <wx/colour.h>
 
 #include "utils.h"
 
@@ -73,33 +72,25 @@ public:
 	/// Allocates the palette array to 2^prec entries
 	AudioColorScheme(int prec, std::string const& scheme_name, int audio_rendering_style);
 
-	/// @brief Map a floating point value to RGB
+	/// @brief Map a floating point value to a BGRA pixel
 	/// @param val   [in] The value to map from
 	/// @param pixel [out] First byte of the pixel to write
-	///
-	/// Writes into the XRGB pixel (assumed 32 bit without alpha) passed.
-	/// The pixel format is assumed to be the same as that in the palette.
-	void map(float val, unsigned char *pixel) const
+	void map_bgra(float val, unsigned char *pixel) const
 	{
-		// Find the colour in the palette
 		const unsigned char *color = get_color(val);
-		// Copy to the destination.
-		// Has to be done one byte at a time since we're writing RGB and not RGBX or RGBA
-		// data, and we otherwise write past the end of the pixel we're writing, possibly
-		// hitting adjacent memory blocks or just overwriting the start of the following
-		// scanline in the image.
-		// As the image is 24 bpp, 3 of every 4 uint32_t writes would  be unaligned anyway.
-		pixel[0] = color[0];
+		pixel[0] = color[2];
 		pixel[1] = color[1];
-		pixel[2] = color[2];
+		pixel[2] = color[0];
+		pixel[3] = 255;
 	}
 
-	/// @brief Get a floating point value's colour as a wxColour
+	/// @brief Get a floating point value's colour as 0xRRGGBB
 	/// @param val The value to map from
-	/// @return The corresponding wxColour
-	wxColour get(float val) const
+	uint32_t rgb(float val) const
 	{
 		const unsigned char *color = get_color(val);
-		return wxColour(color[0], color[1], color[2]);
+		return (static_cast<uint32_t>(color[0]) << 16) |
+		       (static_cast<uint32_t>(color[1]) << 8) |
+		        static_cast<uint32_t>(color[2]);
 	}
 };

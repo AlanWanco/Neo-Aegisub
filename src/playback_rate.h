@@ -14,42 +14,10 @@
 
 #pragma once
 
-#include "include/aegisub/context.h"
-#include "video_controller.h"
-
 #include <array>
-#include <cmath>
-#include <wx/choice.h>
 
 namespace playback {
 inline constexpr std::array<double, 6> rates{0.5, 0.75, 1.0, 1.25, 1.5, 2.0};
 inline constexpr std::array<char const *, 6> labels{"0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"};
 
-/// Both playback areas use the same controller and update together.
-class RateChoice final : public wxChoice {
-	agi::signal::Connection connection;
-
-public:
-	RateChoice(wxWindow *parent, agi::Context *context)
-	: wxChoice(parent, wxID_ANY, wxDefaultPosition, parent->FromDIP(wxSize(76, -1)))
-	{
-		for (auto label : labels) Append(wxString::FromUTF8(label));
-		SetName(_("Playback speed"));
-		SetToolTip(_("Playback speed (changes audio pitch; subtitle timing is unchanged)"));
-		auto update = [this](double rate) {
-			for (size_t i = 0; i < rates.size(); ++i) {
-				if (std::abs(rates[i] - rate) < 0.001) {
-					SetSelection(i);
-					break;
-				}
-			}
-		};
-		update(context->videoController->GetPlaybackRate());
-		connection = context->videoController->AddPlaybackRateListener(update);
-		Bind(wxEVT_CHOICE, [context](wxCommandEvent& event) {
-			if (event.GetSelection() >= 0 && static_cast<size_t>(event.GetSelection()) < rates.size())
-				context->videoController->SetPlaybackRate(rates[event.GetSelection()]);
-		});
-	}
-};
 }

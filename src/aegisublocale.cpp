@@ -48,7 +48,6 @@
 #include <functional>
 #include <wx/intl.h>
 #include <wx/stdpaths.h>
-#include <wx/choicdlg.h> // Keep this last so wxUSE_CHOICEDLG is set.
 
 #ifndef AEGISUB_CATALOG
 #define AEGISUB_CATALOG "aegisub"
@@ -112,51 +111,21 @@ std::vector<std::pair<std::string, std::string>> AegisubLocale::GetAvailableLang
 	return languages;
 }
 
-std::string AegisubLocale::PickLanguage() {
-	if (active_language.empty()) {
-		wxString os_ui_language = GetTranslations()->GetBestTranslation(AEGISUB_CATALOG);
-		if (!os_ui_language.empty())
-			return from_wx(os_ui_language);
-	}
+std::string AegisubLocale::RecommendLanguage() {
+	auto codes = GetTranslations()->GetAvailableTranslations(AEGISUB_CATALOG);
+	wxString os_ui_language = GetTranslations()->GetBestTranslation(AEGISUB_CATALOG);
+	if (!os_ui_language.empty())
+		return from_wx(os_ui_language);
 
-	wxArrayString langs = GetTranslations()->GetAvailableTranslations(AEGISUB_CATALOG);
-
-	// No translations available, so don't bother asking the user
-	if (langs.empty() && active_language.empty())
-		return "en_US";
-
-	langs.insert(langs.begin(), "en_US");
-
-	// Check if user local language is available, if so, make it first
 	const int system_language = wxLocale::GetSystemLanguage();
 	if (system_language != wxLANGUAGE_UNKNOWN) {
 		const wxLanguageInfo *system_info = wxLocale::GetLanguageInfo(system_language);
-		auto it = std::find_if(langs.begin(), langs.end(), [=](wxString const& lang) {
-			const wxLanguageInfo *info = wxLocale::FindLanguageInfo(lang);
-			return system_info && info && LanguagesMatch(*system_info, *info);
-		});
-		if (it != langs.end())
-			std::rotate(langs.begin(), it, it + 1);
+		for (auto const& code : codes) {
+			const wxLanguageInfo *info = wxLocale::FindLanguageInfo(code);
+			if (system_info && info && LanguagesMatch(*system_info, *info))
+				return from_wx(code);
+		}
 	}
 
-	// Generate names
-	wxArrayString langNames;
-	for (auto const& lang : langs)
-		langNames.push_back(LocalizedLanguageName(lang));
-
-	long style = wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxOK | wxCENTRE;
-	if (!active_language.empty())
-		style |= wxCANCEL;
-
-	wxSingleChoiceDialog dialog(nullptr, _("Please choose a language:"), _("Language"), langNames,
-			(void **)nullptr,
-			style);
-	if (dialog.ShowModal() == wxID_OK) {
-		int picked = dialog.GetSelection();
-		auto new_lang = from_wx(langs[picked]);
-		if (new_lang != active_language)
-			return new_lang;
-	}
-
-	return "";
+	return "en_US";
 }

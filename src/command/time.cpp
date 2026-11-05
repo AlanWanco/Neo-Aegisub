@@ -36,7 +36,7 @@
 #include "../async_video_provider.h"
 #include "../audio_controller.h"
 #include "../audio_timing.h"
-#include "../dialogs.h"
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
 #include "../project.h"
@@ -154,8 +154,8 @@ struct time_shift final : public Command {
 	STR_DISP("Shift Times")
 	STR_HELP("Shift subtitles by time or frames")
 
-	void operator()(agi::Context *c) override {
-		ShowShiftTimesDialog(c);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("time/shift");
 	}
 };
 

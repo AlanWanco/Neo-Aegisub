@@ -33,14 +33,12 @@
 
 #include "../async_video_provider.h"
 #include "../compat.h"
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 #include "../project.h"
 #include "../utils.h"
-
-
-#include <wx/msgdlg.h>
 
 namespace {
 	using cmd::Command;
@@ -69,11 +67,8 @@ struct timecode_open final : public Command {
 	STR_DISP("Open Timecodes File")
 	STR_HELP("Open a VFR timecodes v1 or v2 file")
 
-	void operator()(agi::Context *c) override {
-		auto str = from_wx(_("Text Files") + " (*.txt)|*.txt|" + _("All Files") + " (*.*)|*.*");
-		auto filename = OpenFileSelector(c, wxGETTEXT_IN_CONTEXT("dialog title", "Open Timecodes File"), "Path/Last/Timecodes", "", "", str, c->parent, "?script");
-		if (!filename.empty())
-			c->project->LoadTimecodes(filename);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("timecode/open");
 	}
 };
 
@@ -89,19 +84,8 @@ struct timecode_save final : public Command {
 		return c->project->Timecodes().IsLoaded();
 	}
 
-	void operator()(agi::Context *c) override {
-		auto str = from_wx(_("Text Files") + " (*.txt)|*.txt|" + _("All Files") + " (*.*)|*.*");
-		auto filename = SaveFileSelector(c, wxGETTEXT_IN_CONTEXT("dialog title", "Save Timecodes File"), "Path/Last/Timecodes", "", "", str, c->parent);
-		if (filename.empty()) return;
-
-		try {
-			auto provider = c->project->VideoProvider();
-			c->project->Timecodes().Save(filename, provider ? provider->GetFrameCount() : -1);
-			config::mru->Add("Timecodes", filename);
-		}
-		catch (agi::Exception const& err) {
-			wxMessageBox(to_wx(err.GetMessage()), _("Error saving timecodes"), wxOK | wxICON_ERROR | wxCENTER, c->parent);
-		}
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("timecode/save");
 	}
 };
 }

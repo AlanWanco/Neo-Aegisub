@@ -32,20 +32,12 @@
 #include "command.h"
 
 #include "../compat.h"
-#include "../dialog_manager.h"
-#include "../dialog_styling_assistant.h"
-#include "../dialog_translation.h"
-#include "../dialogs.h"
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
-#include "../resolution_resampler.h"
-#include "../video_controller.h"
 
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
-
-#include <wx/msgdlg.h>
-#include <wx/utils.h>
 
 namespace {
 	using cmd::Command;
@@ -57,9 +49,8 @@ struct tool_export final : public Command {
 	STR_DISP("Export Subtitles")
 	STR_HELP("Save a copy of subtitles in a different format or with processing applied to it")
 
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		ShowExportDialog(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/export");
 	}
 };
 
@@ -70,8 +61,8 @@ struct tool_font_collector final : public Command {
 	STR_DISP("Fonts Collector")
 	STR_HELP("Open fonts collector")
 
-	void operator()(agi::Context *c) override {
-		ShowFontsCollectorDialog(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/font_collector");
 	}
 };
 
@@ -82,8 +73,8 @@ struct tool_line_select final : public Command {
 	STR_DISP("Select Lines")
 	STR_HELP("Select lines based on defined criteria")
 
-	void operator()(agi::Context *c) override {
-		ShowSelectLinesDialog(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/line/select");
 	}
 };
 
@@ -94,11 +85,8 @@ struct tool_resampleres final : public Command {
 	STR_DISP("Resample Resolution")
 	STR_HELP("Resample subtitles to maintain their current appearance at a different script resolution")
 
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		ResampleSettings settings;
-		if (PromptForResampleSettings(c, settings))
-			ResampleResolution(c->ass.get(), settings);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/resampleres");
 	}
 };
 
@@ -109,16 +97,16 @@ struct tool_style_assistant final : public Command {
 	STR_DISP("Styling Assistant")
 	STR_HELP("Open styling assistant")
 
-	void operator()(agi::Context *c) override {
-		c->dialog->Show<DialogStyling>(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/style/assistant");
 	}
 };
 
 struct tool_styling_assistant_validator : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
-	bool Validate(const agi::Context *c) override {
-		return !!c->dialog->Get<DialogStyling>();
+	bool Validate(const agi::Context *) override {
+		return false;
 	}
 };
 
@@ -128,8 +116,8 @@ struct tool_styling_assistant_commit final : public tool_styling_assistant_valid
 	STR_DISP("Accept changes")
 	STR_HELP("Commit changes and move to the next line")
 
-	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogStyling>()->Commit(true);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/styling_assistant/commit");
 	}
 };
 
@@ -139,8 +127,8 @@ struct tool_styling_assistant_preview final : public tool_styling_assistant_vali
 	STR_DISP("Preview changes")
 	STR_HELP("Commit changes and stay on the current line")
 
-	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogStyling>()->Commit(false);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/styling_assistant/preview");
 	}
 };
 
@@ -151,8 +139,8 @@ struct tool_style_manager final : public Command {
 	STR_DISP("Styles Manager")
 	STR_HELP("Open the styles manager")
 
-	void operator()(agi::Context *c) override {
-		ShowStyleManagerDialog(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/style/manager");
 	}
 };
 
@@ -163,8 +151,8 @@ struct tool_time_kanji final : public Command {
 	STR_DISP("Kanji Timer")
 	STR_HELP("Open the Kanji timer copier")
 
-	void operator()(agi::Context *c) override {
-		ShowKanjiTimerDialog(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/time/kanji");
 	}
 };
 
@@ -175,8 +163,8 @@ struct tool_time_postprocess final : public Command {
 	STR_DISP("Timing Post-Processor")
 	STR_HELP("Post-process the subtitle timing to add lead-ins and lead-outs, snap timing to scene changes, etc.")
 
-	void operator()(agi::Context *c) override {
-		ShowTimingProcessorDialog(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/time/postprocess");
 	}
 };
 
@@ -187,22 +175,16 @@ struct tool_translation_assistant final : public Command {
 	STR_DISP("Translation Assistant")
 	STR_HELP("Open translation assistant")
 
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		try {
-			c->dialog->ShowModal<DialogTranslation>(c);
-		}
-		catch (DialogTranslation::NothingToTranslate const&) {
-			wxMessageBox(_("There is nothing to translate in the file."));
-		}
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/translation_assistant");
 	}
 };
 
 struct tool_translation_assistant_validator : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
-	bool Validate(const agi::Context *c) override {
-		return !!c->dialog->Get<DialogTranslation>();
+	bool Validate(const agi::Context *) override {
+		return false;
 	}
 };
 
@@ -212,8 +194,8 @@ struct tool_translation_assistant_commit final : public tool_translation_assista
 	STR_DISP("Accept changes")
 	STR_HELP("Commit changes and move to the next line")
 
-	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->Commit(true);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/translation_assistant/commit");
 	}
 };
 
@@ -223,8 +205,8 @@ struct tool_translation_assistant_preview final : public tool_translation_assist
 	STR_DISP("Preview changes")
 	STR_HELP("Commit changes and stay on the current line")
 
-	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->Commit(false);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/translation_assistant/preview");
 	}
 };
 
@@ -234,8 +216,8 @@ struct tool_translation_assistant_next final : public tool_translation_assistant
 	STR_DISP("Next Line")
 	STR_HELP("Move to the next line without committing changes")
 
-	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->NextBlock();
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/translation_assistant/next");
 	}
 };
 
@@ -245,8 +227,8 @@ struct tool_translation_assistant_prev final : public tool_translation_assistant
 	STR_DISP("Previous Line")
 	STR_HELP("Move to the previous line without committing changes")
 
-	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->PrevBlock();
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/translation_assistant/prev");
 	}
 };
 
@@ -256,8 +238,8 @@ struct tool_translation_assistant_insert final : public tool_translation_assista
 	STR_DISP("Insert Original")
 	STR_HELP("Insert the untranslated text")
 
-	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->InsertOriginal();
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("tool/translation_assistant/insert_original");
 	}
 };
 }

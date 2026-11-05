@@ -23,25 +23,25 @@
 
 #include "vector2d.h"
 
+#include <libaegisub/color.h>
+
+#include <cstddef>
 #include <vector>
 
-class wxColour;
-
+/// Geometry for the visual tools. It used to issue immediate-mode OpenGL;
+/// drawing now happens in the GPUI front end, so every primitive is written to
+/// the active VisualRenderCapture instead. With no capture the calls are no-ops,
+/// which is what a headless host wants.
 class OpenGLWrapper {
-	float line_r, line_g, line_b, line_a;
-	float fill_r, fill_g, fill_b, fill_a;
-
-	int line_width;
-	bool smooth;
-
-	bool transform_pushed;
-	void PrepareTransform();
+	float line_r = 1, line_g = 1, line_b = 1, line_a = 1;
+	float fill_r = 1, fill_g = 1, fill_b = 1, fill_a = 1;
+	int line_width = 1;
 
 public:
-	OpenGLWrapper();
+	OpenGLWrapper() = default;
 
-	void SetLineColour(wxColour col, float alpha = 1.0f, int width = 1);
-	void SetFillColour(wxColour col, float alpha = 1.0f);
+	void SetLineColour(agi::Color col, float alpha = 1.0f, int width = 1);
+	void SetFillColour(agi::Color col, float alpha = 1.0f);
 	void SetModeLine() const;
 	void SetModeFill() const;
 
@@ -75,6 +75,4 @@ public:
 	/// @param video_size Bottom-right corner of the visible area
 	/// @param invert Draw the area outside the polygons instead
 	void DrawMultiPolygon(std::vector<float> const& points, std::vector<int> &start, std::vector<int> &count, Vector2D video_pos, Vector2D video_size, bool invert);
-
-	static bool IsExtensionSupported(const char *ext);
 };

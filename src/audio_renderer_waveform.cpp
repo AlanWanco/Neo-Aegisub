@@ -35,7 +35,7 @@
 #include <libaegisub/audio/provider.h>
 
 #include <algorithm>
-#include <wx/dcmemory.h>
+#include <cstdint>
 
 enum {
 	/// Only render the peaks
@@ -55,20 +55,18 @@ AudioWaveformRenderer::AudioWaveformRenderer(std::string const& color_scheme_nam
 
 AudioWaveformRenderer::~AudioWaveformRenderer() { }
 
-void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
+void AudioWaveformRenderer::Render(AudioCanvas &canvas, int start, AudioRenderingStyle style)
 {
-	wxMemoryDC dc(bmp);
-	wxRect rect(wxPoint(0, 0), bmp.GetSize());
-	int midpoint = rect.height / 2;
+	const int width = canvas.Width();
+	const int height = canvas.Height();
+	int midpoint = height / 2;
 
 	const AudioColorScheme *pal = &colors[style];
 
 	double pixel_samples = pixel_ms * provider->GetSampleRate() / 1000.0;
 
 	// Fill the background
-	dc.SetBrush(wxBrush(pal->get(0.0f)));
-	dc.SetPen(*wxTRANSPARENT_PEN);
-	dc.DrawRectangle(rect);
+	canvas.Clear(pal->rgb(0.0f));
 
 	// Make sure we've got a buffer to fill with audio data
 	if (!audio_buffer)
@@ -83,10 +81,10 @@ void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	assert(provider->GetBytesPerSample() == 2);
 	assert(provider->GetChannels() == 1);
 
-	wxPen pen_peaks(wxPen(pal->get(0.4f)));
-	wxPen pen_avgs(wxPen(pal->get(0.7f)));
+	uint32_t const peak_rgb = pal->rgb(0.4f);
+	uint32_t const avg_rgb = pal->rgb(0.7f);
 
-	for (int x = 0; x < rect.width; ++x)
+	for (int x = 0; x < width; ++x)
 	{
 		provider->GetAudio(audio_buffer.get(), (int64_t)cur_sample, (int64_t)pixel_samples);
 		cur_sample += pixel_samples;
@@ -114,45 +112,28 @@ void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		int avg_min = std::max((int)(avg_min_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, -midpoint);
 		int avg_max = std::min((int)(avg_max_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, midpoint);
 
-		dc.SetPen(pen_peaks);
-		dc.DrawLine(x, midpoint - peak_max, x, midpoint - peak_min);
-		if (render_averages) {
-			dc.SetPen(pen_avgs);
-			dc.DrawLine(x, midpoint - avg_max, x, midpoint - avg_min);
-		}
+		canvas.VerticalLine(x, midpoint - peak_max, midpoint - peak_min, peak_rgb);
+		if (render_averages)
+			canvas.VerticalLine(x, midpoint - avg_max, midpoint - avg_min, avg_rgb);
 	}
 
 	// Horizontal zero-point line
-	if (render_averages)
-		dc.SetPen(wxPen(pal->get(1.0f)));
-	else
-		dc.SetPen(pen_peaks);
-
-	dc.DrawLine(0, midpoint, rect.width, midpoint);
+	canvas.HorizontalLine(midpoint, 0, width - 1,
+		render_averages ? pal->rgb(1.0f) : peak_rgb);
 }
 
-void AudioWaveformRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)
+void AudioWaveformRenderer::RenderBlank(AudioCanvas &canvas, int x, int width, AudioRenderingStyle style)
 {
 	const AudioColorScheme *pal = &colors[style];
-	wxColor line(pal->get(1.0));
-	wxColor bg(pal->get(0.0));
+	uint32_t const line = pal->rgb(1.0f);
+	uint32_t const bg = pal->rgb(0.0f);
 
 	// Draw the line as background above and below, and line in the middle, to avoid
 	// overdraw flicker (the common theme in all of audio display direct drawing).
-	int halfheight = rect.height / 2;
+	int const height = canvas.Height();
+	int halfheight = height / 2;
 
-	dc.SetBrush(wxBrush(bg));
-	dc.SetPen(*wxTRANSPARENT_PEN);
-	dc.DrawRectangle(rect.x, rect.y, rect.width, halfheight);
-	dc.DrawRectangle(rect.x, rect.y + halfheight + 1, rect.width, rect.height - halfheight - 1);
-
-	dc.SetPen(wxPen(line));
-	dc.DrawLine(rect.x, rect.y+halfheight, rect.x+rect.width, rect.y+halfheight);
-}
-
-wxArrayString AudioWaveformRenderer::GetWaveformStyles() {
-	wxArrayString ret;
-	ret.push_back(_("Maximum"));
-	ret.push_back(_("Maximum + Average"));
-	return ret;
+	canvas.FillRect(x, 0, width, halfheight, bg);
+	canvas.FillRect(x, halfheight + 1, width, height - halfheight - 1, bg);
+	canvas.HorizontalLine(halfheight, x, x + width - 1, line);
 }

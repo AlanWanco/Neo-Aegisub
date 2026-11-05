@@ -19,18 +19,12 @@
 #include "ass_dialogue.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
-#include "libresrc/libresrc.h"
 #include "options.h"
 #include "selection_controller.h"
-#include "ui_theme.h"
-#include "include/aegisub/toolbar.h"
-
 #include <algorithm>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm/set_algorithm.hpp>
-#include <wx/toolbar.h>
 
-int BUTTON_ID_BASE = 1300;
 
 VisualToolVectorClip::VisualToolVectorClip(VisualToolHost *parent, agi::Context *context)
 : VisualTool<VisualToolVectorClipDraggableFeature>(parent, context)
@@ -38,60 +32,15 @@ VisualToolVectorClip::VisualToolVectorClip(VisualToolHost *parent, agi::Context 
 {
 }
 
-void VisualToolVectorClip::AddTool(std::string command_name, VisualToolVectorClipMode mode) {
-	cmd::Command *command = cmd::get(command_name);
-	int icon_size = OPT_GET("App/Toolbar Icon Size")->GetInt();
-	toolBar->AddTool(BUTTON_ID_BASE + mode, command->StrDisplay(c),
-		ui::CommandIcon(command_name, icon_size, command->Icon(icon_size)), command->GetTooltip("Video"), wxITEM_CHECK);
-}
-
-
-void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
-	this->toolBar = toolBar;
-    if (!toolBar) {
-        SetSubTool(features.empty() ? VCLIP_LINE : VCLIP_DRAG);
-        return;
-    }
-
-	toolBar->AddSeparator();
-
-	AddTool("video/tool/vclip/drag", VCLIP_DRAG);
-	AddTool("video/tool/vclip/line", VCLIP_LINE);
-	AddTool("video/tool/vclip/bicubic", VCLIP_BICUBIC);
-	toolBar->AddSeparator();
-	AddTool("video/tool/vclip/convert", VCLIP_CONVERT);
-	AddTool("video/tool/vclip/insert", VCLIP_INSERT);
-	AddTool("video/tool/vclip/remove", VCLIP_REMOVE);
-	toolBar->AddSeparator();
-	AddTool("video/tool/vclip/freehand", VCLIP_FREEHAND);
-	AddTool("video/tool/vclip/freehand_smooth", VCLIP_FREEHAND_SMOOTH);
-
-	toolBar->ToggleTool(BUTTON_ID_BASE + VCLIP_DRAG, true);
-	toolBar->Realize();
-	toolBar->Show(true);
-	toolBar->Bind(wxEVT_TOOL, [this](wxCommandEvent& e) { SetSubTool((VisualToolVectorClipMode) (e.GetId() - BUTTON_ID_BASE)); });
-	SetSubTool(features.empty() ? VCLIP_LINE : VCLIP_DRAG);
-}
-
 void VisualToolVectorClip::SetSubTool(int subtool) {
 	if (subtool < 0 || subtool >= VCLIP_LAST) return;
-	if (!toolBar) { mode = subtool; return; }
-	// Manually enforce radio behavior as we want one selection in the bar
-	// rather than one per group
-	for (int i = 0; i < VCLIP_LAST; i++)
-		toolBar->ToggleTool(BUTTON_ID_BASE + i, i == subtool);
-
 	mode = subtool;
-	toolbar::RefreshVectorTools(toolBar, mode);
-}
-
-void VisualToolVectorClip::RefreshToolbarTheme() {
-	if (toolBar) SetSubTool(mode);
 }
 
 int VisualToolVectorClip::GetSubTool() {
 	return mode;
 }
+
 
 void VisualToolVectorClip::Draw() {
 	if (!active_line) return;
@@ -105,13 +54,13 @@ void VisualToolVectorClip::Draw() {
 	assert(!count.empty());
 
 	// Load colors from options
-	wxColour line_color = to_wx(line_color_primary_opt->GetColor());
-	wxColour highlight_color_primary = to_wx(highlight_color_primary_opt->GetColor());
-	wxColour highlight_color_secondary = to_wx(highlight_color_secondary_opt->GetColor());
+	agi::Color line_color = line_color_primary_opt->GetColor();
+	agi::Color highlight_color_primary = highlight_color_primary_opt->GetColor();
+	agi::Color highlight_color_secondary = highlight_color_secondary_opt->GetColor();
 	float shaded_alpha = static_cast<float>(shaded_area_alpha_opt->GetDouble());
 
 	gl.SetLineColour(line_color, .5f, 2);
-	gl.SetFillColour(*wxBLACK, shaded_alpha);
+	gl.SetFillColour(agi::Color(0, 0, 0), shaded_alpha);
 
 	// draw the shade over clipped out areas and line showing the clip
 	gl.DrawMultiPolygon(points, start, count, video_pos, video_size, !inverse);
@@ -151,7 +100,7 @@ void VisualToolVectorClip::Draw() {
 
 	// Draw features
 	for (auto& feature : features) {
-		wxColour feature_color = line_color;
+		agi::Color feature_color = line_color;
 		if (&feature == active_feature)
 			feature_color = highlight_color_primary;
 		else if (sel_features.count(&feature))

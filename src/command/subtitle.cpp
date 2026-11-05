@@ -34,12 +34,9 @@
 #include "../ass_dialogue.h"
 #include "../ass_file.h"
 #include "../compat.h"
-#include "../dialog_search_replace.h"
-#include "../dialogs.h"
-#include "../frame_main.h"
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
-#include "../main.h"
 #include "../options.h"
 #include "../project.h"
 #include "../search_replace_engine.h"
@@ -50,11 +47,8 @@
 #include "../video_controller.h"
 
 #include <libaegisub/address_of_adaptor.h>
-#include <libaegisub/charset_conv.h>
 
 #include <boost/range/algorithm/copy.hpp>
-#include <wx/msgdlg.h>
-#include <wx/choicdlg.h>
 
 namespace {
 	using cmd::Command;
@@ -80,9 +74,8 @@ struct subtitle_attachment final : public Command {
 	STR_DISP("Attachments")
 	STR_HELP("Open the attachment manager dialog")
 
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		ShowAttachmentsDialog(c);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/attachment");
 	}
 };
 
@@ -93,9 +86,8 @@ struct subtitle_find final : public Command {
 	STR_DISP("Find")
 	STR_HELP("Search for text in the subtitles")
 
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		ShowSearchReplaceDialog(c, false);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/find");
 	}
 };
 
@@ -109,7 +101,7 @@ struct subtitle_find_next final : public Command {
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
 		if (!c->search->FindNext())
-			ShowSearchReplaceDialog(c, false);
+			gpui::PushCommand("subtitle/find");
 	}
 };
 
@@ -216,22 +208,6 @@ struct subtitle_insert_before_videotime final : public validate_nonempty_selecti
 	}
 };
 
-bool is_okay_to_close_subtitles([[maybe_unused]] agi::Context *c) {
-#ifdef __APPLE__
-	return true;
-#else
-	return c->subsController->TryToClose() != wxCANCEL;
-#endif
-}
-
-void load_subtitles([[maybe_unused]] agi::Context *c, agi::fs::path const& path, std::string const& encoding="") {
-#ifdef __APPLE__
-	wxGetApp().NewProjectContext().project->LoadSubtitles(path, encoding);
-#else
-	c->project->LoadSubtitles(path, encoding);
-#endif
-}
-
 struct subtitle_new final : public Command {
 	CMD_NAME("subtitle/new")
 	CMD_ICON(new_toolbutton)
@@ -239,13 +215,12 @@ struct subtitle_new final : public Command {
 	STR_DISP("New Subtitles")
 	STR_HELP("New subtitles")
 
-	void operator()([[maybe_unused]] agi::Context *c) override {
-#ifdef __APPLE__
-		wxGetApp().NewProjectContext();
-#else
-		if (is_okay_to_close_subtitles(c))
-			c->project->CloseSubtitles();
-#endif
+	void operator()(agi::Context *c) override {
+		if (c->subsController->IsModified()) {
+			gpui::PushCommand("subtitle/new");
+			return;
+		}
+		c->project->CloseSubtitles();
 	}
 };
 
@@ -256,8 +231,8 @@ struct subtitle_close final : public Command {
 	STR_DISP("Close")
 	STR_HELP("Close")
 
-	void operator()(agi::Context *c) override {
-		c->frame->Close();
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/close");
 	}
 };
 
@@ -268,12 +243,8 @@ struct subtitle_open final : public Command {
 	STR_DISP("Open Subtitles")
 	STR_HELP("Open a subtitles file")
 
-	void operator()(agi::Context *c) override {
-		if (!is_okay_to_close_subtitles(c)) return;
-
-		auto filename = OpenFileSelector(c, _("Open Subtitles File"), "Path/Last/Subtitles", "","", SubtitleFormat::GetWildcards(0), c->parent);
-		if (!filename.empty())
-			load_subtitles(c, filename);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/open");
 	}
 };
 
@@ -283,11 +254,8 @@ struct subtitle_open_autosave final : public Command {
 	STR_DISP("Open Autosaved Subtitles")
 	STR_HELP("Open a previous version of a file which was autosaved by Neo Aegisub")
 
-	void operator()(agi::Context *c) override {
-		if (!is_okay_to_close_subtitles(c)) return;
-		auto filename = PickAutosaveFile(c->parent);
-		if (!filename.empty())
-			load_subtitles(c, filename);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/open/autosave");
 	}
 };
 
@@ -298,16 +266,8 @@ struct subtitle_open_charset final : public Command {
 	STR_DISP("Open Subtitles with Charset")
 	STR_HELP("Open a subtitles file with a specific file encoding")
 
-	void operator()(agi::Context *c) override {
-		if (!is_okay_to_close_subtitles(c)) return;
-
-		auto filename = OpenFileSelector(c, _("Open Subtitles File"), "Path/Last/Subtitles", "","", SubtitleFormat::GetWildcards(0), c->parent);
-		if (filename.empty()) return;
-
-		wxString charset = wxGetSingleChoice(_("Choose charset code:"), _("Charset"), agi::charset::GetEncodingsList<wxArrayString>(), c->parent, -1, -1, true, 250, 200);
-		if (charset.empty()) return;
-
-		load_subtitles(c, filename, from_wx(charset));
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/open/charset");
 	}
 };
 
@@ -319,7 +279,10 @@ struct subtitle_open_video final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	void operator()(agi::Context *c) override {
-		if (c->subsController->TryToClose() == wxCANCEL) return;
+		if (c->subsController->IsModified()) {
+			gpui::PushCommand("subtitle/open/video");
+			return;
+		}
 		c->project->LoadSubtitles(c->project->VideoName(), "binary", false);
 	}
 
@@ -335,29 +298,20 @@ struct subtitle_properties final : public Command {
 	STR_DISP("Properties")
 	STR_HELP("Open script properties window")
 
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		ShowPropertiesDialog(c);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/properties");
 	}
 };
 
-static void save_subtitles(agi::Context *c, agi::fs::path filename) {
-	if (filename.empty()) {
-		c->videoController->Stop();
-		filename = SaveFileSelector(c, _("Save Subtitles File"), "Path/Last/Subtitles",
-			c->subsController->Filename().stem().string() + ".ass", "ass",
-			"Advanced Substation Alpha (*.ass)|*.ass", c->parent);
-		if (filename.empty()) return;
-	}
-
+static void save_subtitles(agi::Context *c, agi::fs::path const& filename) {
 	try {
 		c->subsController->Save(filename);
 	}
 	catch (const agi::Exception& err) {
-		wxMessageBox(to_wx(err.GetMessage()), _("Error"), wxOK | wxICON_ERROR | wxCENTER, c->parent);
+		gpui::PushNotice(from_wx(_("Error")), err.GetMessage());
 	}
 	catch (...) {
-		wxMessageBox(_("Unknown error"), _("Error"), wxOK | wxICON_ERROR | wxCENTER, c->parent);
+		gpui::PushNotice(from_wx(_("Error")), from_wx(_("Unknown error")));
 	}
 }
 
@@ -370,7 +324,11 @@ struct subtitle_save final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	void operator()(agi::Context *c) override {
-		save_subtitles(c, c->subsController->CanSave() ? c->subsController->Filename() : "");
+		if (!c->subsController->CanSave()) {
+			gpui::PushCommand("subtitle/save");
+			return;
+		}
+		save_subtitles(c, c->subsController->Filename());
 	}
 
 	bool Validate(const agi::Context *c) override {
@@ -385,8 +343,8 @@ struct subtitle_save_as final : public Command {
 	STR_DISP("Save Subtitles as")
 	STR_HELP("Save subtitles with another name")
 
-	void operator()(agi::Context *c) override {
-		save_subtitles(c, "");
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/save/as");
 	}
 };
 
@@ -442,9 +400,8 @@ struct subtitle_spellcheck final : public Command {
 	STR_DISP("Spell Checker")
 	STR_HELP("Open spell checker")
 
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		ShowSpellcheckerDialog(c);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("subtitle/spellcheck");
 	}
 };
 }

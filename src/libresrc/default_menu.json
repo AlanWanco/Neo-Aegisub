@@ -115,9 +115,7 @@
         { "command" : "video/playback/rate/increase" }
     ],
     "main/video/set zoom" : [
-        { "command" : "video/zoom/50" },
-        { "command" : "video/zoom/100" },
-        { "command" : "video/zoom/200" }
+        { "command" : "video/zoom/100" }
     ],
     "main/video/override ar" : [
         { "command" : "video/aspect/default" },

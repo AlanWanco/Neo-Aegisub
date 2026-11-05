@@ -47,7 +47,7 @@ AssFixStylesFilter::AssFixStylesFilter()
 {
 }
 
-void AssFixStylesFilter::ProcessSubs(AssFile *subs) {
+void AssFixStylesFilter::FixStyles(AssFile *subs) {
 	auto styles = subs->GetStyles();
 	for (auto& str : styles) boost::to_lower(str);
 	sort(begin(styles), end(styles));

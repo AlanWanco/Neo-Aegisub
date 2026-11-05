@@ -16,17 +16,18 @@
 
 #pragma once
 
-#include <wx/pen.h>
-
+#include <libaegisub/color.h>
 #include <libaegisub/signal.h>
 
 namespace agi { class OptionValue; }
 
 /// @class Pen
-/// @brief A simple wrapper around wxPen to bind the colour and width to the
-/// value of an option
+/// @brief Binds a marker colour and width to options, without any toolkit types
 class Pen {
-	wxPen impl;
+	agi::Color colour{255, 255, 255, 255};
+	int width = 1;
+	bool dotted = false;
+
 	agi::signal::Connection colour_con;
 	agi::signal::Connection width_con;
 
@@ -37,17 +38,16 @@ public:
 	/// Constructor
 	/// @param colour_opt Option name to get the colour from
 	/// @param width_opt Option name to get the width from
-	/// @param style Pen style
-	Pen(const char *colour_opt, const char *width_opt, wxPenStyle style = wxPENSTYLE_SOLID);
+	/// @param dotted Draw as a dotted line
+	Pen(const char *colour_opt, const char *width_opt, bool dotted = false);
 
 	/// Constructor
 	/// @param colour_opt Option name to get the colour from
 	/// @param width Pen width
-	/// @param style Pen style
-	Pen(const char *colour_opt, int width = 1, wxPenStyle style = wxPENSTYLE_SOLID);
+	/// @param dotted Draw as a dotted line
+	Pen(const char *colour_opt, int width = 1, bool dotted = false);
 
-	/// Implicit conversion to wxPen
-	operator wxPen const&() const { return impl; }
-
-	~Pen();
+	agi::Color Colour() const { return colour; }
+	int Width() const { return width; }
+	bool Dotted() const { return dotted; }
 };

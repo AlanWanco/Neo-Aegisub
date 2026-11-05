@@ -40,13 +40,6 @@
 #include <libaegisub/of_type_adaptor.h>
 
 #include <utility>
-#include <wx/button.h>
-#include <wx/checkbox.h>
-#include <wx/panel.h>
-#include <wx/radiobut.h>
-#include <wx/sizer.h>
-#include <wx/stattext.h>
-#include <wx/textctrl.h>
 
 AssTransformFramerateFilter::AssTransformFramerateFilter()
 : AssExportFilter(from_wx(_("Transform Framerate")),
@@ -55,96 +48,18 @@ AssTransformFramerateFilter::AssTransformFramerateFilter()
 {
 }
 
-void AssTransformFramerateFilter::ProcessSubs(AssFile *subs, wxWindow *) {
+void AssTransformFramerateFilter::ProcessSubs(AssFile *subs) {
 	TransformFrameRate(subs);
 }
 
-wxWindow *AssTransformFramerateFilter::GetConfigDialogWindow(wxWindow *parent, agi::Context *c) {
-	LoadSettings(true, c);
-
-	wxWindow *base = new wxPanel(parent, -1);
-
-	// Input sizer
-	auto InputSizer = new wxBoxSizer(wxHORIZONTAL);
-	wxString initialInput;
-	auto FromVideo = new wxButton(base,-1,_("From &video"));
-	if (Input.IsLoaded()) {
-		initialInput = fmt_wx("%2.3f", Input.FPS());
-		FromVideo->Bind(wxEVT_BUTTON, [c, this](wxCommandEvent&) {
-			InputFramerate->SetValue(fmt_wx("%g", c->project->Timecodes().FPS()));
-		});
-	}
-	else {
-		initialInput = "23.976";
-		FromVideo->Enable(false);
-	}
-	InputFramerate = new wxTextCtrl(base,-1,initialInput);
-	InputSizer->Add(InputFramerate,0,wxEXPAND | wxLEFT,5);
-	InputSizer->Add(FromVideo,0,wxEXPAND | wxLEFT,5);
-	InputSizer->AddStretchSpacer(1);
-
-	// Output sizers
-	auto OutputSizerTop = new wxBoxSizer(wxHORIZONTAL);
-	auto OutputSizerBottom = new wxBoxSizer(wxHORIZONTAL);
-	auto OutputSizer = new wxBoxSizer(wxVERTICAL);
-
-	// Output top line
-	RadioOutputVFR = new wxRadioButton(base,-1,_("V&ariable"),wxDefaultPosition,wxDefaultSize,wxRB_GROUP);
-	OutputSizerTop->Add(RadioOutputVFR,0,wxEXPAND,0);
-
-	// Output bottom line
-	RadioOutputCFR = new wxRadioButton(base,-1,_("&Constant: "));
-	wxString initialOutput = initialInput;
-	if (!Output.IsVFR()) {
-		RadioOutputVFR->Enable(false);
-		RadioOutputCFR->SetValue(true);
-	}
-	OutputFramerate = new wxTextCtrl(base,-1,initialOutput);
-	OutputSizerBottom->Add(RadioOutputCFR,0,wxEXPAND,0);
-	OutputSizerBottom->Add(OutputFramerate,0,wxEXPAND | wxLEFT,5);
-	OutputSizerBottom->AddStretchSpacer(1);
-
-	// Reverse checkbox
-	Reverse = new wxCheckBox(base,-1,_("&Reverse transformation"));
-
-	// Output final
-	OutputSizer->Add(OutputSizerTop,0,wxLEFT,5);
-	OutputSizer->Add(OutputSizerBottom,0,wxLEFT,5);
-
-	// Main window
-	auto MainSizer = new wxFlexGridSizer(3,2,5,10);
-	MainSizer->Add(new wxStaticText(base,-1,_("Input framerate: ")),0,wxEXPAND | wxALIGN_CENTER_VERTICAL,0);
-	MainSizer->Add(InputSizer,0,wxEXPAND,0);
-	MainSizer->Add(new wxStaticText(base,-1,_("Output: ")),0,wxALIGN_CENTER_VERTICAL,0);
-	MainSizer->Add(OutputSizer,0,wxEXPAND,0);
-	MainSizer->Add(Reverse,0,wxTOP|wxEXPAND,5);
-
-	// Window
-	base->SetSizerAndFit(MainSizer);
-	return base;
-}
-
-void AssTransformFramerateFilter::LoadSettings(bool is_default, agi::Context *c) {
+void AssTransformFramerateFilter::LoadSettings(bool, agi::Context *c) {
 	this->c = c;
 
-	if (is_default) {
-		auto provider = c->project->VideoProvider();
-		Output = c->project->Timecodes();
-		Input = provider ? provider->GetFPS() : Output;
-	}
-	else {
-		double temp;
-		InputFramerate->GetValue().ToDouble(&temp);
-		Input = temp;
-		if (RadioOutputCFR->GetValue()) {
-			OutputFramerate->GetValue().ToDouble(&temp);
-			Output = temp;
-		}
-		else Output = c->project->Timecodes();
-
-		if (Reverse->IsChecked())
-			std::swap(Input, Output);
-	}
+	// The filter runs with the frame rates the project already has: the video's
+	// and the timecodes'. The export panel no longer offers a per-run override.
+	auto provider = c->project->VideoProvider();
+	Output = c->project->Timecodes();
+	Input = provider ? provider->GetFPS() : Output;
 }
 
 /// Truncate a time to centisecond precision

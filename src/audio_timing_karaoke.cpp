@@ -45,7 +45,7 @@ class KaraokeMarker final : public AudioMarker {
 public:
 
 	int GetPosition() const override { return position; }
-	wxPen GetStyle() const override { return *pen; }
+	AudioMarkerStyle GetStyle() const override { return {pen->Colour(), pen->Width(), pen->Dotted()}; }
 	FeetStyle GetFeet() const override { return style; }
 
 	void Move(int new_pos) { position = new_pos; }
@@ -81,7 +81,7 @@ class AudioTimingControllerKaraoke final : public AudioTimingController, private
 	int cur_syl = 0; ///< Index of currently selected syllable in the line
 
 	/// Pen used for the mid-syllable markers
-	Pen separator_pen{"Colour/Audio Display/Syllable Boundaries", "Audio/Line Boundaries Thickness", wxPENSTYLE_DOT};
+	Pen separator_pen{"Colour/Audio Display/Syllable Boundaries", "Audio/Line Boundaries Thickness", true};
 	/// Pen used for the start-of-line marker
 	Pen start_pen{"Colour/Audio Display/Line boundary Start", "Audio/Line Boundaries Thickness"};
 	/// Pen used for the end-of-line marker
@@ -116,7 +116,7 @@ class AudioTimingControllerKaraoke final : public AudioTimingController, private
 public:
 	// AudioTimingController implementation
 	void GetMarkers(const TimeRange &range, AudioMarkerVector &out_markers) const override;
-	wxString GetWarningMessage() const override { return ""; }
+	std::string GetWarningMessage() const override { return {}; }
 	TimeRange GetIdealVisibleTimeRange() const override;
 	void GetRenderingStyles(AudioRenderingStyleRanges &ranges) const override;
 	TimeRange GetPrimaryPlaybackRange() const override;
@@ -266,7 +266,7 @@ void AudioTimingControllerKaraoke::Revert() {
 	for (auto it = kara->begin(); it != kara->end(); ++it) {
 		if (it != kara->begin())
 			markers.emplace_back(it->start_time, &separator_pen, AudioMarker::Feet_None);
-		labels.push_back(AudioLabel{to_wx(it->text), TimeRange(it->start_time, it->start_time + it->duration)});
+		labels.push_back(AudioLabel{it->text, TimeRange(it->start_time, it->start_time + it->duration)});
 	}
 
 	AnnounceUpdatedPrimaryRange();

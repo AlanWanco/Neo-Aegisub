@@ -28,10 +28,8 @@
 #include <set>
 
 class AssDialogue;
-class VideoDisplay;
-class wxMouseCaptureLostEvent;
-class wxMouseEvent;
-class wxToolBar;
+class VisualToolHost;
+struct VisualMouseEvent;
 namespace agi {
 	struct Context;
 	class OptionValue;
@@ -141,13 +139,12 @@ public:
 	Vector2D FromScriptCoords(Vector2D point) const;
 
 	// Stuff called by VideoDisplay
-	virtual void OnMouseEvent(wxMouseEvent &event)=0;
+	virtual void OnMouseEvent(VisualMouseEvent const& event)=0;
 	virtual void Draw()=0;
-	// Called by VideoDisplay to set the canvas size in GL coordinates (i.e. logical wx coordinates)
+	// Set the size of the surface the tool draws into, in video pixels
 	virtual void SetCanvasSize(int w, int h);
-	// Called by VideoDisplay to set the video's position and size in the canvas in GL coordinates
+	// Set the video's position and size within that surface
 	virtual void SetDisplayArea(int x, int y, int w, int h);
-	virtual void SetToolbar(wxToolBar *) { }
 	virtual void SetSubTool([[maybe_unused]] int subtool) { }
 	virtual void ToggleMove() { }
 	void CancelInteraction();
@@ -203,7 +200,7 @@ protected:
 public:
 	/// @brief Handler for all mouse events
 	/// @param event Shockingly enough, the mouse event
-	void OnMouseEvent(wxMouseEvent &event) override;
+	void OnMouseEvent(VisualMouseEvent const& event) override;
 
 	/// @brief Constructor
 	/// @param parent The VideoDisplay to use for coordinate conversion

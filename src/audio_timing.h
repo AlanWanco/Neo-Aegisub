@@ -62,7 +62,7 @@ protected:
 public:
 	/// @brief Get any warning message to show in the audio display
 	/// @return The warning message to show, may be empty if there is none
-	virtual wxString GetWarningMessage() const = 0;
+	virtual std::string GetWarningMessage() const = 0;
 
 	/// @brief Get the time range the user is most likely to want to see for the current state
 	/// @return A time range

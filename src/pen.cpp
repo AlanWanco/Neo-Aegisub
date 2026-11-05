@@ -16,28 +16,29 @@
 
 #include "pen.h"
 
-#include "compat.h"
 #include "options.h"
 
 void Pen::OnColourChanged(agi::OptionValue const& opt) {
-	impl.SetColour(to_wx(opt.GetColor()));
+	colour = opt.GetColor();
 }
 
 void Pen::OnWidthChanged(agi::OptionValue const& opt) {
-	impl.SetWidth(opt.GetInt());
+	width = opt.GetInt();
 }
 
-Pen::Pen(const char *colour_opt, const char *width_opt, wxPenStyle style)
-: impl(to_wx(OPT_GET(colour_opt)->GetColor()), OPT_GET(width_opt)->GetInt(), style)
+Pen::Pen(const char *colour_opt, const char *width_opt, bool dotted)
+: colour(OPT_GET(colour_opt)->GetColor())
+, width(OPT_GET(width_opt)->GetInt())
+, dotted(dotted)
 , colour_con(OPT_SUB(colour_opt, &Pen::OnColourChanged, this))
 , width_con(OPT_SUB(width_opt, &Pen::OnWidthChanged, this))
 {
 }
 
-Pen::Pen(const char *colour_opt, int width, wxPenStyle style)
-: impl(to_wx(OPT_GET(colour_opt)->GetColor()), width, style)
+Pen::Pen(const char *colour_opt, int width, bool dotted)
+: colour(OPT_GET(colour_opt)->GetColor())
+, width(width)
+, dotted(dotted)
 , colour_con(OPT_SUB(colour_opt, &Pen::OnColourChanged, this))
 {
 }
-
-Pen::~Pen() { }

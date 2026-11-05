@@ -31,7 +31,6 @@
 
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
-#include "../main.h"
 #include "../options.h"
 #include "../project.h"
 #include "../subs_controller.h"
@@ -74,13 +73,9 @@ struct recent_subtitle_entry : public Command {
 	STR_DISP("Recent")
 	STR_HELP("Open recent subtitles")
 
-	void operator()([[maybe_unused]] agi::Context *c, int id) {
-#ifdef __APPLE__
-		wxGetApp().NewProjectContext().project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
-#else
+	void operator()(agi::Context *c, int id) {
 		if (c->subsController->TryToClose() == wxCANCEL) return;
 		c->project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
-#endif
 	}
 };
 

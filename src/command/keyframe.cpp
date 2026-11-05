@@ -32,6 +32,7 @@
 #include "command.h"
 
 #include "../compat.h"
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
@@ -67,19 +68,8 @@ struct keyframe_open final : public Command {
 	STR_DISP("Open Keyframes")
 	STR_HELP("Open a keyframe list file")
 
-	void operator()(agi::Context *c) override {
-		auto filename = OpenFileSelector(
-			c,
-			_("Open Keyframes File"),
-			"Path/Last/Keyframes", "" ,".txt",
-			from_wx(_("All Supported Formats") +
-				" (*.txt, *.pass, *.stats, *.log)|*.txt;*.pass;*.stats;*.log|" +
-				_("All Files") + " (*.*)|*.*"),
-			c->parent,
-			"?script");
-
-		if (!filename.empty())
-			c->project->LoadKeyframes(filename);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("keyframe/open");
 	}
 };
 
@@ -95,12 +85,8 @@ struct keyframe_save final : public Command {
 		return !c->project->Keyframes().empty();
 	}
 
-	void operator()(agi::Context *c) override {
-		auto filename = SaveFileSelector(c, _("Save Keyframes File"), "Path/Last/Keyframes", "", "*.key.txt", from_wx(_("Text Files") + " (*.txt)|*.txt"), c->parent);
-		if (filename.empty()) return;
-
-		agi::keyframe::Save(filename, c->project->Keyframes());
-		config::mru->Add("Keyframes", filename);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("keyframe/save");
 	}
 };
 }

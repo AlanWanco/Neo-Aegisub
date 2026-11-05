@@ -32,7 +32,7 @@
 #include "ass_file.h"
 #include "ass_style.h"
 #include "compat.h"
-#include "dialog_progress.h"
+#include "gpui_bridge.h"
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "options.h"
@@ -51,8 +51,6 @@
 
 #include <wx/dcmemory.h>
 #include <wx/log.h>
-#include <wx/msgdlg.h>
-#include <wx/sizer.h>
 
 #ifdef __WINDOWS__
 #define WIN32_LEAN_AND_MEAN
@@ -181,73 +179,11 @@ namespace Automation4 {
 		return agi::ass::inline_string_encode(GetName());
 	}
 
-	wxWindow* ExportFilter::GetConfigDialogWindow(wxWindow *parent, agi::Context *c) {
-		config_dialog = GenerateConfigDialog(parent, c);
-
-		if (config_dialog) {
-			std::string const& val = c->ass->Properties.automation_settings[GetScriptSettingsIdentifier()];
-			if (!val.empty())
-				config_dialog->Unserialise(val);
-			return config_dialog->CreateWindow(parent);
-		}
-
-		return nullptr;
-	}
-
-	void ExportFilter::LoadSettings(bool, agi::Context *c) {
-		if (config_dialog)
-			c->ass->Properties.automation_settings[GetScriptSettingsIdentifier()] = config_dialog->Serialise();
-	}
-
 	// ProgressSink
-	ProgressSink::ProgressSink(agi::ProgressSink *impl, BackgroundScriptRunner *bsr)
+	ProgressSink::ProgressSink(agi::ProgressSink *impl)
 	: impl(impl)
-	, bsr(bsr)
 	, trace_level(OPT_GET("Automation/Trace Level")->GetInt())
 	{
-	}
-
-	void ProgressSink::ShowDialog(ScriptDialog *config_dialog)
-	{
-		agi::dispatch::Main().Sync([=, this] {
-			wxDialog w; // container dialog box
-			w.SetExtraStyle(wxWS_EX_VALIDATE_RECURSIVELY);
-			w.Create(bsr->GetParentWindow(), -1, to_wx(bsr->GetTitle()));
-			auto s = new wxBoxSizer(wxHORIZONTAL); // sizer for putting contents in
-			wxWindow *ww = config_dialog->CreateWindow(&w); // generate actual dialog contents
-			s->Add(ww, 0, wxALL, 5); // add contents to dialog
-			w.SetSizerAndFit(s);
-			w.SetLayoutAdaptationMode(wxDIALOG_ADAPTATION_MODE_ENABLED);
-			w.CenterOnParent();
-			w.ShowModal();
-		});
-	}
-
-	BackgroundScriptRunner::BackgroundScriptRunner(wxWindow *parent, std::string const& title)
-	: impl(new DialogProgress(parent, to_wx(title)))
-	{
-	}
-
-	BackgroundScriptRunner::~BackgroundScriptRunner()
-	{
-	}
-
-	void BackgroundScriptRunner::Run(std::function<void (ProgressSink*)> task)
-	{
-		impl->Run([&](agi::ProgressSink *ps) {
-			ProgressSink aps(ps, this);
-			task(&aps);
-		});
-	}
-
-	wxWindow *BackgroundScriptRunner::GetParentWindow() const
-	{
-		return impl.get();
-	}
-
-	std::string BackgroundScriptRunner::GetTitle() const
-	{
-		return from_wx(impl->GetTitle());
 	}
 
 	// Script
@@ -406,40 +342,39 @@ namespace Automation4 {
 			return;
 		}
 
-		wxMessageDialog dlg(
-				nullptr,
-				fmt_tl(
-					"The subtitle file you have opened contains local automation scripts. "
-					"Do you want to load the associated automation scripts?\n"
-					"\n"
-					"List of scripts:\n\n%s\n\n"
-					"You should only load associated automation scripts if you trust their authors! "
-					"They are not required to view or edit the subtitle file."
-					, agi::Join("\n", std::views::transform(resolvedpaths, [](PathTuple const& paths) {return from_wx(fmt_tl("    %s (%s)", to_wx(std::get<0>(paths)), std::get<2>(paths).wstring()));})))
-				, _("Load associated automation scripts?")
-				, wxICON_WARNING | wxOK | wxCANCEL | wxCANCEL_DEFAULT | wxCENTRE
-			);
-		dlg.SetOKCancelLabels(_("Trust the authors && load scripts"), _("No"));
-		auto response = dlg.ShowModal();
+		auto message = fmt_tl(
+			"The subtitle file you have opened contains local automation scripts. "
+			"Do you want to load the associated automation scripts?\n"
+			"\n"
+			"List of scripts:\n\n%s\n\n"
+			"You should only load associated automation scripts if you trust their authors! "
+			"They are not required to view or edit the subtitle file."
+			, agi::Join("\n", std::views::transform(resolvedpaths, [](PathTuple const& paths) {return from_wx(fmt_tl("    %s (%s)", to_wx(std::get<0>(paths)), std::get<2>(paths).wstring()));})));
 
-		if (response != wxID_OK) {
-			if (!was_empty)
+		// Loading trusts the script's author, so the question goes to the front
+		// end and the scripts load once the user answers it.
+		gpui::PushChoice(from_wx(_("Load associated automation scripts?")), from_wx(message), {}, "autoscripts",
+			{from_wx(_("Trust the authors && load scripts")), from_wx(_("No"))},
+			[this, resolvedpaths, was_empty](int choice) {
+				if (choice != 0) {
+					if (!was_empty)
+						ScriptsChanged();
+					else
+						SaveLoadedList();
+					return;
+				}
+
+				for (auto const& [tok, basepath, sfname] : resolvedpaths) {
+					if (agi::fs::FileExists(sfname))
+						scripts.emplace_back(Automation4::ScriptFactory::CreateFromFile(sfname, true));
+					else {
+						wxLogWarning(fmt_tl("Automation Script referenced could not be found.\nFilename specified: %s\nSearched relative to: %s\nResolved filename: %s",
+							to_wx(tok), basepath.wstring(), sfname.wstring()));
+					}
+				}
+
 				ScriptsChanged();
-			else
-				SaveLoadedList();
-			return;
-		}
-
-		for (auto const& [tok, basepath, sfname] : resolvedpaths) {
-			if (agi::fs::FileExists(sfname))
-				scripts.emplace_back(Automation4::ScriptFactory::CreateFromFile(sfname, true));
-			else {
-				wxLogWarning(fmt_tl("Automation Script referenced could not be found.\nFilename specified: %s\nSearched relative to: %s\nResolved filename: %s",
-					to_wx(tok), basepath.wstring(), sfname.wstring()));
-			}
-		}
-
-		ScriptsChanged();
+			});
 	}
 
 	void LocalScriptManager::SaveLoadedList()

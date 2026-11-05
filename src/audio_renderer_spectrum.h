@@ -54,7 +54,7 @@ struct AudioSpectrumCacheBlockFactory;
 ///
 /// Renders frequency-power spectrum graphs of PCM audio data using a derivation function
 /// such as the fast fourier transform.
-class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
+class AudioSpectrumRenderer final : public AudioRendererCanvasProvider {
 	friend struct AudioSpectrumCacheBlockFactory;
 
 	/// Internal cache management for the spectrum
@@ -143,13 +143,13 @@ public:
 	~AudioSpectrumRenderer();
 
 	/// @brief Render a range of audio spectrum
-	/// @param bmp   [in,out] Bitmap to render into, also carries length information
-	/// @param start First column of pixel data in display to render
-	/// @param style Style to render audio in
-	void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
+	/// @param canvas [in,out] Canvas to render into, also carries length information
+	/// @param start  First column of pixel data in display to render
+	/// @param style  Style to render audio in
+	void Render(AudioCanvas &canvas, int start, AudioRenderingStyle style) override;
 
 	/// @brief Render blank area
-	void RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style) override;
+	void RenderBlank(AudioCanvas &canvas, int x, int width, AudioRenderingStyle style) override;
 
 	/// @brief Set the derivation resolution
 	/// @param derivation_size Binary logarithm of number of samples to use in deriving frequency-power data

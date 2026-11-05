@@ -28,8 +28,6 @@
 
 #include <libaegisub/format.h>
 
-#include <wx/colour.h>
-
 VisualToolClip::VisualToolClip(VisualToolHost *parent, agi::Context *context)
 : VisualTool<ClipCorner>(parent, context)
 , cur_1(0, 0)
@@ -69,7 +67,7 @@ void VisualToolClip::Draw() {
 	DrawAllFeatures();
 
 	// Load colors from options
-	wxColour line_color = to_wx(line_color_primary_opt->GetColor());
+	agi::Color line_color = line_color_primary_opt->GetColor();
 	float shaded_alpha = static_cast<float>(shaded_area_alpha_opt->GetDouble());
 
 	// Draw rectangle
@@ -79,7 +77,7 @@ void VisualToolClip::Draw() {
 
 	// Draw outside area
 	gl.SetLineColour(line_color, 0.0f);
-	gl.SetFillColour(*wxBLACK, shaded_alpha);
+	gl.SetFillColour(agi::Color(0, 0, 0), shaded_alpha);
 	if (inverse) {
 		gl.DrawRectangle(cur_1, cur_2);
 	}

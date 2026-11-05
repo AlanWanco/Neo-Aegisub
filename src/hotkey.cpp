@@ -26,7 +26,6 @@
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/iterator_range.hpp>
 #include <wx/intl.h>
-#include <wx/msgdlg.h>
 
 namespace {
 	const char *added_hotkeys_7035[][3] = {
@@ -247,21 +246,6 @@ static bool check(std::string_view context, agi::Context *c, int key_code, int m
 		return true;
 	}
 	return false;
-}
-
-bool check(std::string_view context, agi::Context *c, wxKeyEvent &evt) {
-	try {
-		if (!check(context, c, evt.GetKeyCode(), evt.GetModifiers())) {
-			evt.Skip();
-			return false;
-		}
-		return true;
-	}
-	catch (cmd::CommandNotFound const& e) {
-		wxMessageBox(to_wx(e.GetMessage()), _("Invalid command name for hotkey"),
-			wxOK | wxICON_ERROR | wxCENTER | wxSTAY_ON_TOP);
-		return true;
-	}
 }
 
 std::vector<std::string> get_hotkey_strs(std::string_view context, std::string_view command) {

@@ -37,8 +37,6 @@
 #include "../ass_karaoke.h"
 #include "../ass_style.h"
 #include "../compat.h"
-#include "../dialog_search_replace.h"
-#include "../dialogs.h"
 #include "../format.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
@@ -71,8 +69,6 @@
 #include <boost/tokenizer.hpp>
 
 #include <wx/clipbrd.h>
-#include <wx/fontdlg.h>
-#include <wx/textentry.h>
 
 namespace {
 	using namespace boost::adaptors;
@@ -143,12 +139,9 @@ void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 	}
 }
 
-bool paste_over(wxWindow *parent, std::vector<bool>& pasteOverOptions, AssDialogue &new_line, AssDialogue &old_line) {
-	if (pasteOverOptions.empty()) {
-		if (!ShowPasteOverDialog(parent)) return false;
-		pasteOverOptions = OPT_GET("Tool/Paste Lines Over/Fields")->GetListBool();
-		pasteOverOptions.resize(11, false);
-	}
+bool paste_over(std::vector<bool> const& pasteOverOptions, AssDialogue &new_line, AssDialogue &old_line) {
+	if (pasteOverOptions.size() != 11) return false;
+
 
 	if (pasteOverOptions[0])  old_line.Comment   = new_line.Comment;
 	if (pasteOverOptions[1])  old_line.Layer     = new_line.Layer;
@@ -441,19 +434,8 @@ void revert_color_pick(color_pick_state &state) {
 	state.context->textSelectionController->SetSelection(state.sel_start, state.sel_end);
 }
 
-void show_color_picker(agi::Context *c, std::string const& kind) {
-	if (gpui::FrontendAttached()) {
-		gpui::PushCommand("edit/color/" + kind);
-		return;
-	}
-	auto slot = find_color_slot(kind);
-	if (!slot) return;
-	auto state = begin_color_pick(c, *slot);
-	bool ok = GetColorFromUser(c->parent, state->initial, true, [&](agi::Color new_color) {
-		finish_color_pick(*state, new_color);
-	});
-	if (!ok)
-		revert_color_pick(*state);
+void show_color_picker(agi::Context *, std::string const& kind) {
+	gpui::PushCommand("edit/color/" + kind);
 }
 
 struct edit_color_primary final : public Command {
@@ -559,28 +541,8 @@ struct edit_font final : public Command {
 	STR_DISP("Font Face")
 	STR_HELP("Select a font face and size")
 
-	void operator()(agi::Context *c) override {
-		if (gpui::FrontendAttached()) {
-			gpui::PushCommand("edit/font");
-			return;
-		}
-		auto current = cmd::CurrentFont(c);
-		if (!current) return;
-		cmd::LineFont const start = *current;
-		wxFont const initial(start.size, wxFONTFAMILY_DEFAULT,
-			start.italic ? wxFONTSTYLE_ITALIC : wxFONTSTYLE_NORMAL,
-			start.bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL,
-			start.underline, to_wx(start.face));
-		wxFont const font = wxGetFontFromUser(c->parent, initial);
-		if (!font.Ok()) return;
-		cmd::LineFont const picked{
-			from_wx(font.GetFaceName()),
-			font.GetPointSize(),
-			font.GetWeight() == wxFONTWEIGHT_BOLD,
-			font.GetStyle() == wxFONTSTYLE_ITALIC,
-			font.GetUnderlined()};
-		if (picked == start) return;
-		cmd::ApplyFont(c, picked);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("edit/font");
 	}
 };
 
@@ -593,7 +555,7 @@ struct edit_find_replace final : public Command {
 
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
-		ShowSearchReplaceDialog(c, true);
+		gpui::PushCommand("edit/find_replace");
 	}
 };
 
@@ -655,18 +617,7 @@ struct edit_line_copy final : public validate_sel_nonempty {
 	STR_HELP("Copy subtitles to the clipboard")
 
 	void operator()(agi::Context *c) override {
-		// Ideally we'd let the control's keydown handler run and only deal
-		// with the events not processed by it, but that doesn't seem to be
-		// possible with how wx implements key event handling - the native
-		// platform processing is evoked only if the wx event is unprocessed,
-		// and there's no way to do something if the native platform code leaves
-		// it unprocessed
-
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->parent->FindFocus()))
-			ctrl->Copy();
-		else {
-			copy_lines(c);
-		}
+		copy_lines(c);
 	}
 };
 
@@ -678,12 +629,8 @@ struct edit_line_cut: public validate_sel_nonempty {
 	STR_HELP("Cut subtitles")
 
 	void operator()(agi::Context *c) override {
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->parent->FindFocus()))
-			ctrl->Cut();
-		else {
-			copy_lines(c);
-			delete_lines(c, _("cut lines"));
-		}
+		copy_lines(c);
+		delete_lines(c, _("cut lines"));
 	}
 };
 
@@ -912,17 +859,11 @@ struct edit_line_paste final : public Command {
 	}
 
 	void operator()(agi::Context *c) override {
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->parent->FindFocus())) {
-			if (!try_paste_lines(c))
-				ctrl->Paste();
-		}
-		else {
-			auto pos = c->ass->iterator_to(*c->selectionController->GetActiveLine());
-			paste_lines(c, false, [=](std::unique_ptr<AssDialogue> new_line) -> AssDialogue * {
-				c->ass->Events.insert(pos, *new_line);
-				return new_line.release();
-			});
-		}
+		auto pos = c->ass->iterator_to(*c->selectionController->GetActiveLine());
+		paste_lines(c, false, [=](std::unique_ptr<AssDialogue> new_line) -> AssDialogue * {
+			c->ass->Events.insert(pos, *new_line);
+			return new_line.release();
+		});
 	}
 };
 
@@ -942,36 +883,8 @@ struct edit_line_paste_over final : public Command {
 		return can_paste;
 	}
 
-	void operator()(agi::Context *c) override {
-		auto const& sel = c->selectionController->GetSelectedSet();
-		std::vector<bool> pasteOverOptions;
-
-		// Only one line selected, so paste over downwards from the active line
-		if (sel.size() < 2) {
-			auto pos = c->ass->iterator_to(*c->selectionController->GetActiveLine());
-
-			paste_lines(c, true, [&](std::unique_ptr<AssDialogue> new_line) -> AssDialogue * {
-				if (pos == c->ass->Events.end()) return nullptr;
-
-				auto& old = *pos;
-				if (paste_over(c->parent, pasteOverOptions, *new_line, old))
-					++pos;
-				return &old;
-			});
-		}
-		else {
-			// Multiple lines selected, so paste over the selection
-			auto sorted_selection = c->selectionController->GetSortedSelection();
-			auto pos = begin(sorted_selection);
-			paste_lines(c, true, [&](std::unique_ptr<AssDialogue> new_line) -> AssDialogue * {
-				if (pos == end(sorted_selection)) return nullptr;
-
-				auto& old = **pos;
-				if (paste_over(c->parent, pasteOverOptions, *new_line, old))
-					++pos;
-				return &old;
-			});
-		}
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("edit/line/paste/over");
 	}
 };
 
@@ -1383,7 +1296,7 @@ namespace cmd {
 			auto source = get_dialogue(value);
 			auto target = targets[index++];
 			AssDialogue patch(static_cast<AssDialogueBase const&>(*target));
-			paste_over(nullptr, fields, *source, patch);
+			paste_over(fields, *source, patch);
 			if (patch.GetEntryData() != target->GetEntryData()) changes.emplace_back(target, static_cast<AssDialogueBase const&>(patch));
 		}
 		for (auto const& [line, patch] : changes) static_cast<AssDialogueBase&>(*line) = patch;

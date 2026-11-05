@@ -36,7 +36,6 @@
 #include "include/aegisub/audio_player.h"
 
 #include "audio_controller.h"
-#include "frame_main.h"
 #include "utils.h"
 
 #include <libaegisub/audio/provider.h>
@@ -104,7 +103,7 @@ DirectSoundPlayer::DirectSoundPlayer(agi::AudioProvider *provider, wxWindow *par
 	if (FAILED(res)) throw AudioPlayerOpenError("Failed initializing DirectSound");
 
 	// Set DirectSound parameters
-	directSound->SetCooperativeLevel((HWND)parent->GetHandle(),DSSCL_PRIORITY);
+	directSound->SetCooperativeLevel(parent ? (HWND)parent->GetHandle() : GetDesktopWindow(), DSSCL_PRIORITY);
 
 	// Create the wave format structure
 	WAVEFORMATEX waveFormat;

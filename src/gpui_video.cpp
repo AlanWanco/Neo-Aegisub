@@ -9,7 +9,6 @@
 #include "options.h"
 #include "project.h"
 #include "video_controller.h"
-#include "video_display.h"
 #include "video_frame.h"
 #include "video_provider_dummy.h"
 
@@ -129,12 +128,15 @@ struct VideoFrames::Impl {
     int latest_number = -1;
     /// Bumped whenever `latest` is replaced or dropped.
     int64_t serial = 0;
-    bool listening = false;
+    agi::signal::Connection frame_connection;
     agi::signal::Connection provider_connection;
 
     explicit Impl(agi::Context *context) : context(context) {
-        context->videoController->Bind(EVT_FRAME_READY, &Impl::OnFrame, this);
-        listening = true;
+        frame_connection = context->videoController->AddFrameReadyListener([this](std::shared_ptr<VideoFrame> const& frame, double, int frame_number) {
+            latest = frame;
+            latest_number = frame_number;
+            ++serial;
+        });
         // A frame of the previous video must not be shown for the new one.
         provider_connection = context->project->AddVideoProviderListener([this](AsyncVideoProvider *) {
             latest.reset();
@@ -143,16 +145,8 @@ struct VideoFrames::Impl {
         });
     }
 
-    void OnFrame(FrameReadyEvent& event) {
-        context->videoController->NoteFrameArrived(event.frame_number);
-        latest = event.frame;
-        latest_number = event.frame_number;
-        ++serial;
-    }
-
     void Close() {
-        if (listening) context->videoController->Unbind(EVT_FRAME_READY, &Impl::OnFrame, this);
-        listening = false;
+        frame_connection.Disconnect();
         provider_connection.Disconnect();
         latest.reset();
         latest_number = -1;

@@ -37,12 +37,11 @@
 #include <map>
 #include <optional>
 
-#include <wx/timer.h>
+#include "async_video_sink.h"
+#include "gpui_loop.h"
 
 class AssDialogue;
 class AsyncVideoProvider;
-struct SubtitlesProviderErrorEvent;
-struct VideoProviderErrorEvent;
 
 namespace agi {
 	struct Context;
@@ -58,9 +57,11 @@ enum class AspectRatio {
 };
 
 /// Manage stuff related to video playback
-class VideoController final : public wxEvtHandler {
+class VideoController final : public AsyncVideoSink {
 	/// Current frame number changed (new frame number)
 	agi::signal::Signal<int> Seek;
+	/// A decoded frame arrived (frame, render time in ms, frame number)
+	agi::signal::Signal<std::shared_ptr<VideoFrame> const&, double, int> AnnounceFrameReady;
 	/// Aspect ratio was changed (type, value)
 	agi::signal::Signal<AspectRatio, double> ARChange;
 	/// Playback speed shared by the video and audio controls
@@ -78,7 +79,7 @@ class VideoController final : public wxEvtHandler {
 
 	/// Playback timer used to periodically check if we should go to the next
 	/// frame while playing video
-	wxTimer playback;
+	gpui::Timer playback;
 
 	/// Time when playback was last started
 	std::chrono::steady_clock::time_point playback_start_time;
@@ -119,10 +120,7 @@ class VideoController final : public wxEvtHandler {
 
 	std::vector<agi::signal::Connection> connections;
 
-	void OnPlayTimer(wxTimerEvent &event);
-
-	void OnVideoError(VideoProviderErrorEvent const& err);
-	void OnSubtitlesError(SubtitlesProviderErrorEvent const& err);
+	void OnPlayTimer();
 
 	void OnSubtitlesCommit(int type, const AssDialogue *changed);
 	void OnNewVideoProvider(AsyncVideoProvider *provider);
@@ -137,17 +135,23 @@ class VideoController final : public wxEvtHandler {
 
 public:
 	VideoController(agi::Context *context);
+	/// Detaches from the provider so a frame decoded while the project tears
+	/// down cannot land in a destroyed controller.
+	~VideoController();
+
+	// AsyncVideoSink
+	void FrameReady(std::shared_ptr<VideoFrame> frame, double time, int frame_number) override;
+	void VideoError(std::string message) override;
+	void SubtitlesError(std::string message) override;
 
 	/// Is the video currently playing?
-	bool IsPlaying() const { return playback.IsRunning(); }
+	bool IsPlaying() const { return playback.Running(); }
 
 	/// Get the current frame number
 	int GetFrameN() const { return frame_n; }
 
 	/// Tells the controller that a decoded frame arrived, so playback can learn
-	/// how long decoding takes and ask ahead by that much. The frame sink calls
-	/// this; the controller does not bind the frame event itself, because wx
-	/// dispatches an event to a single binding per handler.
+	/// how long decoding takes and ask ahead by that much.
 	void NoteFrameArrived(int frame_number);
 
 	/// Get the actual aspect ratio from a predefined AR type
@@ -197,6 +201,7 @@ public:
     double GetPlaybackTime() const;
 
 	DEFINE_SIGNAL_ADDERS(Seek, AddSeekListener)
+	DEFINE_SIGNAL_ADDERS(AnnounceFrameReady, AddFrameReadyListener)
 	DEFINE_SIGNAL_ADDERS(ARChange, AddARChangeListener)
 	DEFINE_SIGNAL_ADDERS(PlaybackRateChange, AddPlaybackRateListener)
 

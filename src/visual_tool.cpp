@@ -24,6 +24,7 @@
 #include "options.h"
 #include "selection_controller.h"
 #include "video_controller.h"
+#include "visual_tool_host.h"
 #include "visual_tool_clip.h"
 #include "visual_tool_drag.h"
 #include "visual_tool_vector_clip.h"
@@ -164,14 +165,14 @@ VisualTool<FeatureType>::VisualTool(VisualToolHost *parent, agi::Context *contex
 }
 
 template<class FeatureType>
-void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
+void VisualTool<FeatureType>::OnMouseEvent(VisualMouseEvent const& event) {
 	bool left_click = event.LeftDown();
 	bool left_double = event.LeftDClick();
 	shift_down = event.ShiftDown();
 	ctrl_down = event.CmdDown();
 	alt_down = event.AltDown();
 
-	mouse_pos = event.GetPosition();
+	mouse_pos = event.Position();
 
 	if (event.Leaving()) {
 		mouse_pos = Vector2D();
@@ -277,13 +278,13 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 
 template<class FeatureType>
 void VisualTool<FeatureType>::DrawAllFeatures() {
-	wxColour grid_color = to_wx(line_color_secondary_opt->GetColor());
+	agi::Color grid_color = line_color_secondary_opt->GetColor();
 	gl.SetLineColour(grid_color, 1.0f, 1);
-	wxColour base_fill = to_wx(highlight_color_primary_opt->GetColor());
-	wxColour active_fill = to_wx(highlight_color_secondary_opt->GetColor());
-	wxColour alt_fill = to_wx(line_color_primary_opt->GetColor());
+	agi::Color base_fill = highlight_color_primary_opt->GetColor();
+	agi::Color active_fill = highlight_color_secondary_opt->GetColor();
+	agi::Color alt_fill = line_color_primary_opt->GetColor();
 	for (auto& feature : features) {
-		wxColour fill = base_fill;
+		agi::Color fill = base_fill;
 		if (&feature == active_feature)
 			fill = active_fill;
 		else if (sel_features.count(&feature))

@@ -23,7 +23,6 @@
 #include <map>
 #include <sstream>
 #include <stdexcept>
-#include <wx/event.h>
 
 namespace {
 const std::map<std::string_view, int> vector_modes = {
@@ -124,39 +123,28 @@ std::string Visual::Interact(json::Object const& request) {
 	if (action == "toggle_move") impl->tool->ToggleMove();
 	else if (action == "cancel") { impl->tool->CancelInteraction(); impl->captured = impl->left_down = false; }
 	else if (action != "draw") {
-		auto const position = wxPoint(number(request, "x", -8192, 16384), number(request, "y", -8192, 16384));
-		wxEventType type;
-		if (action == "down") { type = wxEVT_LEFT_DOWN; impl->left_down = true; }
-		else if (action == "double") { type = wxEVT_LEFT_DCLICK; impl->left_down = true; }
-		else if (action == "up") { type = wxEVT_LEFT_UP; impl->left_down = false; }
-		else if (action == "move") type = wxEVT_MOTION;
-		else if (action == "leave") type = wxEVT_LEAVE_WINDOW;
+		VisualMouseEvent event;
+		event.x = number(request, "x", -8192, 16384);
+		event.y = number(request, "y", -8192, 16384);
+		event.shift = flag(request, "shift");
+		event.alt = flag(request, "alt");
+		event.ctrl = flag(request, "control");
+		if (action == "down") { event.action = VisualMouseAction::Down; impl->left_down = true; }
+		else if (action == "double") { event.action = VisualMouseAction::DoubleClick; impl->left_down = true; }
+		else if (action == "up") { event.action = VisualMouseAction::Up; impl->left_down = false; }
+		else if (action == "move") event.action = VisualMouseAction::Move;
+		else if (action == "leave") event.action = VisualMouseAction::Leave;
 		else throw std::invalid_argument("unknown visual interaction");
-		wxMouseEvent event(type);
-		event.SetPosition(position);
+
 		// The last mouse move can be coalesced by the frontend. Finish a drag
 		// at the release position before passing the button-up event through.
 		if (action == "up" && impl->captured) {
-			wxMouseEvent final_move(wxEVT_MOTION);
-			final_move.SetPosition(position);
-			final_move.SetLeftDown(true);
-			final_move.SetShiftDown(flag(request, "shift"));
-			final_move.SetAltDown(flag(request, "alt"));
-#ifdef __APPLE__
-			final_move.SetMetaDown(flag(request, "control"));
-#else
-			final_move.SetControlDown(flag(request, "control"));
-#endif
+			VisualMouseEvent final_move = event;
+			final_move.action = VisualMouseAction::Move;
+			final_move.left = true;
 			impl->tool->OnMouseEvent(final_move);
 		}
-		event.SetLeftDown(impl->left_down);
-		event.SetShiftDown(flag(request, "shift"));
-		event.SetAltDown(flag(request, "alt"));
-#ifdef __APPLE__
-		event.SetMetaDown(flag(request, "control"));
-#else
-		event.SetControlDown(flag(request, "control"));
-#endif
+		event.left = impl->left_down;
 		impl->tool->OnMouseEvent(event);
 	}
 	VisualRenderCapture capture;

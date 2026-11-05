@@ -27,10 +27,6 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
-#include <wx/bitmap.h>
-#include <wx/dcmemory.h>
-#include <wx/image.h>
-#include <wx/pen.h>
 
 namespace {
 std::string encode(json::Object const& object) {
@@ -56,7 +52,7 @@ bool flag(json::Object const& object, const char *key) {
 namespace gpui {
 struct Audio::Impl {
 	agi::Context *context;
-	std::unique_ptr<AudioRendererBitmapProvider> bitmap_provider;
+	std::unique_ptr<AudioRendererCanvasProvider> bitmap_provider;
 	AudioRenderer renderer;
 	std::string mode;
 	uint64_t epoch = 1;
@@ -134,15 +130,15 @@ struct Audio::Impl {
 			// frontend cannot tell a second tick from a keyframe or the play
 			// cursor, so all of them looked like the same white line.
 			for (auto marker : positions) {
-				wxPen const pen = marker->GetStyle();
-				wxColour const colour = pen.GetColour();
+				AudioMarkerStyle const style = marker->GetStyle();
+				auto const& colour = style.colour;
 				char hex[10];
-				snprintf(hex, sizeof hex, "#%02x%02x%02x%02x", colour.Red(), colour.Green(), colour.Blue(), colour.Alpha());
+				snprintf(hex, sizeof hex, "#%02x%02x%02x%02x", colour.r, colour.g, colour.b, colour.a);
 				json::Object item;
 				item["time"] = marker->GetPosition();
 				item["colour"] = std::string(hex);
-				item["width"] = marker->GetWidth() > 0 ? marker->GetWidth() : std::max(1, pen.GetWidth());
-				item["dotted"] = pen.GetStyle() == wxPENSTYLE_DOT;
+				item["width"] = marker->GetWidth() > 0 ? marker->GetWidth() : std::max(1, style.width);
+				item["dotted"] = style.dotted;
 				markers.emplace_back(std::move(item));
 			}
 		}
@@ -155,7 +151,7 @@ struct Audio::Impl {
 
 	void SetMode(std::string const& next_mode) {
 		if (mode == next_mode) return;
-		std::unique_ptr<AudioRendererBitmapProvider> next;
+		std::unique_ptr<AudioRendererCanvasProvider> next;
 		if (next_mode == "spectrum") {
 			auto spectrum = std::make_unique<AudioSpectrumRenderer>(OPT_GET("Colour/Audio Display/Spectrum")->GetString());
 			int const quality = std::clamp<int>(OPT_GET("Audio/Renderer/Spectrum/Quality")->GetInt(), 0, 5);
@@ -204,23 +200,10 @@ RawReply Audio::Render(json::Object const& request) {
 	impl->renderer.SetMillisecondsPerPixel(static_cast<double>(span) / width);
 	impl->renderer.SetAmplitudeScale(gain / 100.f);
 	int const first_pixel = static_cast<int>(static_cast<int64_t>(start) * width / span);
-	wxBitmap bitmap(width, height, 24);
-	wxMemoryDC dc(bitmap);
-	impl->renderer.Render(dc, wxPoint(0, 0), first_pixel, width, AudioStyle_Normal);
-	dc.SelectObject(wxNullBitmap);
-	// wxImage rows are top-to-bottom like the bitmap, so the copy keeps orientation.
-	wxImage const image = bitmap.ConvertToImage();
-	if (!image.IsOk() || image.GetWidth() != width || image.GetHeight() != height)
-		throw std::runtime_error("could not read audio display pixels");
-	unsigned char const *rgb = image.GetData();
-	size_t const count = static_cast<size_t>(width) * static_cast<size_t>(height);
-	std::vector<unsigned char> pixels(count * 4);
-	for (size_t i = 0; i < count; ++i) {
-		pixels[i * 4 + 0] = rgb[i * 3 + 2];
-		pixels[i * 4 + 1] = rgb[i * 3 + 1];
-		pixels[i * 4 + 2] = rgb[i * 3 + 0];
-		pixels[i * 4 + 3] = 255;
-	}
+	AudioCanvas canvas;
+	canvas.Reset(width, height);
+	impl->renderer.Render(canvas, first_pixel, AudioStyle_Normal);
+	std::vector<unsigned char> pixels(canvas.Data(), canvas.Data() + canvas.Size());
 	result["width"] = static_cast<int64_t>(width);
 	result["height"] = static_cast<int64_t>(height);
 	result["pixel_format"] = std::string("bgra8");

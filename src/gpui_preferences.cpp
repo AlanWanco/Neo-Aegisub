@@ -114,6 +114,10 @@ std::vector<std::string> choices(std::string const& name) {
 	if (name == "Video/No LayoutRes in Script") return {"从不", "询问", "总是设置", "总是使用脚本分辨率"};
 	if (name == "Video/LayoutRes Mismatch") return {"从不", "比例变化时", "总是"};
 	if (name == "Video/No YCbCr Matrix in Script" || name == "Video/YCbCr Matrix Mismatch") return {"从不", "询问", "总是设置"};
+	if (name == "Subtitle Format/EBU STL/TV Standard") return {"23.976 (标记为 24)", "24", "25 (PAL)", "29.97 非丢帧 (标记为 30)", "29.97 丢帧", "30 (NTSC 单色)"};
+	if (name == "Subtitle Format/EBU STL/Text Encoding") return {"ISO 6937-2", "ISO 8859-5 西里尔", "ISO 8859-6 阿拉伯", "ISO 8859-7 希腊", "ISO 8859-8 希伯来", "UTF-8 (非标准)"};
+	if (name == "Subtitle Format/EBU STL/Line Wrapping Mode") return {"自动换行", "均衡换行", "超长时报错", "跳过超长行"};
+	if (name == "Subtitle Format/EBU STL/Display Standard") return {"开放字幕", "一级图文电视字幕", "二级图文电视字幕"};
 	if (name == "Automation/Trace Level") return {"0: Fatal", "1: Error", "2: Warning", "3: Hint", "4: Debug", "5: Trace"};
 	if (name == "Automation/Autoreload Mode") return {"不重载", "项目脚本", "自动加载脚本", "全部脚本"};
 	if (name == "Audio/Cache/Type") return {"无缓存", "内存", "硬盘"};

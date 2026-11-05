@@ -21,7 +21,6 @@
 #include "spline.h"
 #include "command/command.h"
 
-class wxToolBar;
 
 /// Button IDs
 enum VisualToolVectorClipMode {
@@ -48,7 +47,6 @@ struct VisualToolVectorClipDraggableFeature final : public VisualDraggableFeatur
 
 class VisualToolVectorClip final : public VisualTool<VisualToolVectorClipDraggableFeature> {
 	Spline spline; /// The current spline
-	wxToolBar *toolBar = nullptr; /// The subtoolbar
 	int mode = VCLIP_DRAG; /// 0-7
 	bool inverse = false; /// is iclip?
 
@@ -56,8 +54,6 @@ class VisualToolVectorClip final : public VisualTool<VisualToolVectorClipDraggab
 
 	void Save();
 	void Commit(wxString message="") override;
-
-	void AddTool(std::string command_name, VisualToolVectorClipMode mode);
 
 	void MakeFeature(size_t idx);
 	void MakeFeatures();
@@ -73,9 +69,7 @@ class VisualToolVectorClip final : public VisualTool<VisualToolVectorClipDraggab
 
 public:
 	VisualToolVectorClip(VisualToolHost *parent, agi::Context *context);
-	void SetToolbar(wxToolBar *tb) override;
 
 	void SetSubTool(int subtool) override;
-	void RefreshToolbarTheme();
 	int GetSubTool() override;
 };

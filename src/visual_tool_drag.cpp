@@ -34,7 +34,8 @@
 #include <algorithm>
 #include <boost/range/algorithm/binary_search.hpp>
 
-#include <wx/toolbar.h>
+#include <wx/intl.h>
+
 
 static const DraggableFeatureType DRAG_ORIGIN = DRAG_BIG_TRIANGLE;
 static const DraggableFeatureType DRAG_START = DRAG_BIG_SQUARE;
@@ -47,36 +48,6 @@ VisualToolDrag::VisualToolDrag(VisualToolHost *parent, agi::Context *context)
 	auto const& sel_set = c->selectionController->GetSelectedSet();
 	selection.insert(begin(selection), begin(sel_set), end(sel_set));
 }
-
-void VisualToolDrag::SetToolbar(wxToolBar *tb) {
-	toolbar = tb;
-    if (!tb) return;
-	toolbar->AddSeparator();
-	toolbar->AddTool(-1, _("Toggle between \\move and \\pos"), GETBUNDLE(visual_move_conv_move, OPT_GET("App/Toolbar Icon Size")->GetInt()));
-	toolbar->Realize();
-	toolbar->Show(true);
-
-	toolbar->Bind(wxEVT_TOOL, &VisualToolDrag::OnSubTool, this);
-}
-
-void VisualToolDrag::UpdateToggleButtons() {
-	if (!toolbar) return;
-	bool to_move = true;
-	if (active_line) {
-		Vector2D p1, p2;
-		int t1, t2;
-		to_move = !GetLineMove(active_line, p1, p2, t1, t2);
-	}
-
-	if (to_move == button_is_move) return;
-
-	int icon_size = OPT_GET("App/Toolbar Icon Size")->GetInt();
-	toolbar->SetToolNormalBitmap(toolbar->GetToolByPos(1)->GetId(),
-		to_move ? GETBUNDLE(visual_move_conv_move, icon_size) : GETBUNDLE(visual_move_conv_pos, icon_size));
-	button_is_move = to_move;
-}
-
-void VisualToolDrag::OnSubTool(wxCommandEvent &) { ToggleMove(); }
 
 void VisualToolDrag::ToggleMove() {
 	// Toggle \move <-> \pos
@@ -100,12 +71,8 @@ void VisualToolDrag::ToggleMove() {
 
 	Commit();
 	OnFileChanged();
-	UpdateToggleButtons();
 }
 
-void VisualToolDrag::OnLineChanged() {
-	UpdateToggleButtons();
-}
 
 void VisualToolDrag::OnFileChanged() {
 	/// @todo it should be possible to preserve the selection in some cases
@@ -119,7 +86,6 @@ void VisualToolDrag::OnFileChanged() {
 			MakeFeatures(&diag);
 	}
 
-	UpdateToggleButtons();
 }
 
 void VisualToolDrag::OnFrameChanged() {
@@ -186,7 +152,7 @@ void VisualToolDrag::Draw() {
 	DrawAllFeatures();
 
 	// Load colors from options
-	wxColour line_color = to_wx(line_color_primary_opt->GetColor());
+	agi::Color line_color = line_color_primary_opt->GetColor();
 
 	// Draw connecting lines
 	for (auto& feature : features) {

@@ -43,15 +43,9 @@
 
 AudioController::AudioController(agi::Context *context)
 : context(context)
-, playback_timer(this)
 , provider_connection(context->project->AddAudioProviderListener(&AudioController::OnAudioProvider, this))
 {
-	Bind(wxEVT_TIMER, &AudioController::OnPlaybackTimer, this, playback_timer.GetId());
-
-#ifdef wxHAS_POWER_EVENTS
-	Bind(wxEVT_POWER_SUSPENDED, &AudioController::OnComputerSuspending, this);
-	Bind(wxEVT_POWER_RESUME, &AudioController::OnComputerResuming, this);
-#endif
+	playback_timer.on_tick = [this] { OnPlaybackTimer(); };
 
 	BindConnection(OPT_SUB("Audio/Player", &AudioController::OnAudioPlayerChanged, this));
 }
@@ -61,7 +55,7 @@ AudioController::~AudioController()
 	Stop();
 }
 
-void AudioController::OnPlaybackTimer(wxTimerEvent &)
+void AudioController::OnPlaybackTimer()
 {
 	if (!player) return;
 
@@ -79,19 +73,6 @@ void AudioController::OnPlaybackTimer(wxTimerEvent &)
 	}
 }
 
-#ifdef wxHAS_POWER_EVENTS
-void AudioController::OnComputerSuspending(wxPowerEvent &)
-{
-	Stop();
-	player.reset();
-}
-
-void AudioController::OnComputerResuming(wxPowerEvent &)
-{
-	OnAudioPlayerChanged();
-}
-#endif
-
 void AudioController::OnAudioPlayerChanged()
 {
 	if (!provider) return;
@@ -103,7 +84,7 @@ void AudioController::OnAudioPlayerChanged()
 	try
 	{
 		playback_provider = std::make_unique<agi::PlaybackAudioProvider>(provider, playback_rate);
-		player = AudioPlayerFactory::GetAudioPlayer(playback_provider.get(), context->parent);
+		player = AudioPlayerFactory::GetAudioPlayer(playback_provider.get(), nullptr);
 		player->SetVolume(volume);
 	}
 	catch (...)

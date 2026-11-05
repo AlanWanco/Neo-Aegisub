@@ -21,7 +21,6 @@
 #include <string_view>
 #include <vector>
 
-#include <wx/event.h>
 
 namespace agi {
 	struct Context;
@@ -35,7 +34,6 @@ extern agi::hotkey::Hotkey *inst;
 void init();
 void clear();
 
-bool check(std::string_view context, agi::Context *c, wxKeyEvent &evt);
 std::string keypress_to_str(int key_code, int modifier);
 std::string_view get_hotkey_str_first(std::string_view context, std::string_view command);
 std::vector<std::string> get_hotkey_strs(std::string_view context, std::string_view command);

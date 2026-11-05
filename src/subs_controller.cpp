@@ -25,7 +25,6 @@
 #include "compat.h"
 #include "command/command.h"
 #include "format.h"
-#include "frame_main.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "project.h"
@@ -39,10 +38,9 @@
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
-#include <wx/msgdlg.h>
 
 namespace {
-	void autosave_timer_changed(wxTimer *timer) {
+	void autosave_timer_changed(gpui::Timer *timer) {
 		int freq = OPT_GET("App/Auto/Save Every Seconds")->GetInt();
 		if (freq > 0 && OPT_GET("App/Auto/Save")->GetBool())
 			timer->Start(freq * 1000);
@@ -150,10 +148,10 @@ SubsController::SubsController(agi::Context *context)
 , text_selection_connection(context->textSelectionController->AddSelectionListener(&SubsController::OnTextSelectionChanged, this))
 , autosave_queue(agi::dispatch::Create())
 {
+	autosave_timer.on_tick = [this] { AutoSave(); };
 	autosave_timer_changed(&autosave_timer);
 	BindConnection(OPT_SUB("App/Auto/Save", [this] { autosave_timer_changed(&autosave_timer); }));
 	BindConnection(OPT_SUB("App/Auto/Save Every Seconds", [this] { autosave_timer_changed(&autosave_timer); }));
-	autosave_timer.Bind(wxEVT_TIMER, [this](wxTimerEvent&) { AutoSave(); });
 }
 
 SubsController::~SubsController() {
@@ -237,29 +235,17 @@ void SubsController::Close() {
 	FileOpen(filename);
 }
 
-int SubsController::TryToClose(bool allow_cancel) const {
+int SubsController::TryToClose([[maybe_unused]] bool allow_cancel) const {
 	if (!IsModified())
 		return wxYES;
 
-	int flags = wxYES_NO;
-	if (allow_cancel)
-		flags |= wxCANCEL;
-	if (gpui::FrontendAttached()) {
-		// The front end asked for this over the bridge, so a modal dialog would
-		// deadlock it. Refuse the switch and let the user save first.
-		gpui::PushNotice(from_wx(_("Unsaved changes")),
-			from_wx(fmt_tl("Do you want to save changes to %s?", Filename())),
-			{},
-			"unsaved");
-		return wxCANCEL;
-	}
-	int result = wxMessageBox(fmt_tl("Do you want to save changes to %s?", Filename()), _("Unsaved changes"), flags, context->parent);
-	if (result == wxYES) {
-		cmd::call("subtitle/save", context);
-		// If it fails saving, return cancel anyway
-		return IsModified() ? wxCANCEL : wxYES;
-	}
-	return result;
+	// The host never opens a modal prompt: the front end shows this notice and the
+	// user saves or discards there. Until then the close is refused.
+	gpui::PushNotice(from_wx(_("Unsaved changes")),
+		from_wx(fmt_tl("Do you want to save changes to %s?", Filename())),
+		{},
+		"unsaved");
+	return wxCANCEL;
 }
 
 void SubsController::AutoSave() {
@@ -275,9 +261,8 @@ void SubsController::AutoSave() {
 		name = from_wx(_("Untitled"));
 
 	autosaved_commit_id = commit_id;
-	auto frame = context->frame;
 	auto subs_copy = new AssFile(*context->ass);
-	autosave_queue->Async([subs_copy, name, directory, frame] {
+	autosave_queue->Async([subs_copy, name, directory] {
 		wxString msg;
 		std::unique_ptr<AssFile> subs(subs_copy);
 
@@ -295,8 +280,8 @@ void SubsController::AutoSave() {
 			msg = _("Unhandled exception when attempting to autosave file.");
 		}
 
-		agi::dispatch::Main().Async([frame, msg] {
-			frame->StatusTimeout(msg);
+		agi::dispatch::Main().Async([msg] {
+			gpui::PushStatus(from_wx(msg));
 		});
 	});
 }

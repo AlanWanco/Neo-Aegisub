@@ -18,8 +18,8 @@
 
 #include "ass_file.h"
 #include "audio_controller.h"
+#include "audio_karaoke.h"
 #include "auto4_base.h"
-#include "dialog_manager.h"
 #include "initial_line_state.h"
 #include "options.h"
 #include "project.h"
@@ -44,9 +44,9 @@ Context::Context()
 , initialLineState(std::make_unique<InitialLineState>(this))
 , search(std::make_unique<SearchReplaceEngine>(this))
 , path(std::make_unique<Path>(*config::path))
-, dialog(std::make_unique<DialogManager>())
 {
 	subsController->SetSelectionController(selectionController.get());
+	karaoke = std::make_unique<AudioKaraoke>(this);
 }
 
 Context::~Context() = default;

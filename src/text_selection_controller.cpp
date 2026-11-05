@@ -16,60 +16,21 @@
 
 #include "text_selection_controller.h"
 
-#include <wx/stc/stc.h>
-
-void TextSelectionController::SetControl(wxStyledTextCtrl *ctrl) {
-	this->ctrl = ctrl;
-	if (ctrl)
-		ctrl->Bind(wxEVT_STC_UPDATEUI, &TextSelectionController::UpdateUI, this);
-}
-
-TextSelectionController::~TextSelectionController() {
-	if (ctrl) ctrl->Unbind(wxEVT_STC_UPDATEUI, &TextSelectionController::UpdateUI, this);
-}
-
-#define GET(var, new_value) do { \
-	int tmp = new_value;      \
-	if (tmp != var) {         \
-		var = tmp;            \
-		changed = true;       \
-	}                         \
-} while(false)
-
-#define SET(var, new_value, Setter) do { \
-	if (var != new_value) {              \
-		var = new_value;                 \
-		if (ctrl) ctrl->Setter(var);     \
-	}                                    \
-} while (false)
-
-void TextSelectionController::UpdateUI(wxStyledTextEvent &evt) {
-	if (changing) return;
-
-	bool changed = false;
-	GET(insertion_point, ctrl->GetInsertionPoint());
-	if (evt.GetUpdated() & wxSTC_UPDATE_SELECTION) {
-		GET(selection_start, ctrl->GetSelectionStart());
-		GET(selection_end, ctrl->GetSelectionEnd());
-	}
-	else {
-		GET(selection_start, insertion_point);
-		GET(selection_end, insertion_point);
-	}
-	if (changed) AnnounceSelectionChanged();
-}
-
 void TextSelectionController::SetInsertionPoint(int position) {
-	changing = true;
-	SET(insertion_point, position, SetInsertionPoint);
-	changing = false;
+	if (insertion_point == position) return;
+	insertion_point = position;
+	if (selection_start == selection_end) {
+		selection_start = position;
+		selection_end = position;
+	}
 	AnnounceSelectionChanged();
 }
 
 void TextSelectionController::SetSelection(int start, int end) {
-	changing = true;
-	SET(selection_start, start, SetSelectionStart);
-	SET(selection_end, end, SetSelectionEnd);
-	changing = false;
+	if (start > end) std::swap(start, end);
+	if (start == selection_start && end == selection_end) return;
+	selection_start = start;
+	selection_end = end;
+	insertion_point = end;
 	AnnounceSelectionChanged();
 }

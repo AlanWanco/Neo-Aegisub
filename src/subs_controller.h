@@ -17,6 +17,8 @@
 #pragma once
 
 #include <libaegisub/fs.h>
+#include "gpui_loop.h"
+
 #include <libaegisub/signal.h>
 
 #include <boost/container/list.hpp>
@@ -55,7 +57,7 @@ class SubsController : private agi::signal::ConnectionScope {
 	int next_commit_id = 1;
 
 	/// Timer for triggering autosaves
-	wxTimer autosave_timer;
+	gpui::Timer autosave_timer;
 
 	/// Queue which autosaves are performed on
 	std::unique_ptr<agi::dispatch::Queue> autosave_queue;

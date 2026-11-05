@@ -32,26 +32,18 @@ public:
 	VisualToolDragDraggableFeature *parent = nullptr;
 };
 
-class wxBitmapButton;
-class wxCommandEvent;
-class wxToolBar;
 
 /// @class VisualToolDrag
 /// @brief Moveable features for the positions of each visible line
 class VisualToolDrag final : public VisualTool<VisualToolDragDraggableFeature> {
-	/// The subtoolbar for the move/pos conversion button
-	wxToolBar *toolbar = nullptr;
 	/// The feature last clicked on for the double-click handler
 	/// Equal to curFeature during drags; possibly different at all other times
 	/// nullptr if no features have been clicked on or the last clicked on one no
 	/// longer exists
 	Feature *primary = nullptr;
+
 	/// The last announced selection set
 	std::vector<AssDialogue *> selection;
-
-	/// When the button is pressed, will it convert the line to a move (vs. from
-	/// move to pos)? Used to avoid changing the button's icon unnecessarily
-	bool button_is_move = false;
 
 	/// @brief Create the features for a line
 	/// @param diag Line to create the features for
@@ -63,7 +55,6 @@ class VisualToolDrag final : public VisualTool<VisualToolDragDraggableFeature> {
 
 	void OnFrameChanged() override;
 	void OnFileChanged() override;
-	void OnLineChanged() override;
 	void OnCoordinateSystemsChanged() override { OnFileChanged(); }
 
 	bool InitializeDrag(Feature *feature) override;
@@ -71,11 +62,7 @@ class VisualToolDrag final : public VisualTool<VisualToolDragDraggableFeature> {
 	void Draw() override;
 	void OnDoubleClick() override;
 
-	/// Set the pos/move button to the correct icon based on the active line
-	void UpdateToggleButtons();
-	void OnSubTool(wxCommandEvent &event);
 public:
 	VisualToolDrag(VisualToolHost *parent, agi::Context *context);
-	void SetToolbar(wxToolBar *tb) override;
 	void ToggleMove() override;
 };

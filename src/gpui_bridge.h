@@ -11,6 +11,8 @@
 namespace agi { struct Context; }
 
 namespace gpui {
+class SocketServer;
+
 /// Whether a GPUI front end is connected, i.e. whether warnings should be sent
 /// to it instead of opening wx dialogs the front end never shows.
 bool FrontendAttached();
@@ -33,6 +35,15 @@ void PushChoice(std::string title, std::string body, std::string suppress_option
 /// Commands the front end owns (the colour pickers today) use this so Lua and
 /// the legacy menus do not pop a wx window over the GPUI frame.
 void PushCommand(std::string name);
+
+/// Ask the front end a question and wait for the answer, pumping the host loop
+/// so the bridge keeps answering while the prompt is on screen. Returns -1 when
+/// no front end is attached or the prompt was dismissed.
+int AskChoice(std::string title, std::string body, std::string suppress_option,
+              std::string kind, std::vector<std::string> choices);
+
+/// Replace the front end's status line text.
+void PushStatus(std::string text);
 
 /// Publish a long-running task's progress so the front end can draw its own
 /// progress card. `fraction` is 0..1, or negative for an indeterminate task.
@@ -59,4 +70,7 @@ public:
 	bool IsRunning() const;
 	std::string Endpoint() const;
 	std::string Token() const;
+
+	/// The socket the host event loop steps; requests run on the loop thread.
+	gpui::SocketServer &Server();
 };

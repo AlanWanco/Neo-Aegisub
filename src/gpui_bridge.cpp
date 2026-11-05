@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "gpui_bridge.h"
+
+#include "gpui_loop.h"
 #include "ass_style.h"
 
+#include "grid_display_text.h"
 #include "gpui_audio.h"
 #include "gpui_automation.h"
 #include "gpui_color.h"
@@ -16,6 +19,7 @@
 #include "gpui_video.h"
 #include "gpui_visual.h"
 #include "gpui_preferences.h"
+#include "gpui_server.h"
 #include "gpui_spelling.h"
 #include "ui_theme.h"
 
@@ -28,9 +32,7 @@
 #include "command/command.h"
 #include "command/edit.h"
 #include "compat.h"
-#include "grid_column.h"
 #include "include/aegisub/context.h"
-#include "main.h"
 #include "options.h"
 #include "project.h"
 #include "selection_controller.h"
@@ -39,18 +41,12 @@
 #include "subs_controller.h"
 #include "text_selection_controller.h"
 #include "video_controller.h"
-#include "video_display.h"
 
 #include <libaegisub/cajun/reader.h>
 #include <libaegisub/cajun/visitor.h>
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/log.h>
 
-#include <wx/filefn.h>
-#include <wx/choicdlg.h>
-#include <wx/msgdlg.h>
-#include <wx/sckaddr.h>
-#include <wx/socket.h>
 
 #include <algorithm>
 #include <array>
@@ -88,6 +84,8 @@ std::vector<PendingNotice> pending_notices;
 /// them in the order it shows them.
 std::deque<std::function<void(int)>> pending_choices;
 std::vector<std::string> pending_commands;
+/// Text for the front end's status line; empty until something publishes one.
+std::string pending_status;
 
 struct ProgressState {
 	bool active = false;
@@ -110,8 +108,6 @@ void DetachClient() {
 	std::lock_guard<std::mutex> lock(notice_mutex);
 	if (attached_clients > 0) --attached_clients;
 }
-constexpr size_t max_message_size = 2 * 1024 * 1024;
-
 
 std::string make_token() {
 	std::array<unsigned char, 32> bytes{};
@@ -207,6 +203,25 @@ void gpui::PushCommand(std::string name) {
 	pending_commands.push_back(std::move(name));
 }
 
+int gpui::AskChoice(std::string title, std::string body, std::string suppress_option,
+                    std::string kind, std::vector<std::string> choices) {
+	if (!FrontendAttached()) return -1;
+	int answer = -1;
+	bool answered = false;
+	PushChoice(std::move(title), std::move(body), std::move(suppress_option), std::move(kind),
+		std::move(choices), [&](int choice) {
+			answer = choice;
+			answered = true;
+		});
+	while (!answered) EventLoop::Current().Pump(8);
+	return answer;
+}
+
+void gpui::PushStatus(std::string text) {
+	std::lock_guard<std::mutex> lock(notice_mutex);
+	pending_status = std::move(text);
+}
+
 void gpui::PushProgress(std::string title, std::string message, double fraction,
                         bool cancellable) {
 	std::lock_guard<std::mutex> lock(notice_mutex);
@@ -231,25 +246,13 @@ bool gpui::ProgressCancelled() {
 	return progress_state.cancelled;
 }
 
-struct GpuiBridge::Impl final : wxEvtHandler {
-	struct Client {
-		std::string request;
-		std::string response;
-		size_t response_offset = 0;
-		std::vector<unsigned char> body;
-		size_t body_offset = 0;
-		bool responding = false;
-	};
-
+struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 	agi::Context *context;
 	gpui::VideoFrames video_frames;
 	gpui::Audio audio;
 	gpui::Visual visual;
 	gpui::Spelling spelling;
-	wxSocketServer *server = nullptr;
-	std::map<wxSocketBase *, Client> clients;
-	/// wxWidgets 3.3 added an RAII socket initializer; 3.2 needs manual management.
-	bool sockets_initialized = false;
+	gpui::SocketServer server{this};
 	unsigned short port = 0;
 	uint64_t video_epoch = 0;
 	uint64_t revision = 1;
@@ -259,7 +262,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 	std::string token = make_token();
 
 	explicit Impl(agi::Context *context) : context(context), video_frames(context), audio(context), visual(context), spelling(context) {
-		Bind(wxEVT_SOCKET, &Impl::OnSocket, this);
 		commit_connection = context->ass->AddCommitListener([this](int type, const AssDialogue *) {
 			++revision;
 			if (type == AssFile::COMMIT_NEW || (type & (AssFile::COMMIT_STYLES | AssFile::COMMIT_SCRIPTINFO)))
@@ -267,244 +269,137 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		});
 	}
 
-	~Impl() {
-		Stop();
-		Unbind(wxEVT_SOCKET, &Impl::OnSocket, this);
-	}
+	~Impl() { Stop(); }
 
-	void CloseClient(wxSocketBase *socket) {
-		auto it = clients.find(socket);
-		if (it == clients.end()) return;
-		socket->Notify(false);
-		socket->Close();
-		socket->Destroy();
-		clients.erase(it);
-		DetachClient();
-	}
+	void OnConnect(int) override { AttachClient(); }
 
+	void OnDisconnect(int) override { DetachClient(); }
 
-	void Stop() {
-		video_frames.Close();
-		for (auto it = clients.begin(); it != clients.end();) {
-			auto socket = it->first;
-			++it;
-			CloseClient(socket);
+	void OnRequest(int client, std::string const& request) override {
+		try {
+			Handle(request, client);
 		}
-		if (server) {
-			server->Notify(false);
-			server->Close();
-			server->Destroy();
-			server = nullptr;
+		catch (std::exception const& error) {
+			Reply(client, "{\"ok\":false,\"error\":" + quote_json(error.what()) + "}");
 		}
-		observed_provider = nullptr;
-		++video_epoch;
-		port = 0;
-		if (sockets_initialized) {
-			wxSocketBase::Shutdown();
-			sockets_initialized = false;
+		catch (...) {
+			Reply(client, R"({"ok":false,"error":"unknown bridge error"})");
 		}
 	}
 
-
-	void OnSocket(wxSocketEvent& event) {
-		wxSocketBase *socket = event.GetSocket();
-		if (socket == server) {
-			if (event.GetSocketEvent() != wxSOCKET_CONNECTION) return;
-			wxSocketBase *client = server->Accept(false);
-			if (!client) return;
-			client->SetFlags(wxSOCKET_NOWAIT);
-			client->SetTimeout(5);
-			client->SetEventHandler(*this, wxID_ANY);
-			client->SetNotify(wxSOCKET_INPUT_FLAG | wxSOCKET_LOST_FLAG);
-			client->Notify(true);
-			clients.emplace(client, Client{});
-			AttachClient();
-			return;
-		}
-
-		auto it = clients.find(socket);
-		if (it == clients.end()) return;
-		// A write that filled the socket buffer leaves wxSOCKET_WOULDBLOCK in the
-		// socket's error state, and Error() keeps reporting it until the next
-		// operation. Treating that as fatal here closed the connection right after
-		// a partial write, so a large snapshot arrived truncated; only a lost
-		// connection is fatal, and WriteResponse reports real write errors.
-		if (event.GetSocketEvent() == wxSOCKET_LOST) {
-			CloseClient(socket);
-			return;
-		}
-		if (event.GetSocketEvent() == wxSOCKET_INPUT) {
-			if (!it->second.responding) ReadRequest(socket, it->second);
-			return;
-		}
-		if (event.GetSocketEvent() == wxSOCKET_OUTPUT)
-			WriteResponse(socket, it->second);
-	}
-
-	void ReadRequest(wxSocketBase *socket, Client& client) {
-		char buffer[4096];
-		while (socket->IsData()) {
-			socket->Read(buffer, sizeof buffer);
-			size_t count = socket->LastCount();
-			if (!count) break;
-			client.request.append(buffer, count);
-			if (client.request.size() > max_message_size) {
-				BeginResponse(socket, client, R"({"ok":false,"error":"request too large"})");
-				return;
-			}
-			auto newline = client.request.find('\n');
-			if (newline != std::string::npos) {
-				client.request.resize(newline);
-				try {
-					Handle(client.request, socket, client);
-				}
-				catch (std::exception const& error) {
-					BeginResponse(socket, client, "{\"ok\":false,\"error\":" + quote_json(error.what()) + "}");
-				}
-				catch (...) {
-					BeginResponse(socket, client, R"({"ok":false,"error":"unknown bridge error"})");
-				}
-				return;
-			}
-		}
-	}
-
-	void BeginResponse(wxSocketBase *socket, Client& client, std::string response) {
-		client.body.clear();
-		client.body_offset = 0;
-		StartResponse(socket, client, std::move(response));
+	void Reply(int client, std::string response) {
+		server.Send(client, std::move(response));
 	}
 
 	/// Raw replies send `head`, a newline, then `body` bytes verbatim. The body is
 	/// moved out of the reply: never copied, escaped, or parsed as JSON.
-	void BeginResponse(wxSocketBase *socket, Client& client, gpui::RawReply reply) {
-		client.body = std::move(reply.body);
-		client.body_offset = 0;
-		StartResponse(socket, client, std::move(reply.head));
+	void Reply(int client, gpui::RawReply reply) {
+		server.Send(client, std::move(reply.head),
+		            std::string_view(reinterpret_cast<char const *>(reply.body.data()), reply.body.size()));
 	}
 
-	void StartResponse(wxSocketBase *socket, Client& client, std::string head) {
-		// A new answer starts from the beginning of its own body; keeping the
-		// previous offset would skip bytes of the new response.
-		client.response_offset = 0;
-		client.response = std::move(head);
-		client.response.push_back('\n');
-		client.responding = true;
-		socket->SetNotify(wxSOCKET_OUTPUT_FLAG | wxSOCKET_LOST_FLAG);
-		socket->Notify(true);
-		WriteResponse(socket, client);
+	void Stop() {
+		video_frames.Close();
+		server.Close();
+		observed_provider = nullptr;
+		++video_epoch;
+		port = 0;
 	}
 
-	enum class WriteState { Done, Blocked, Failed };
-
-	static WriteState WriteBytes(wxSocketBase *socket, char const *data, size_t size, size_t& offset) {
-		while (offset < size) {
-			size_t const count = std::min<size_t>(65536, size - offset);
-			socket->Write(data + offset, count);
-			size_t const written = socket->LastCount();
-			offset += written;
-			if (socket->Error())
-				return socket->LastError() == wxSOCKET_WOULDBLOCK ? WriteState::Blocked : WriteState::Failed;
-			if (!written) return WriteState::Blocked;
-		}
-		return WriteState::Done;
-	}
-
-	void WriteResponse(wxSocketBase *socket, Client& client) {
-		auto state = WriteBytes(socket, client.response.data(), client.response.size(), client.response_offset);
-		if (state == WriteState::Done)
-			state = WriteBytes(socket, reinterpret_cast<char const *>(client.body.data()), client.body.size(), client.body_offset);
-		if (state == WriteState::Blocked) return;
-		CloseClient(socket);
-	}
-
-	void Handle(std::string const& request, wxSocketBase *socket, Client& client) {
+	void Handle(std::string const& request, int client) {
 		std::istringstream stream(request);
 		json::UnknownElement parsed;
 		json::Reader::Read(parsed, stream);
 		auto const& object = static_cast<json::Object const&>(parsed);
 		auto token_it = object.find("token");
 		if (token_it == object.end() || static_cast<std::string const&>(token_it->second) != token) {
-			BeginResponse(socket, client, R"({"ok":false,"error":"unauthorized"})");
+			Reply(client, R"({"ok":false,"error":"unauthorized"})");
 			return;
 		}
 
 		auto op_it = object.find("op");
 		if (op_it == object.end()) {
-			BeginResponse(socket, client, R"({"ok":false,"error":"missing operation"})");
+			Reply(client, R"({"ok":false,"error":"missing operation"})");
 			return;
 		}
 		std::string const& op = op_it->second;
 
-		if (op == "spelling") { BeginResponse(socket, client, spelling.Request(object)); return; }
-		if (op == "file_tools") { BeginResponse(socket, client, gpui::FileTools(object)); return; }
-		if (op == "save_media") { BeginResponse(socket, client, gpui::SaveMedia(context, object)); return; }
-		if (op == "preferences") { BeginResponse(socket, client, gpui::Preferences(object)); return; }
-		if (op == "hotkeys") { BeginResponse(socket, client, gpui::Hotkeys(object)); return; }
+		// Automation scripts ask for trust through the front end, so they are
+		// created on the first request: by then a client is connected and the
+		// prompt has a window to land in.
+		if (!config::global_scripts)
+			config::global_scripts = new Automation4::AutoloadScriptManager(
+				OPT_GET("Path/Automation/Autoload")->GetString());
+
+		if (op == "spelling") { Reply(client, spelling.Request(object)); return; }
+		if (op == "file_tools") { Reply(client, gpui::FileTools(object)); return; }
+		if (op == "save_media") { Reply(client, gpui::SaveMedia(context, object)); return; }
+		if (op == "preferences") { Reply(client, gpui::Preferences(object)); return; }
+		if (op == "hotkeys") { Reply(client, gpui::Hotkeys(object)); return; }
 		if (op == "progress_cancel") {
 			{
 				std::lock_guard<std::mutex> lock(notice_mutex);
 				if (progress_state.active) progress_state.cancelled = true;
 			}
-			BeginResponse(socket, client, "{\"ok\":true}");
+			Reply(client, "{\"ok\":true}");
 			return;
 		}
-		if (op == "snapshot") { BeginResponse(socket, client, Snapshot()); return; }
-		if (op == "playback") { BeginResponse(socket, client, PlaybackSnapshot()); return; }
-		if (op == "video_settings") { BeginResponse(socket, client, gpui::VideoSettings(context, object)); return; }
-		if (op == "video_frame") { BeginResponse(socket, client, video_frames.Frame(object)); return; }
-		if (op == "visual") { BeginResponse(socket, client, visual.Interact(object)); return; }
-		if (op == "audio_render") { BeginResponse(socket, client, audio.Render(object)); return; }
-		if (op == "audio_action") { BeginResponse(socket, client, audio.Interact(object)); return; }
-		if (op == "automation_manager") { BeginResponse(socket, client, gpui::AutomationManager(context, object)); return; }
+		if (op == "snapshot") { Reply(client, Snapshot()); return; }
+		if (op == "playback") { Reply(client, PlaybackSnapshot()); return; }
+		if (op == "video_settings") { Reply(client, gpui::VideoSettings(context, object)); return; }
+		if (op == "video_frame") { Reply(client, video_frames.Frame(object)); return; }
+		if (op == "visual") { Reply(client, visual.Interact(object)); return; }
+		if (op == "audio_render") { Reply(client, audio.Render(object)); return; }
+		if (op == "audio_action") { Reply(client, audio.Interact(object)); return; }
+		if (op == "automation_manager") { Reply(client, gpui::AutomationManager(context, object)); return; }
 		if (op == "dialog") {
-		BeginResponse(socket, client, gpui::Dialog(context, object));
+		Reply(client, gpui::Dialog(context, object));
 		return;
 	}
-	if (op == "color") { BeginResponse(socket, client, gpui::ColorPanel(context, object)); return; }
-		if (op == "catalog") { BeginResponse(socket, client, gpui::CommandCatalog(context, visual)); return; }
+	if (op == "color") { Reply(client, gpui::ColorPanel(context, object)); return; }
+		if (op == "catalog") { Reply(client, gpui::CommandCatalog(context, visual)); return; }
 		if (op == "attachments") {
 			if (auto expected = object.find("revision"); expected != object.end()) {
-				if (static_cast<json::Integer const&>(expected->second) != static_cast<int64_t>(revision)) { BeginResponse(socket, client, R"({"ok":false,"error":"document changed; refresh attachments first"})"); return; }
+				if (static_cast<json::Integer const&>(expected->second) != static_cast<int64_t>(revision)) { Reply(client, R"({"ok":false,"error":"document changed; refresh attachments first"})"); return; }
 			}
-			BeginResponse(socket, client, gpui::Attachments(context, object, revision)); return;
+			Reply(client, gpui::Attachments(context, object, revision)); return;
 		}
-		if (op == "resample") { BeginResponse(socket, client, gpui::Resample(context, object)); return; }
-		if (op == "document") { BeginResponse(socket, client, gpui::DocumentDetails(context)); return; }
-		if (op == "script_info") { BeginResponse(socket, client, gpui::EditScriptInfo(context, object)); return; }
-		if (op == "style") { BeginResponse(socket, client, gpui::EditStyle(context, object)); return; }
-		if (op == "style_preview") { BeginResponse(socket, client, gpui::StylePreview(context, object)); return; }
-		if (op == "styling") { BeginResponse(socket, client, gpui::Styling(context, object)); return; }
-		if (op == "style_library") { BeginResponse(socket, client, gpui::StyleLibrary(context, object)); return; }
-		if (op == "translation") { BeginResponse(socket, client, gpui::Translation(context, object)); return; }
-		if (op == "timing_processor") { BeginResponse(socket, client, gpui::TimingProcessor(context, object)); return; }
+		if (op == "resample") { Reply(client, gpui::Resample(context, object)); return; }
+		if (op == "document") { Reply(client, gpui::DocumentDetails(context)); return; }
+		if (op == "script_info") { Reply(client, gpui::EditScriptInfo(context, object)); return; }
+		if (op == "style") { Reply(client, gpui::EditStyle(context, object)); return; }
+		if (op == "style_preview") { Reply(client, gpui::StylePreview(context, object)); return; }
+		if (op == "styling") { Reply(client, gpui::Styling(context, object)); return; }
+		if (op == "style_library") { Reply(client, gpui::StyleLibrary(context, object)); return; }
+		if (op == "translation") { Reply(client, gpui::Translation(context, object)); return; }
+		if (op == "timing_processor") { Reply(client, gpui::TimingProcessor(context, object)); return; }
 		if (op == "paste_over") {
 			if (auto action = object.find("fields"); action != object.end()) {
 				std::vector<bool> fields;
 				for (auto const& value : static_cast<json::Array const&>(action->second)) fields.push_back(static_cast<json::Boolean const&>(value));
 				auto changed = cmd::PasteLinesOver(context, std::move(fields));
-				BeginResponse(socket, client, "{\"ok\":true,\"changed\":" + std::to_string(changed) + "}");
+				Reply(client, "{\"ok\":true,\"changed\":" + std::to_string(changed) + "}");
 			}
 			else {
 				auto fields = OPT_GET("Tool/Paste Lines Over/Fields")->GetListBool();
 				fields.resize(11, false);
 				std::string response = "{\"ok\":true,\"fields\":[";
 				for (size_t i = 0; i < fields.size(); ++i) { if (i) response += ','; response += fields[i] ? "true" : "false"; }
-				BeginResponse(socket, client, response + "]}");
+				Reply(client, response + "]}");
 			}
 			return;
 		}
-		if (op == "search") { BeginResponse(socket, client, gpui::Search(context, object)); return; }
-		if (op == "shift_times") { BeginResponse(socket, client, gpui::ShiftTimesPanel(context, object)); return; }
-		if (op == "select") { BeginResponse(socket, client, Select(object)); return; }
-		if (op == "edit") { BeginResponse(socket, client, Edit(object)); return; }
-		if (op == "line_fields") { BeginResponse(socket, client, LineFields(object)); return; }
-		if (op == "seek") { BeginResponse(socket, client, Seek(object)); return; }
+		if (op == "search") { Reply(client, gpui::Search(context, object)); return; }
+		if (op == "shift_times") { Reply(client, gpui::ShiftTimesPanel(context, object)); return; }
+		if (op == "select") { Reply(client, Select(object)); return; }
+		if (op == "edit") { Reply(client, Edit(object)); return; }
+		if (op == "line_fields") { Reply(client, LineFields(object)); return; }
+		if (op == "seek") { Reply(client, Seek(object)); return; }
 		if (op == "linked_files") {
 			auto value = object.find("apply");
 			bool const apply = value != object.end() && static_cast<json::Boolean const&>(value->second);
 			context->project->AnswerLinkedFiles(apply);
-			BeginResponse(socket, client, R"({"ok":true})");
+			Reply(client, R"({"ok":true})");
 			return;
 		}
 		if (op == "notice_choice") {
@@ -519,7 +414,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 				}
 			}
 			if (apply) apply(choice);
-			BeginResponse(socket, client, R"({"ok":true})");
+			Reply(client, R"({"ok":true})");
 			return;
 		}
 		if (op == "notice_discard") {
@@ -531,7 +426,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 				context->project->LoadSubtitles(context->subsController->Filename());
 			else
 				context->subsController->Close();
-			BeginResponse(socket, client, R"({"ok":true})");
+			Reply(client, R"({"ok":true})");
 			return;
 		}
 		if (op == "notice_suppress") {
@@ -548,13 +443,13 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			// the app is killed before the next options flush would bring the
 			// prompt straight back.
 			config::opt->Flush();
-			BeginResponse(socket, client, R"({"ok":true})");
+			Reply(client, R"({"ok":true})");
 			return;
 		}
-		if (op == "command") { BeginResponse(socket, client, Command(object)); return; }
-		if (op == "open") { BeginResponse(socket, client, Open(object)); return; }
-		if (op == "save_as") { BeginResponse(socket, client, SaveAs(object)); return; }
-		BeginResponse(socket, client, R"({"ok":false,"error":"unsupported operation"})");
+		if (op == "command") { Reply(client, Command(object)); return; }
+		if (op == "open") { Reply(client, Open(object)); return; }
+		if (op == "save_as") { Reply(client, SaveAs(object)); return; }
+		Reply(client, R"({"ok":false,"error":"unsupported operation"})");
 	}
 
 	std::string PlaybackSnapshot() {
@@ -666,6 +561,11 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			pending_commands.clear();
 		}
 		out << ']';
+		out << ",\"status\":";
+		{
+			std::lock_guard<std::mutex> lock(notice_mutex);
+			out << quote_json(pending_status);
+		}
 		out << ",\"progress\":";
 		{
 			std::lock_guard<std::mutex> lock(notice_mutex);
@@ -707,7 +607,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			    << ",\"actor\":" << quote_json(line.Actor.get())
 			    << ",\"effect\":" << quote_json(line.Effect.get())
 			    << ",\"margin\":[" << line.Margin[0] << ',' << line.Margin[1] << ',' << line.Margin[2] << ']'
-			    << ",\"display_text\":" << quote_json(from_wx(GetGridDisplayText(line)))
+			    << ",\"display_text\":" << quote_json(GridDisplayText(line))
 			    << ",\"text\":" << quote_json(line.Text.get()) << '}';
 		}
 		out << "]}";
@@ -1010,14 +910,11 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 					return R"({"ok":false,"error":"recent subtitle is no longer available"})";
 				path = config::mru->GetEntry("Subtitle", index);
 			}
-			else if (name == "subtitle/open/autosave") path = PickAutosaveFile(context->parent);
 			else {
-				path = OpenFileSelector(context, _("Open Subtitles File"), "Path/Last/Subtitles", "", "", SubtitleFormat::GetWildcards(0), context->parent);
-				if (!path.empty() && name == "subtitle/open/charset") {
-					auto charset = wxGetSingleChoice(_("Choose charset code:"), _("Charset"), agi::charset::GetEncodingsList<wxArrayString>(), context->parent);
-					if (charset.empty()) return R"({"ok":false,"error":"opening subtitles was cancelled"})";
-					encoding = from_wx(charset);
-				}
+				// The front end owns the file picker and the encoding chooser;
+				// it calls back into the `open` operation once the user picks.
+				gpui::PushCommand(name);
+				return R"({"ok":true})";
 			}
 			if (path.empty()) return R"({"ok":false,"error":"opening subtitles was cancelled"})";
 			context->project->LoadSubtitles(path, encoding);
@@ -1046,36 +943,18 @@ GpuiBridge::GpuiBridge(agi::Context *context) : impl(std::make_unique<Impl>(cont
 GpuiBridge::~GpuiBridge() = default;
 
 bool GpuiBridge::Start() {
-	if (impl->server) return true;
-	wxSocketBase::Initialize();
-	impl->sockets_initialized = true;
-	wxIPV4address address;
-	address.LocalHost();
-	address.Service(static_cast<unsigned short>(0));
-	auto server = std::make_unique<wxSocketServer>(address, wxSOCKET_NOWAIT | wxSOCKET_REUSEADDR);
-	if (!server->IsOk()) {
+	if (impl->server.Running()) return true;
+	unsigned short port = 0;
+	if (!impl->server.Listen(port)) {
 		LOG_E("gpui/bridge") << "Could not bind the local GPUI bridge socket";
-		wxSocketBase::Shutdown();
-		impl->sockets_initialized = false;
 		return false;
 	}
-	wxIPV4address bound;
-	if (!server->GetLocal(bound) || bound.Service() == 0) {
-		LOG_E("gpui/bridge") << "Could not read the local GPUI bridge port";
-		server->Destroy();
-		wxSocketBase::Shutdown();
-		impl->sockets_initialized = false;
-		return false;
-	}
-	impl->port = bound.Service();
-	impl->server = server.release();
-	impl->server->SetEventHandler(*impl, wxID_ANY);
-	impl->server->SetNotify(wxSOCKET_CONNECTION_FLAG | wxSOCKET_LOST_FLAG);
-	impl->server->Notify(true);
+	impl->port = port;
 	return true;
 }
 
 void GpuiBridge::Stop() { impl->Stop(); }
-bool GpuiBridge::IsRunning() const { return impl->server != nullptr; }
+gpui::SocketServer &GpuiBridge::Server() { return impl->server; }
+bool GpuiBridge::IsRunning() const { return impl->server.Running(); }
 std::string GpuiBridge::Endpoint() const { return "127.0.0.1:" + std::to_string(impl->port); }
 std::string GpuiBridge::Token() const { return impl->token; }

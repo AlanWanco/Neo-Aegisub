@@ -42,9 +42,7 @@
 #include <libaegisub/audio/provider.h>
 
 #include <algorithm>
-
-#include <wx/image.h>
-#include <wx/dcmemory.h>
+#include <cstdint>
 
 /// Allocates blocks of derived data for the audio spectrum
 struct AudioSpectrumCacheBlockFactory {
@@ -252,7 +250,7 @@ void AudioSpectrumRenderer::FillBlock(size_t block_index, float *block)
 #endif
 }
 
-void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
+void AudioSpectrumRenderer::Render(AudioCanvas &canvas, int start, AudioRenderingStyle style)
 {
 	// Misc. utility functions
 	auto floor_int = [] (float val) { return int (floorf (val       )); };
@@ -261,20 +259,16 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	if (!cache)
 		return;
 
-	assert(bmp.IsOk());
-	assert(bmp.GetDepth() == 24 || bmp.GetDepth() == 32);
-
-	int end = start + bmp.GetWidth();
+	int end = start + canvas.Width();
 
 	assert(start >= 0);
 	assert(end >= 0);
 	assert(end >= start);
 
-	// Prepare an image buffer to write
-	wxImage img(bmp.GetSize());
-	unsigned char *imgdata = img.GetData();
-	ptrdiff_t stride = img.GetWidth()*3;
-	int imgheight = img.GetHeight();
+	// Prepare the canvas buffer to write
+	unsigned char *imgdata = canvas.Data();
+	ptrdiff_t stride = static_cast<ptrdiff_t>(canvas.Width()) * 4;
+	int imgheight = canvas.Height();
 
 	const AudioColorScheme *pal = &colors[style];
 
@@ -314,8 +308,8 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		size_t block_index = (size_t)(ax * pixel_ms * provider->GetSampleRate() / 1000) >> derivation_dist;
 		float *power = &cache->Get(block_index);
 
-		// Prepare bitmap writing
-		unsigned char *px = imgdata + (imgheight-1) * stride + (ax - start) * 3;
+		// Prepare canvas writing
+		unsigned char *px = imgdata + (imgheight-1) * stride + (ax - start) * 4;
 
 		float bin_prv = minband;
 		float bin_cur = minband;
@@ -357,7 +351,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 				val = *std::max_element (&power [bin_inf], &power [bin_sup]);
 			}
 
-			pal->map (val * amplitude_scale, px);
+			pal->map_bgra (val * amplitude_scale, px);
 
 			px     -= stride;
 			bin_prv = bin_cur;
@@ -365,18 +359,12 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		}
 	}
 
-	wxBitmap tmpbmp(img);
-	wxMemoryDC targetdc(bmp);
-	targetdc.DrawBitmap(tmpbmp, 0, 0);
 }
 
-void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)
+void AudioSpectrumRenderer::RenderBlank(AudioCanvas &canvas, int x, int width, AudioRenderingStyle style)
 {
 	// Get the colour of silence
-	wxColour col = colors[style].get(0.0f);
-	dc.SetBrush(wxBrush(col));
-	dc.SetPen(wxPen(col));
-	dc.DrawRectangle(rect);
+	canvas.FillRect(x, 0, width, canvas.Height(), colors[style].rgb(0.0f));
 }
 
 void AudioSpectrumRenderer::AgeCache(size_t max_size)

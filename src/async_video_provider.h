@@ -18,13 +18,15 @@
 
 #include "include/aegisub/video_provider.h"
 
-#include <libaegisub/exception.h>
+#include "async_video_sink.h"
+
 #include <libaegisub/fs.h>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <set>
-#include <wx/event.h>
+#include <string>
 
 class AssDialogue;
 class AssFile;
@@ -32,7 +34,6 @@ class SubtitlesProvider;
 class VideoProvider;
 class VideoProviderError;
 struct AssDialogueBase;
-struct VideoFrame;
 namespace agi {
 	class BackgroundRunner;
 	namespace dispatch { class Queue; }
@@ -47,8 +48,14 @@ class AsyncVideoProvider {
 	std::unique_ptr<SubtitlesProvider> subs_provider;
 	/// Video provider
 	std::unique_ptr<VideoProvider> source_provider;
-	/// Event handler to send FrameReady events to
-	wxEvtHandler *parent;
+	/// Receiver for decoded frames and provider errors; may be detached
+	AsyncVideoSink *sink;
+	/// Cleared in the destructor so deliveries still in flight are dropped
+	std::shared_ptr<bool> alive = std::make_shared<bool>(true);
+
+	/// Hands a result to the sink on the main thread, unless the provider or
+	/// the sink has gone away in the meantime.
+	void Deliver(std::function<void(AsyncVideoSink &)> fn);
 
 	int frame_number = -1; ///< Last frame number requested
 	double time = -1.; ///< Time of the frame to pass to the subtitle renderer
@@ -141,36 +148,9 @@ public:
 
 	/// @brief Constructor
 	/// @param video_filename File to open
-	/// @param parent Event handler to send FrameReady events to
-	AsyncVideoProvider(agi::fs::path const& video_filename, agi::ycbcr::Header colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br);
+	/// @param sink Receiver for decoded frames and provider errors
+	AsyncVideoProvider(agi::fs::path const& video_filename, agi::ycbcr::Header colormatrix, AsyncVideoSink *sink, agi::BackgroundRunner *br);
+	/// Stop delivering to the sink; call before the sink is destroyed
+	void DetachSink();
 	~AsyncVideoProvider();
 };
-
-/// Event which signals that a requested frame is ready
-struct FrameReadyEvent final : public wxEvent {
-	/// Frame which is ready
-	std::shared_ptr<VideoFrame> frame;
-	/// Time which was used for subtitle rendering
-	double time;
-	/// Exact source frame; timecodes can map multiple frames to one millisecond.
-	int frame_number;
-	wxEvent *Clone() const override { return new FrameReadyEvent(*this); };
-	FrameReadyEvent(std::shared_ptr<VideoFrame> frame, double time, int frame_number)
-	: frame(std::move(frame)), time(time), frame_number(frame_number) { }
-};
-
-// These exceptions are wxEvents so that they can be passed directly back to
-// the parent thread as events
-struct VideoProviderErrorEvent final : public wxEvent, public agi::Exception {
-	wxEvent *Clone() const override { return new VideoProviderErrorEvent(*this); };
-	VideoProviderErrorEvent(VideoProviderError const& err);
-};
-
-struct SubtitlesProviderErrorEvent final : public wxEvent, public agi::Exception {
-	wxEvent *Clone() const override { return new SubtitlesProviderErrorEvent(*this); };
-	SubtitlesProviderErrorEvent(std::string const& msg);
-};
-
-wxDECLARE_EVENT(EVT_FRAME_READY, FrameReadyEvent);
-wxDECLARE_EVENT(EVT_VIDEO_ERROR, VideoProviderErrorEvent);
-wxDECLARE_EVENT(EVT_SUBTITLES_ERROR, SubtitlesProviderErrorEvent);

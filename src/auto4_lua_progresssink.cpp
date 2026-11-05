@@ -39,7 +39,6 @@
 #include <libaegisub/dispatch.h>
 #include <libaegisub/lua/utils.h>
 
-#include <wx/filedlg.h>
 
 using namespace agi::lua;
 
@@ -56,11 +55,6 @@ namespace {
 	{
 		lua_pushnil(L);
 		lua_setfield(L, idx, name);
-	}
-
-	wxString check_wxstring(lua_State *L, int idx)
-	{
-		return to_wx(check_string(L, idx));
 	}
 }
 
@@ -188,72 +182,25 @@ namespace Automation4 {
 	int LuaProgressSink::LuaDisplayDialog(lua_State *L)
 	{
 		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
-
-		LuaDialog dlg(L, true); // magically creates the config dialog structure etc
-		ps->ShowDialog(&dlg);
-
-		// more magic: puts two values on stack: button pushed and table with control results
-		return dlg.LuaReadBack(L);
+		ps->Log("Script dialog skipped: this build has no dialog window. The script receives the default values of its controls.");
+		lua_pushinteger(L, 0);
+		lua_newtable(L);
+		return 2;
 	}
 
 	int LuaProgressSink::LuaDisplayOpenDialog(lua_State *L)
 	{
-		wxString message(check_wxstring(L, 1));
-		wxString dir(check_wxstring(L, 2));
-		wxString file(check_wxstring(L, 3));
-		wxString wildcard(check_wxstring(L, 4));
-		bool multiple = !!lua_toboolean(L, 5);
-		bool must_exist = lua_toboolean(L, 6) || lua_isnil(L, 6);
-
-		int flags = wxFD_OPEN;
-		if (multiple)
-			flags |= wxFD_MULTIPLE;
-		if (must_exist)
-			flags |= wxFD_FILE_MUST_EXIST;
-
-		agi::dispatch::Main().Sync([&] {
-			wxFileDialog diag(nullptr, message, dir, file, wildcard, flags);
-			if (diag.ShowModal() == wxID_CANCEL) {
-				lua_pushnil(L);
-			} else if (multiple) {
-				wxArrayString files;
-				diag.GetPaths(files);
-
-				lua_createtable(L, files.size(), 0);
-				for (size_t i = 0; i < files.size(); ++i) {
-					lua_pushstring(L, files[i].utf8_str());
-					lua_rawseti(L, -2, i + 1);
-				}
-			} else {
-				lua_pushstring(L, diag.GetPath().utf8_str());
-			}
-		});
-
+		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
+		ps->Log("Script file picker skipped: this build has no dialog window. The script receives no file.");
+		lua_pushnil(L);
 		return 1;
 	}
 
 	int LuaProgressSink::LuaDisplaySaveDialog(lua_State *L)
 	{
 		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
-		wxString message(check_wxstring(L, 1));
-		wxString dir(check_wxstring(L, 2));
-		wxString file(check_wxstring(L, 3));
-		wxString wildcard(check_wxstring(L, 4));
-		bool prompt_overwrite = !lua_toboolean(L, 5);
-
-		int flags = wxFD_SAVE;
-		if (prompt_overwrite)
-			flags |= wxFD_OVERWRITE_PROMPT;
-
-		agi::dispatch::Main().Sync([&] {
-			wxFileDialog diag(ps->GetParentWindow(), message, dir, file, wildcard, flags);
-			if (diag.ShowModal() == wxID_CANCEL) {
-				lua_pushnil(L);
-			} else {
-				lua_pushstring(L, diag.GetPath().utf8_str());
-			}
-		});
-
+		ps->Log("Script save picker skipped: this build has no dialog window. The script receives no file.");
+		lua_pushnil(L);
 		return 1;
 	}
 }

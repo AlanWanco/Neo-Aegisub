@@ -34,6 +34,7 @@
 #include "audio_controller.h"
 #include "compat.h"
 #include "format.h"
+#include "gpui_bridge.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "project.h"
@@ -57,11 +58,12 @@ VideoController::VideoController(agi::Context *c)
 	context->selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this),
 }))
 {
-	Bind(EVT_VIDEO_ERROR, &VideoController::OnVideoError, this);
-	Bind(EVT_SUBTITLES_ERROR, &VideoController::OnSubtitlesError, this);
-	playback.Bind(wxEVT_TIMER, &VideoController::OnPlayTimer, this);
+	playback.on_tick = [this] { OnPlayTimer(); };
 }
 
+VideoController::~VideoController() {
+	if (provider) provider->DetachSink();
+}
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	Stop();
 	provider = new_provider;
@@ -237,7 +239,7 @@ double VideoController::GetPlaybackTime() const {
     return start_ms + elapsed * playback_rate;
 }
 
-void VideoController::OnPlayTimer(wxTimerEvent &) {
+void VideoController::OnPlayTimer() {
     using namespace std::chrono;
     // While audio plays it is the master clock. Re-anchor the video-only clock to it so
     // that if audio stops early (range end) video continues from the last heard position.
@@ -313,14 +315,17 @@ int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
 	return context->project->Timecodes().FrameAtTime(time, type);
 }
 
-void VideoController::OnVideoError(VideoProviderErrorEvent const& err) {
-	wxLogError(
-		fmt_tl("Failed seeking video. The video file may be corrupt or incomplete.\nError message reported: %s",
-		err.GetMessage()));
+void VideoController::FrameReady(std::shared_ptr<VideoFrame> frame, double at, int frame_number) {
+	NoteFrameArrived(frame_number);
+	AnnounceFrameReady(frame, at, frame_number);
 }
 
-void VideoController::OnSubtitlesError(SubtitlesProviderErrorEvent const& err) {
-	wxLogError(
-		fmt_tl("Failed rendering subtitles.\nError message reported: %s",
-		err.GetMessage()));
+void VideoController::VideoError(std::string message) {
+	gpui::PushNotice("Video Error",
+		from_wx(fmt_tl("Failed seeking video. The video file may be corrupt or incomplete.\nError message reported: %s", message)));
+}
+
+void VideoController::SubtitlesError(std::string message) {
+	gpui::PushNotice("Subtitle Renderer Error",
+		from_wx(fmt_tl("Failed rendering subtitles.\nError message reported: %s", message)));
 }

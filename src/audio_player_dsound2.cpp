@@ -36,7 +36,6 @@
 #include "include/aegisub/audio_player.h"
 
 #include "audio_controller.h"
-#include "frame_main.h"
 #include "options.h"
 #include "utils.h"
 
@@ -659,7 +658,7 @@ void DirectSoundPlayer2Thread::CheckError()
 }
 
 DirectSoundPlayer2Thread::DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength, wxWindow *parent)
-: parent((HWND)parent->GetHandle())
+: parent(parent ? (HWND)parent->GetHandle() : GetDesktopWindow())
 , event_start_playback  (CreateEvent(0, FALSE, FALSE, 0))
 , event_stop_playback   (CreateEvent(0, FALSE, FALSE, 0))
 , event_update_end_time (CreateEvent(0, FALSE, FALSE, 0))

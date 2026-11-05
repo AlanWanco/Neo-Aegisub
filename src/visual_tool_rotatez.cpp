@@ -28,7 +28,6 @@
 #include <libaegisub/format.h>
 
 #include <cmath>
-#include <wx/colour.h>
 
 static const float deg2rad = 3.1415926536f / 180.f;
 static const float rad2deg = 180.f / 3.1415926536f;
@@ -47,9 +46,9 @@ void VisualToolRotateZ::Draw() {
 	DrawAllFeatures();
 
 	// Load colors from options
-	wxColour line_color_primary = to_wx(line_color_primary_opt->GetColor());
-	wxColour line_color_secondary = to_wx(line_color_secondary_opt->GetColor());
-	wxColour highlight_color = to_wx(highlight_color_primary_opt->GetColor());
+	agi::Color line_color_primary = line_color_primary_opt->GetColor();
+	agi::Color line_color_secondary = line_color_secondary_opt->GetColor();
+	agi::Color highlight_color = highlight_color_primary_opt->GetColor();
 
 	float radius = (pos - org->pos).Len();
 	float oRadius = radius;

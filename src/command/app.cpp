@@ -29,39 +29,20 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include <wx/msgdlg.h>
-
 #include "command.h"
 
 #include <libaegisub/log.h>
 
 #include "../compat.h"
-#include "../dialog_detached_video.h"
-#include "../dialog_manager.h"
-#include "../dialogs.h"
-#include "../frame_main.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
-#include "../main.h"
 #include "../options.h"
 #include "../project.h"
-#include "../utils.h"
 #include "../ui_theme.h"
 
 namespace {
 	using cmd::Command;
-
-struct app_launch_gpui final : public Command {
-	CMD_NAME("app/launch/gpui")
-	STR_MENU("GPUI Workspace Prototype...")
-	STR_DISP("GPUI Workspace Prototype")
-	STR_HELP("Open the experimental GPUI workspace connected to this project")
-
-	void operator()(agi::Context *c) override {
-		c->frame->LaunchGpui();
-	}
-};
 
 struct app_about final : public Command {
 	CMD_NAME("app/about")
@@ -70,12 +51,8 @@ struct app_about final : public Command {
 	STR_DISP("About")
 	STR_HELP("About Neo Aegisub")
 
-	void operator()(agi::Context *c) override {
-		if (gpui::FrontendAttached()) {
-			gpui::PushCommand("app/about");
-			return;
-		}
-		ShowAboutDialog(c->parent);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("app/about");
 	}
 };
 
@@ -86,16 +63,17 @@ struct app_display_audio_subs final : public Command {
 	STR_HELP("Display audio and the subtitles grid only")
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
-	void operator()(agi::Context *c) override {
-		c->frame->SetDisplayMode(0,1);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("app/display/audio_subs");
 	}
 
 	bool Validate(const agi::Context *c) override {
 		return !!c->project->AudioProvider();
 	}
 
-	bool IsActive(const agi::Context *c) override {
-		return c->frame->IsAudioShown() && !c->frame->IsVideoShown();
+	bool IsActive(const agi::Context *) override {
+		// The front end owns the layout and reports the live mode itself.
+		return false;
 	}
 };
 
@@ -106,16 +84,16 @@ struct app_display_full final : public Command {
 	STR_HELP("Display audio, video and then subtitles grid")
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
-	void operator()(agi::Context *c) override {
-		c->frame->SetDisplayMode(1,1);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("app/display/full");
 	}
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->AudioProvider() && c->project->VideoProvider() && !c->dialog->Get<DialogDetachedVideo>();
+		return c->project->AudioProvider() && c->project->VideoProvider();
 	}
 
-	bool IsActive(const agi::Context *c) override {
-		return c->frame->IsAudioShown() && c->frame->IsVideoShown();
+	bool IsActive(const agi::Context *) override {
+		return false;
 	}
 };
 
@@ -126,12 +104,12 @@ struct app_display_subs final : public Command {
 	STR_HELP("Display the subtitles grid only")
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
-	void operator()(agi::Context *c) override {
-		c->frame->SetDisplayMode(0, 0);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("app/display/subs");
 	}
 
-	bool IsActive(const agi::Context *c) override {
-		return !c->frame->IsAudioShown() && !c->frame->IsVideoShown();
+	bool IsActive(const agi::Context *) override {
+		return false;
 	}
 };
 
@@ -142,16 +120,16 @@ struct app_display_video_subs final : public Command {
 	STR_HELP("Display video and the subtitles grid only")
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
-	void operator()(agi::Context *c) override {
-		c->frame->SetDisplayMode(1, 0);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("app/display/video_subs");
 	}
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->VideoProvider() && !c->dialog->Get<DialogDetachedVideo>();
+		return !!c->project->VideoProvider();
 	}
 
-	bool IsActive(const agi::Context *c) override {
-		return !c->frame->IsAudioShown() && c->frame->IsVideoShown();
+	bool IsActive(const agi::Context *) override {
+		return false;
 	}
 };
 
@@ -162,7 +140,7 @@ struct app_exit final : public Command {
 	STR_HELP("Exit the application")
 
 	void operator()(agi::Context *) override {
-		wxGetApp().CloseAll();
+		gpui::PushCommand("app/exit");
 	}
 };
 
@@ -173,26 +151,8 @@ struct app_language final : public Command {
 	STR_DISP("Language")
 	STR_HELP("Select Neo Aegisub interface language")
 
-	void operator()(agi::Context *c) override {
-		if (gpui::FrontendAttached()) {
-			gpui::PushCommand("app/language");
-			return;
-		}
-
-		// Get language
-		auto new_language = wxGetApp().locale.PickLanguage();
-		if (new_language.empty()) return;
-
-		OPT_SET("App/Language")->SetString(new_language);
-
-		// Ask to restart program
-		int result = wxMessageBox(_("Neo Aegisub needs to be restarted so that the new language can be applied. Restart now?"), _("Restart Neo Aegisub?"), wxYES_NO | wxICON_QUESTION |  wxCENTER);
-		if (result == wxYES) {
-			// Restart Aegisub
-			if (c->frame->Close()) {
-				RestartAegisub();
-			}
-		}
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("app/language");
 	}
 };
 
@@ -203,12 +163,8 @@ struct app_log final : public Command {
 	STR_DISP("Log window")
 	STR_HELP("View the event log")
 
-	void operator()(agi::Context *c) override {
-		if (gpui::FrontendAttached()) {
-			gpui::PushCommand("app/log");
-			return;
-		}
-		ShowLogWindow(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("app/log");
 	}
 };
 
@@ -220,7 +176,7 @@ struct app_new_window final : public Command {
 	STR_HELP("Open a new application window")
 
 	void operator()(agi::Context *) override {
-		wxGetApp().NewProjectContext();
+		gpui::PushCommand("app/new_window");
 	}
 };
 
@@ -231,12 +187,8 @@ struct app_options final : public Command {
 	STR_DISP("Options")
 	STR_HELP("Configure Neo Aegisub")
 
-	void operator()(agi::Context *c) override {
-		try {
-			ShowPreferences(c->parent);
-		} catch (agi::Exception& e) {
-			LOG_E("config/init") << "Caught exception: " << e.GetMessage();
-		}
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("app/options");
 	}
 };
 
@@ -319,81 +271,9 @@ struct app_updates final : public Command {
 	STR_HELP("Check to see if there is a new version of Neo Aegisub available")
 
 	void operator()(agi::Context *) override {
-		if (gpui::FrontendAttached()) {
-			gpui::PushCommand("app/updates");
-			return;
-		}
-		PerformVersionCheck(true);
+		gpui::PushCommand("app/updates");
 	}
 };
-
-#ifdef __WXMAC__
-struct app_minimize final : public Command {
-	CMD_NAME("app/minimize")
-	STR_MENU("Minimize")
-	STR_DISP("Minimize")
-	STR_HELP("Minimize the active window")
-
-	void operator()(agi::Context *c) override {
-		c->frame->Iconize();
-	}
-};
-
-struct app_maximize final : public Command {
-	CMD_NAME("app/maximize")
-	STR_MENU("Zoom")
-	STR_DISP("Zoom")
-	STR_HELP("Maximize the active window")
-
-	void operator()(agi::Context *c) override {
-		c->frame->Maximize(!c->frame->IsMaximized());
-	}
-};
-
-struct app_bring_to_front final : public Command {
-	CMD_NAME("app/bring_to_front")
-	STR_MENU("Bring All to Front")
-	STR_DISP("Bring All to Front")
-	STR_HELP("Bring forward all open documents to the front")
-
-	void operator()(agi::Context *) override {
-		osx::bring_to_front();
-	}
-};
-
-struct app_hide final : public Command {
-	CMD_NAME("app/hide")
-	STR_MENU("Hide")
-	STR_DISP("Hide")
-	STR_HELP("Hide the application")
-
-	void operator()(agi::Context *) override {
-		osx::hide_application();
-	}
-};
-
-struct app_hide_others final : public Command {
-	CMD_NAME("app/hide_others")
-	STR_MENU("Hide others")
-	STR_DISP("Hide others")
-	STR_HELP("Hide all other applications")
-
-	void operator()(agi::Context *) override {
-		osx::hide_other_applications();
-	}
-};
-
-struct app_show_all final : public Command {
-	CMD_NAME("app/show_all")
-	STR_MENU("Show all")
-	STR_DISP("Show all")
-	STR_HELP("Show all applications")
-
-	void operator()(agi::Context *) override {
-		osx::show_all_applications();
-	}
-};
-#endif
 
 }
 
@@ -406,7 +286,6 @@ namespace cmd {
 		reg(std::make_unique<app_display_video_subs>());
 		reg(std::make_unique<app_exit>());
 		reg(std::make_unique<app_language>());
-		reg(std::make_unique<app_launch_gpui>());
 		reg(std::make_unique<app_log>());
 		reg(std::make_unique<app_new_window>());
 		reg(std::make_unique<app_options>());
@@ -415,14 +294,6 @@ namespace cmd {
 		reg(std::make_unique<app_theme_dark>());
 		reg(std::make_unique<app_toggle_global_hotkeys>());
 		reg(std::make_unique<app_toggle_toolbar>());
-#ifdef __WXMAC__
-		reg(std::make_unique<app_minimize>());
-		reg(std::make_unique<app_maximize>());
-		reg(std::make_unique<app_bring_to_front>());
-		reg(std::make_unique<app_hide>());
-		reg(std::make_unique<app_hide_others>());
-		reg(std::make_unique<app_show_all>());
-#endif
 #ifdef WITH_UPDATE_CHECKER
 		reg(std::make_unique<app_updates>());
 #endif

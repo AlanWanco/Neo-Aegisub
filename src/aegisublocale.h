@@ -42,9 +42,14 @@ class AegisubLocale {
 public:
 	void Init(std::string const& language);
 	bool HasLanguage(std::string const& language);
-	std::string PickLanguage();
+	/// Language to start with when the user has not chosen one: the OS
+	/// translation when a catalog exists, otherwise English.
+	std::string RecommendLanguage();
 	/// Interface languages as (code, name) pairs, English first.
 	std::vector<std::pair<std::string, std::string>> GetAvailableLanguages();
 	/// Language the interface is currently running in.
 	std::string const& GetActiveLanguage() const { return active_language; }
 };
+
+/// The one interface language of this process; the host owns it.
+extern AegisubLocale ui_locale;

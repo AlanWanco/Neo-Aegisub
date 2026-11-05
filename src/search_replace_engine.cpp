@@ -31,7 +31,6 @@
 
 #include <boost/locale/conversion.hpp>
 
-#include <wx/msgdlg.h>
 #include <unicode/normalizer2.h>
 #include <unicode/edits.h>
 #include <unicode/bytestream.h>
@@ -286,8 +285,8 @@ bool SearchReplaceEngine::ReplaceAll() {
 			gpui::PushNotice(from_wx(_("Replace")), from_wx(_("No matches found.")));
 		return true;
 	}
-	if (count) wxMessageBox(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", static_cast<int>(count)));
-	else wxMessageBox(_("No matches found."));
+	if (count) gpui::PushStatus(from_wx(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", static_cast<int>(count))));
+	else gpui::PushStatus(from_wx(_("No matches found.")));
 	return true;
 }
 

@@ -36,7 +36,6 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
-#include "dialogs.h"
 #include "options.h"
 #include "text_file_reader.h"
 #include "text_file_writer.h"
@@ -64,7 +63,8 @@ bool TXTSubtitleFormat::CanWriteFile(agi::fs::path const& filename) const {
 }
 
 void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const&, const char *encoding) const {
-	if (!ShowPlainTextImportDialog()) return;
+	// The import settings live in Preferences now that the host has no dialog
+	// window of its own.
 
 	TextFileReader file(filename, encoding, false);
 

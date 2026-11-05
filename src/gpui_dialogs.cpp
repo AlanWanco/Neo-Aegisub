@@ -9,10 +9,11 @@
 #include "ass_file.h"
 #include "ass_style.h"
 #include "font_file_lister.h"
-#include "main.h"
 #include "command/edit.h"
 #include "include/aegisub/context.h"
 #include "compat.h"
+
+#include <wx/translation.h>
 #include "dialogs.h"
 #include "options.h"
 #include "version.h"
@@ -195,12 +196,12 @@ json::Object font_collection(agi::Context *context) {
 json::Object languages() {
 	json::Object result;
 	json::Array items;
-	auto languages = wxGetApp().locale.GetAvailableLanguages();
+	auto languages = ui_locale.GetAvailableLanguages();
 #ifdef WITH_GPUI_DEFAULT
 	// Startup pins the language to zh_CN because the GPUI workspace only ships
 	// Chinese strings, so offering the other catalogs would be dead UI: picking
 	// one only reverts on the next start.
-	std::string const active = wxGetApp().locale.GetActiveLanguage();
+	std::string const active = ui_locale.GetActiveLanguage();
 	languages.erase(std::remove_if(languages.begin(), languages.end(),
 		[&](auto const& language) { return language.first != active; }), languages.end());
 	result["note"] = "GPUI 工作台目前只有中文界面，语言切换暂不可用。";
@@ -212,7 +213,7 @@ json::Object languages() {
 		push(items, std::move(item));
 	}
 	result["languages"] = std::move(items);
-	result["active"] = wxGetApp().locale.GetActiveLanguage();
+	result["active"] = ui_locale.GetActiveLanguage();
 	result["ok"] = true;
 	return result;
 }
@@ -235,7 +236,7 @@ std::string Dialog(agi::Context *context, json::Object const& request) {
 		std::string const& code = request.at("code");
 		OPT_SET("App/Language")->SetString(code);
 		result["ok"] = true;
-		result["restart"] = code != wxGetApp().locale.GetActiveLanguage();
+		result["restart"] = code != ui_locale.GetActiveLanguage();
 	}
 	else if (action == "updates") {
 		PerformVersionCheck(true);

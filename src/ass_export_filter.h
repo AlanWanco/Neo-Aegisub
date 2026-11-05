@@ -40,7 +40,6 @@
 
 class AssFile;
 class AssExportFilterChain;
-class wxWindow;
 
 namespace agi { struct Context; }
 
@@ -67,16 +66,9 @@ public:
 
 	/// Process subtitles
 	/// @param subs Subtitles to process
-	/// @param parent_window Window to use as the parent if the filter wishes
-	///                      to open a progress dialog
-	virtual void ProcessSubs(AssFile *subs, wxWindow *parent_window=nullptr)=0;
+	virtual void ProcessSubs(AssFile *subs)=0;
 
-	/// Draw setup controls
-	/// @param parent Parent window to add controls to
-	/// @param c Project context
-	virtual wxWindow *GetConfigDialogWindow([[maybe_unused]] wxWindow *parent, [[maybe_unused]] agi::Context *c) { return nullptr; }
-
-	/// Load settings to use from the configuration dialog
+	/// Load the settings the filter runs with
 	/// @param is_default If true use default settings instead
 	/// @param c Project context
 	virtual void LoadSettings([[maybe_unused]] bool is_default, [[maybe_unused]] agi::Context *c) { }

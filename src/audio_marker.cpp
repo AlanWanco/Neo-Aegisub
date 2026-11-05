@@ -36,7 +36,7 @@ public:
 	AudioMarkerKeyframe(Pen *style, int position) : style(style), position(position) { }
 	int GetPosition() const override { return position; }
 	FeetStyle GetFeet() const override { return Feet_None; }
-	wxPen GetStyle() const override { return *style; }
+	AudioMarkerStyle GetStyle() const override { return {style->Colour(), style->Width(), style->Dotted()}; }
 	operator int() const { return position; }
 };
 
@@ -90,7 +90,7 @@ public:
 
 	int GetPosition() const override { return position; }
 	FeetStyle GetFeet() const override { return Feet_None; }
-	wxPen GetStyle() const override { return wxPen{}; }
+	AudioMarkerStyle GetStyle() const override { return {}; }
 };
 
 class VideoPositionRange final : public AudioMarker {
@@ -109,7 +109,7 @@ public:
 	int GetPosition() const override { return position; }
 	int GetWidth() const override { return width; }
 	FeetStyle GetFeet() const override { return Feet_None; }
-	wxPen GetStyle() const override { return style; }
+	AudioMarkerStyle GetStyle() const override { return {style.Colour(), style.Width(), style.Dotted()}; }
 };
 
 class VideoPositionMarker final : public AudioMarker {
@@ -121,7 +121,7 @@ public:
 
 	int GetPosition() const override { return position; }
 	FeetStyle GetFeet() const override { return Feet_None; }
-	wxPen GetStyle() const override { return style; }
+	AudioMarkerStyle GetStyle() const override { return {style.Colour(), style.Width(), style.Dotted()}; }
 };
 
 VideoPositionMarkerProvider::VideoPositionMarkerProvider(agi::Context *c)
@@ -192,7 +192,7 @@ void VideoPositionMarkerProvider::GetSnapMarkers(const TimeRange &timerange, Aud
 }
 
 SecondsMarkerProvider::SecondsMarkerProvider()
-: pen(std::make_unique<Pen>("Colour/Audio Display/Seconds Line", 1, wxPENSTYLE_DOT))
+: pen(std::make_unique<Pen>("Colour/Audio Display/Seconds Line", 1, true))
 , enabled(OPT_GET("Audio/Display/Draw/Seconds"))
 , enabled_opt_changed(OPT_SUB("Audio/Display/Draw/Seconds", &SecondsMarkerProvider::EnabledOptChanged, this))
 {
@@ -215,6 +215,6 @@ void SecondsMarkerProvider::GetMarkers(TimeRange const& range, AudioMarkerVector
 	}
 }
 
-wxPen SecondsMarkerProvider::Marker::GetStyle() const {
-	return *style;
+AudioMarkerStyle SecondsMarkerProvider::Marker::GetStyle() const {
+	return {style->Colour(), style->Width(), style->Dotted()};
 }

@@ -42,29 +42,8 @@
 #include "subtitle_format.h"
 
 #include <memory>
-#include <wx/sizer.h>
-#include <wx/statbox.h>
 
 AssExporter::AssExporter(agi::Context *c) : c(c) { }
-
-void AssExporter::DrawSettings(wxWindow *parent, wxSizer *target_sizer) {
-	is_default = false;
-	for (auto& filter : *AssExportFilterChain::GetFilterList()) {
-		// Make sure to construct static box sizer first, so it won't overlap
-		// the controls on wxMac.
-		auto box = new wxStaticBoxSizer(wxVERTICAL, parent, to_wx(filter.GetName()));
-		wxWindow *window = filter.GetConfigDialogWindow(box->GetStaticBox(), c);
-		if (window) {
-			box->Add(window, 0, wxEXPAND, 0);
-			target_sizer->Add(box, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
-			target_sizer->Show(box, false);
-			Sizers[filter.GetName()] = box;
-		}
-		else {
-			delete box;
-		}
-	}
-}
 
 void AssExporter::AddFilter(std::string const& name) {
 	auto filter = AssExportFilterChain::GetFilter(name);
@@ -80,12 +59,12 @@ std::vector<std::string> AssExporter::GetAllFilterNames() const {
 	return names;
 }
 
-void AssExporter::Export(agi::fs::path const& filename, const char *charset, wxWindow *export_dialog) {
+void AssExporter::Export(agi::fs::path const& filename, const char *charset) {
 	AssFile subs(*c->ass);
 
 	for (auto filter : filters) {
-		filter->LoadSettings(is_default, c);
-		filter->ProcessSubs(&subs, export_dialog);
+		filter->LoadSettings(true, c);
+		filter->ProcessSubs(&subs);
 	}
 
 	const SubtitleFormat *writer = SubtitleFormat::GetWriter(filename);
@@ -93,11 +72,6 @@ void AssExporter::Export(agi::fs::path const& filename, const char *charset, wxW
 		throw agi::InvalidInputException("Unknown file type.");
 
 	writer->ExportFile(&subs, filename, c->project->Timecodes(), charset);
-}
-
-wxSizer *AssExporter::GetSettingsSizer(std::string const& name) {
-	auto pos = Sizers.find(name);
-	return pos == Sizers.end() ? nullptr : pos->second;
 }
 
 std::string const& AssExporter::GetDescription(std::string const& name) const {

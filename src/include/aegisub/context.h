@@ -19,23 +19,16 @@
 #include <memory>
 
 class AssFile;
-class AudioBox;
 class AudioController;
 class AssDialogue;
 class AudioKaraoke;
-class DialogManager;
-class FrameMain;
 class Project;
 class SearchReplaceEngine;
 class InitialLineState;
 class SelectionController;
 class SubsController;
-class BaseGrid;
 class TextSelectionController;
 class VideoController;
-class VideoDisplay;
-class wxWindow;
-class wxToolBar;
 namespace Automation4 { class ScriptManager; }
 
 namespace agi {
@@ -52,24 +45,11 @@ struct Context {
 	std::unique_ptr<SelectionController> selectionController;
 	std::unique_ptr<VideoController> videoController;
 	std::unique_ptr<AudioController> audioController;
+	/// Must die before the audio controller it switches the timing controller on.
+	std::unique_ptr<AudioKaraoke> karaoke;
 	std::unique_ptr<InitialLineState> initialLineState;
 	std::unique_ptr<SearchReplaceEngine> search;
 	std::unique_ptr<Path> path;
-
-	// Things that should probably be in some sort of UI-context-model
-	wxWindow *parent = nullptr;
-	wxWindow *previousFocus = nullptr;
-	wxWindow *videoSlider = nullptr;
-
-	// Views (i.e. things that should eventually not be here at all)
-	AudioBox *audioBox = nullptr;
-	wxToolBar *visualToolBar = nullptr;
-	wxToolBar *visualSubToolBar = nullptr;
-	AudioKaraoke *karaoke = nullptr;
-	BaseGrid *subsGrid = nullptr;
-	std::unique_ptr<DialogManager> dialog;
-	FrameMain *frame = nullptr;
-	VideoDisplay *videoDisplay = nullptr;
 
 	Context();
 	~Context();

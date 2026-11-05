@@ -192,9 +192,6 @@
 		"time/snap/start_video" : [
 			"Ctrl-3"
 		],
-		"video/focus_seek" : [
-			"Ctrl-Space"
-		],
 		"video/frame/next" : [
 			"Ctrl-KP_6"
 		],

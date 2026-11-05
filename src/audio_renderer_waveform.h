@@ -35,10 +35,9 @@
 #include <vector>
 
 class AudioColorScheme;
-class wxArrayString;
 
 /// Render a waveform display of PCM audio data
-class AudioWaveformRenderer final : public AudioRendererBitmapProvider {
+class AudioWaveformRenderer final : public AudioRendererCanvasProvider {
 	/// Colour tables used for rendering
 	std::vector<AudioColorScheme> colors;
 
@@ -60,20 +59,17 @@ public:
 	~AudioWaveformRenderer();
 
 	/// @brief Render a range of audio waveform
-	/// @param bmp   [in,out] Bitmap to render into, also carries length information
-	/// @param start First column of pixel data in display to render
-	/// @param style Style to render audio in
-	void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
+	/// @param canvas [in,out] Canvas to render into, also carries length information
+	/// @param start  First column of pixel data in display to render
+	/// @param style  Style to render audio in
+	void Render(AudioCanvas &canvas, int start, AudioRenderingStyle style) override;
 
 	/// @brief Render blank area
-	void RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style) override;
+	void RenderBlank(AudioCanvas &canvas, int x, int width, AudioRenderingStyle style) override;
 
 	/// @brief Cleans up the cache
 	/// @param max_size Maximum size in bytes for the cache
 	///
 	/// Does nothing for waveform renderer, since it does not have a backend cache
 	void AgeCache(size_t) override { }
-
-	/// Get a list of waveform rendering modes
-	static wxArrayString GetWaveformStyles();
 };

@@ -18,11 +18,12 @@
 
 #include "time_range.h"
 
+#include <libaegisub/color.h>
 #include <libaegisub/signal.h>
 
 #include <memory>
+#include <string>
 #include <vector>
-#include <wx/string.h>
 
 class AudioMarkerKeyframe;
 class Pen;
@@ -30,7 +31,6 @@ class Project;
 class VideoPositionMarker;
 class VideoPositionRange;
 class VideoPositionSnapPoint;
-class wxPen;
 
 namespace agi {
 	class OptionValue;
@@ -39,6 +39,13 @@ namespace agi {
 
 /// @class AudioMarker
 /// @brief A marker on the audio display
+/// @brief How an audio marker is drawn
+struct AudioMarkerStyle {
+	agi::Color colour{255, 255, 255, 255};
+	int width = 1;
+	bool dotted = false;
+};
+
 class AudioMarker {
 protected:
 	~AudioMarker()=default;
@@ -60,8 +67,8 @@ public:
 	virtual int GetWidth() const { return 0; }
 
 	/// @brief Get the marker's drawing style
-	/// @return A pen object describing the marker's drawing style
-	virtual wxPen GetStyle() const = 0;
+	/// @return The colour, width and dash pattern to draw the marker with
+	virtual AudioMarkerStyle GetStyle() const = 0;
 
 	/// @brief Get the marker's feet style
 	/// @return The marker's feet style
@@ -99,7 +106,7 @@ public:
 	/// A label for a range of time on the audio display
 	struct AudioLabel {
 		/// Text of the label
-		wxString text;
+		std::string text;
 		/// Range which this label applies to
 		TimeRange range;
 	};
@@ -180,7 +187,7 @@ class SecondsMarkerProvider final : public AudioMarkerProvider {
 		Marker(Pen *style) : style(style) { }
 		int GetPosition() const override { return position; }
 		FeetStyle GetFeet() const override { return Feet_None; }
-		wxPen GetStyle() const override;
+		AudioMarkerStyle GetStyle() const override;
 		operator int() const { return position; }
 	};
 

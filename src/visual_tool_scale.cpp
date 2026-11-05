@@ -23,8 +23,6 @@
 #include "compat.h"
 #include "options.h"
 
-#include <wx/colour.h>
-
 VisualToolScale::VisualToolScale(VisualToolHost *parent, agi::Context *context)
 : VisualTool<VisualDraggableFeature>(parent, context)
 {
@@ -39,9 +37,9 @@ void VisualToolScale::Draw() {
 	static const int guide_size = 10;
 
 	// Load colors from options
-	wxColour line_color_primary = to_wx(line_color_primary_opt->GetColor());
-	wxColour line_color_secondary = to_wx(line_color_secondary_opt->GetColor());
-	wxColour highlight_color = to_wx(highlight_color_primary_opt->GetColor());
+	agi::Color line_color_primary = line_color_primary_opt->GetColor();
+	agi::Color line_color_secondary = line_color_secondary_opt->GetColor();
+	agi::Color highlight_color = highlight_color_primary_opt->GetColor();
 
 	// Ensure that the scaling UI is comfortably visible on screen
 	Vector2D base_point = pos

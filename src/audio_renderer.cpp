@@ -36,7 +36,6 @@
 #include <libaegisub/audio/provider.h>
 
 #include <algorithm>
-#include <wx/dc.h>
 
 namespace {
 	template<typename T>
@@ -48,27 +47,29 @@ namespace {
 	}
 }
 
-AudioRendererBitmapCacheBitmapFactory::AudioRendererBitmapCacheBitmapFactory(AudioRenderer *renderer)
+AudioRendererCanvasCacheFactory::AudioRendererCanvasCacheFactory(AudioRenderer *renderer)
 : renderer(renderer)
 {
 	assert(renderer);
 }
 
-std::unique_ptr<wxBitmap> AudioRendererBitmapCacheBitmapFactory::ProduceBlock(int /* i */)
+std::unique_ptr<AudioCanvas> AudioRendererCanvasCacheFactory::ProduceBlock(int /* i */)
 {
-	return std::make_unique<wxBitmap>(renderer->cache_bitmap_width, renderer->pixel_height, 24);
+	auto canvas = std::make_unique<AudioCanvas>();
+	canvas->Reset(renderer->cache_bitmap_width, renderer->pixel_height);
+	return canvas;
 }
 
-size_t AudioRendererBitmapCacheBitmapFactory::GetBlockSize() const
+size_t AudioRendererCanvasCacheFactory::GetBlockSize() const
 {
-	return sizeof(wxBitmap) + renderer->cache_bitmap_width * renderer->pixel_height * 3;
+	return sizeof(AudioCanvas) + static_cast<size_t>(renderer->cache_bitmap_width) * renderer->pixel_height * 4;
 }
 
 AudioRenderer::AudioRenderer()
 {
 	bitmaps.reserve(AudioStyle_MAX);
 	for (int i = 0; i < AudioStyle_MAX; ++i)
-		bitmaps.emplace_back(256, AudioRendererBitmapCacheBitmapFactory(this));
+		bitmaps.emplace_back(256, AudioRendererCanvasCacheFactory(this));
 
 	// Make sure there's *some* values for those fields, and in the caches
 	SetMillisecondsPerPixel(1);
@@ -104,7 +105,7 @@ void AudioRenderer::SetAmplitudeScale(const float _amplitude_scale)
 	}
 }
 
-void AudioRenderer::SetRenderer(AudioRendererBitmapProvider *const _renderer)
+void AudioRenderer::SetRenderer(AudioRendererCanvasProvider *const _renderer)
 {
 	if (compare_and_set(renderer, _renderer))
 	{
@@ -157,35 +158,35 @@ size_t AudioRenderer::NumBlocks(const int64_t samples) const
 	return static_cast<size_t>(duration / pixel_ms / cache_bitmap_width);
 }
 
-wxBitmap const& AudioRenderer::GetCachedBitmap(const int i, const AudioRenderingStyle style)
+AudioCanvas const &AudioRenderer::GetCachedCanvas(const int i, const AudioRenderingStyle style)
 {
 	assert(provider);
 	assert(renderer);
 
 	bool created = false;
-	auto& bmp = bitmaps[style].Get(i, &created);
+	auto& canvas = bitmaps[style].Get(i, &created);
 	if (created)
 	{
-		renderer->Render(bmp, i*cache_bitmap_width, style);
+		canvas.Reset(cache_bitmap_width, pixel_height);
+		renderer->Render(canvas, i*cache_bitmap_width, style);
 		needs_age = true;
 	}
 
-	assert(bmp.IsOk());
-	return bmp;
+	return canvas;
 }
 
-void AudioRenderer::Render(wxDC &dc, wxPoint origin, const int start, const int length, const AudioRenderingStyle style)
+void AudioRenderer::Render(AudioCanvas &canvas, const int start, const AudioRenderingStyle style)
 {
 	assert(start >= 0);
 
 	if (!provider) return;
 	if (!renderer) return;
+
+	const int length = canvas.Width();
 	if (length <= 0) return;
 
 	// One past last absolute pixel strip to render
 	const int end = start + length;
-	// One past last X coordinate to render on
-	const int lastx = origin.x + length;
 	// Figure out which range of bitmaps are required
 	const int firstbitmap = start / cache_bitmap_width;
 	// And the offset in it to start its use at
@@ -193,20 +194,17 @@ void AudioRenderer::Render(wxDC &dc, wxPoint origin, const int start, const int 
 	// The last bitmap required
 	const int lastbitmap = std::min<int>(end / cache_bitmap_width, NumBlocks(provider->GetDecodedSamples()) - 1);
 
-	// Set a clipping region so that the first and last bitmaps don't draw
-	// outside the requested range
-	const wxDCClipper clipper(dc, wxRect(origin, wxSize(length, pixel_height)));
-	origin.x -= firstbitmapoffset;
-
+	// Blocks are drawn one after another, clipped by the canvas itself.
+	int x = -firstbitmapoffset;
 	for (int i = firstbitmap; i <= lastbitmap; ++i)
 	{
-		dc.DrawBitmap(GetCachedBitmap(i, style), origin);
-		origin.x += cache_bitmap_width;
+		canvas.Blit(GetCachedCanvas(i, style), x, 0);
+		x += cache_bitmap_width;
 	}
 
-	// Now render blank audio from origin to end
-	if (origin.x < lastx)
-		renderer->RenderBlank(dc, wxRect(origin.x-1, origin.y, lastx-origin.x+1, pixel_height), style);
+	// Now render blank audio from where the blocks ended to the right edge
+	if (x < length)
+		renderer->RenderBlank(canvas, x, length - x, style);
 
 	if (needs_age)
 	{
@@ -222,19 +220,19 @@ void AudioRenderer::Invalidate()
 	needs_age = false;
 }
 
-void AudioRendererBitmapProvider::SetProvider(agi::AudioProvider *const _provider)
+void AudioRendererCanvasProvider::SetProvider(agi::AudioProvider *const _provider)
 {
 	if (compare_and_set(provider, _provider))
 		OnSetProvider();
 }
 
-void AudioRendererBitmapProvider::SetMillisecondsPerPixel(const double new_pixel_ms)
+void AudioRendererCanvasProvider::SetMillisecondsPerPixel(const double new_pixel_ms)
 {
 	if (compare_and_set(pixel_ms, new_pixel_ms))
 		OnSetMillisecondsPerPixel();
 }
 
-void AudioRendererBitmapProvider::SetAmplitudeScale(const float _amplitude_scale)
+void AudioRendererCanvasProvider::SetAmplitudeScale(const float _amplitude_scale)
 {
 	if (compare_and_set(amplitude_scale, _amplitude_scale))
 		OnSetAmplitudeScale();

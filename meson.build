@@ -593,16 +593,19 @@ if host_machine.system() == 'windows'
     link_depends += manifest_file
 endif
 
-aegisub = executable('aegisub', aegisub_src, version_h, libresrc_headers, aegisub_order_dep,
-                     c_args: aegisub_defines,
-                     cpp_args: aegisub_defines,
-                     link_with: [libresrc, libaegisub],
-                     link_args: link_args,
-                     link_depends: link_depends,
-                     include_directories: [libaegisub_inc, libresrc_inc, version_inc, include_directories('src')],
-                     cpp_pch: aegisub_cpp_pch,
-                     c_pch: aegisub_c_pch,
-                     install: true,
-                     install_dir: bindir,
-                     dependencies: deps,
-                     win_subsystem: 'windows')
+
+# Aegisub is the headless host: the whole engine as a service, with no
+# wxWidgets user interface. The GPUI front end draws everything.
+gpui_host = executable('aegisub', gpui_host_src + files('src/gpui_host.cpp'), version_h, libresrc_headers, aegisub_order_dep,
+                       c_args: aegisub_defines,
+                       cpp_args: aegisub_defines,
+                       link_with: [libresrc, libaegisub],
+                       link_args: link_args,
+                       link_depends: link_depends,
+                       include_directories: [libaegisub_inc, libresrc_inc, version_inc, include_directories('src')],
+                       cpp_pch: aegisub_cpp_pch,
+                       c_pch: aegisub_c_pch,
+                       install: true,
+                       install_dir: bindir,
+                       dependencies: deps,
+                       win_subsystem: 'windows')

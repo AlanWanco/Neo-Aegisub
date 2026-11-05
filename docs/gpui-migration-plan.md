@@ -15,7 +15,7 @@
 - [x] 从实际 C++ 注册表提供命令名称、帮助、可用/选中状态、原有快捷键和上下文绑定。
 - [x] GPUI 显示平台/用户合并后的菜单、MRU 与可搜索命令入口；支持运行时 Automation 宏。
 - [x] 显式区分 GPUI 交互、共享项目操作、Lua 宏、旧版对话框、仍需旧版控件的命令。
-- [x] 工作台统一深浅主题、紧凑侧栏、标题和文件名同排。Windows 视频画布嵌入主工作区，音频、视频和字幕编辑保持同窗；播放与视觉工具控件仍使用 GPUI。保留编辑区高度分隔条和上下微调按钮；音频图默认高 80 px。
+- [x] 工作台统一深浅主题、紧凑侧栏、标题和文件名同排。视频画布、音频、视频和字幕编辑保持同窗，全部由 GPUI 绘制；播放与视觉工具控件也在 GPUI 内。保留编辑区高度分隔条和上下微调按钮；音频图默认高 80 px。
 - [x] 字幕多选、按字段批量修改、注释、复制/剪切/粘贴、光标处分行与共享撤销/重做。
 - [x] 编辑层、起止时间、样式、角色、效果和边距；完整补丁先校验再修改。
 - [x] 字幕文本草稿在切行、保存和执行操作前提交；按字符映射跨行 UTF-8 文本选区。
@@ -54,7 +54,7 @@
 ## 视频和视觉排版
 
 - [x] 原生时间轴拖动、逐帧/关键帧/当前句跳转、播放位置/速度、显示比例同步。
-- [x] 视频帧由宿主以 BGRA8 二进制直传（`video_frame` + `since` 增量），GPUI 包成 GPU 纹理显示；wx 画布（`VideoDisplay` 窗口、`SetParent` 内嵌、`VideoOutGL`）不再参与 GPUI 路径。
+- [x] 视频帧由宿主以 BGRA8 二进制直传（`video_frame` + `since` 增量），GPUI 包成 GPU 纹理显示；原 wx 画布代码（`VideoDisplay`、`SetParent` 内嵌、`VideoOutGL`）已删除。
 - [x] 视觉工具走 `visual` 协议：宿主把工具绘制记录成图元（`src/visual_render.cpp`），GPUI 覆盖层用路径与文本重画，并把指针位置按画面矩形换算回工具坐标；七种工具与八种矢量子工具可用。
 - [x] 主工作区恢复左右两栏（音频条 + 撑满高度的视频卡片 / 编辑器 + 字幕列表），中间竖向拖动条调列宽；没有视频时预览区显示空态与“打开视频”按钮，标题行、画面和控制行分行排列。
 - [x] 覆盖层单测覆盖 ASS 遮罩非零环绕与反相、缩放后面积不变、信箱留边坐标换算；宿主协议实测 `drag` 4 条、`scale` 18 条、`rotate/z` 37 条、`clip` 13 条图元，按下拖动提交 `\pos`。
@@ -242,3 +242,5 @@ macOS 用用户提供的实际 MP4 对比同一时间片，波形和频谱输出
 2026-11-05 播放同步与读数行：`VideoController` 以音频为主时钟，帧请求过去只在时钟处发出，解码耗时（1080p 实测中位 30 ms、p90 66 ms）直接变成画面落后声音；实测前端上屏帧号与音频位置相差中位 −54 ms，约两帧。现在 `RequestFrame` 记录每个仍在途帧的请求时刻，帧落地时由帧接收方调用 `NoteFrameArrived` 更新一个 0.3 系数的 EMA（上限 120 ms），`OnPlayTimer` 用「时钟 + 该提前量」决定要哪一帧，`Stop` 则先取停止时刻再落帧，避免停在提前量上。同一测量点复测：中位 −24 ms、p90 +13 ms；播放 3 秒内 `frame` 26→51→74 且 `video_time` 2466 ms 对 `audio.position` 2461 ms。wx 侧 `VideoDisplay::UploadFrameData` 同样回调，休眠路径行为不变。注意 wx 对同一 handler 上同一事件只派发一个绑定，所以延迟测量不能再 `Bind(EVT_FRAME_READY)`，改由帧接收方回传帧号。视频读数行（帧号 · 显示比例 · 帧率）此前多套了一层 `text_sm`，比所在行的 `text_xs` 大一档，已还原。Rust 17 项测试与 Meson 两组测试通过。
 
 2026-11-05 宿主错误日志不再弹出模态框：GPUI 接管界面后 wx 主窗口是隐藏的，`wxLogGui` 仍会把错误日志排成对话框，`wxMessageBox` 在不可见窗口上 `NSAlert runModal` 直接把主线程和桥接一起卡死（复现：视频上下文按下帮助键，浏览器启动失败后整机无响应，`sample` 停在 `wxLogGui::Flush`）。`src/main.cpp` 新增 `FrontendLogTarget`，`gpui::FrontendAttached()` 为真时把日志写到 stderr，否则交回 `wxLogGui`。验证：同一操作现在只输出 `wx log: 无法在默认浏览器中打开 URL "http://docs.aegisub.org/3.5/Main_Page/"。（错误 2：No such file or directory）`，桥接持续应答，视频上下文空格键播放／暂停连续五次切换均生效。
+
+2026-11-05 去 wxWidgets 界面：宿主不再包含任何 wx 窗口，改成纯服务进程 `aegisub`（`meson.build` 的 `gpui_host`）。它启动后创建单个 `agi::Context`、启动回环桥接，再以 `--bridge`/`--token` 拉起 GPUI 前端；前端退出即宿主退出。删除 100 余个 wx 界面文件（主窗口、菜单、工具栏、全部 `dialog_*`、音频/视频控件、字幕网格、查找替换等），命令层统一改为 `gpui::PushCommand`/`PushStatus`，提示与询问改为 `PushNotice`/`PushChoice`，需要同步答案的编码、音轨、FPS 选择走 `gpui::AskChoice`（在自己的事件循环上等待前端 `notice_choice`）。帧回调改为 `AsyncVideoSink` + `agi::signal`，播放计时与桥接轮询改用 `gpui::Timer`/`EventLoop`。音频渲染不再依赖 `wxBitmap`，改为自有 BGRA8 `AudioCanvas`；音频标记样式改为 `agi::Color` + 宽度/虚线；字幕格显示文本、自动保存扫描、EBU 设置、版本检查、进度对话框都改为无 wx 实现。验证：`ninja -C build-ui-gpui aegisub` 通过，Meson 两组测试通过；真实进程烟雾测试覆盖打开/编辑/撤销/保存 ASS、音频频谱与波形像素、MicroDVD 的 FPS 询问往返、导出过滤器与 58 种编码列表、253 个字体名，宿主随 SIGTERM 退出。仍链接 wx 的部分仅剩文本尺寸估算、图像编码/剪贴板、字体枚举、`wxString`/本地化等基础类型，界面路径已无 wx 窗口或模态循环。

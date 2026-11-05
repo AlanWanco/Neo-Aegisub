@@ -35,9 +35,6 @@
 
 class AssDialogue;
 class AssOverrideParameter;
-class wxCheckBox;
-class wxRadioButton;
-class wxTextCtrl;
 
 /// @class AssTransformFramerateFilter
 /// @brief Transform subtitle times, including those in override tags, from an input framerate to an output framerate
@@ -52,14 +49,6 @@ class AssTransformFramerateFilter final : public AssExportFilter {
 	// Yes, these are backwards. It sort of makes sense if you think about what it's doing.
 	agi::vfr::Framerate Input;  ///< Destination frame rate
 	agi::vfr::Framerate Output; ///< Source frame rate
-
-	wxTextCtrl *InputFramerate; ///< Input frame rate text box
-	wxTextCtrl *OutputFramerate; ///< Output frame rate text box
-
-	wxRadioButton *RadioOutputCFR; ///< CFR radio control
-	wxRadioButton *RadioOutputVFR; ///< VFR radio control
-
-	wxCheckBox *Reverse; ///< Switch input and output
 
 	/// @brief Apply the transformation to a file
 	/// @param subs File to process
@@ -81,7 +70,6 @@ class AssTransformFramerateFilter final : public AssExportFilter {
 	int ConvertTime(int time);
 public:
 	AssTransformFramerateFilter();
-	void ProcessSubs(AssFile *subs, wxWindow *) override;
-	wxWindow *GetConfigDialogWindow(wxWindow *parent, agi::Context *c) override;
+	void ProcessSubs(AssFile *subs) override;
 	void LoadSettings(bool is_default, agi::Context *c) override;
 };

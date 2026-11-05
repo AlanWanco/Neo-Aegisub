@@ -45,7 +45,8 @@
 #include "command/command.h"
 #include "compat.h"
 #include "format.h"
-#include "frame_main.h"
+#include "gpui_bridge.h"
+#include "progress_runner.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "project.h"
@@ -71,7 +72,6 @@
 #include <mutex>
 #include <wx/clipbrd.h>
 #include <wx/log.h>
-#include <wx/msgdlg.h>
 
 using namespace agi::lua;
 using namespace Automation4;
@@ -320,13 +320,13 @@ namespace {
 	int lua_set_status_text(lua_State *L)
 	{
 		const agi::Context *c = get_context(L);
-		if (!c || !c->frame) {
+        if (!c) {
 			lua_pushnil(L);
 			return 1;
 		}
 		std::string text = check_string(L, 1);
 		lua_pop(L, 1);
-		agi::dispatch::Main().Async([=] { c->frame->StatusTimeout(to_wx(text)); });
+        agi::dispatch::Main().Async([=] { gpui::PushStatus(text); });
 		return 0;
 	}
 
@@ -378,7 +378,7 @@ namespace {
 	/// @param parent Parent window for the progress dialog
 	/// @param can_open_config Can the function open its own dialogs?
 	/// @throws agi::UserCancelException if the function fails to run to completion (either due to cancelling or errors)
-	void LuaThreadedCall(lua_State *L, int nargs, int nresults, std::string const& title, wxWindow *parent, bool can_open_config);
+	void LuaThreadedCall(lua_State *L, int nargs, int nresults, std::string const& title);
 
 	class LuaCommand final : public cmd::Command, private LuaFeature {
 		std::string cmd_name;
@@ -405,17 +405,11 @@ namespace {
 	};
 
 	class LuaExportFilter final : public ExportFilter, private LuaFeature {
-		bool has_config;
-		LuaDialog *config_dialog;
-
-	protected:
-		std::unique_ptr<ScriptDialog> GenerateConfigDialog(wxWindow *parent, agi::Context *c) override;
-
 	public:
 		LuaExportFilter(lua_State *L);
 		static int LuaRegister(lua_State *L);
 
-		void ProcessSubs(AssFile *subs, wxWindow *export_dialog) override;
+		void ProcessSubs(AssFile *subs) override;
 	};
 	class LuaScript final : public Script {
 		lua_State *L = nullptr;
@@ -688,13 +682,15 @@ namespace {
 		return lua_gettop(L) - pretop;
 	}
 
-	void LuaThreadedCall(lua_State *L, int nargs, int nresults, std::string const& title, wxWindow *parent, bool can_open_config)
+	void LuaThreadedCall(lua_State *L, int nargs, int nresults, std::string const& title)
 	{
 		bool failed = false;
-		BackgroundScriptRunner bsr(parent, title);
+		ProgressRunner runner;
 		try {
-			bsr.Run([&](ProgressSink *ps) {
-				LuaProgressSink lps(L, ps, can_open_config);
+			runner.Run([&](agi::ProgressSink *raw) {
+				ProgressSink aps(raw);
+				ProgressSink *ps = &aps;
+				LuaProgressSink lps(L, ps);
 
 				// Insert our error handler under the function to call
 				lua_pushcclosure(L, add_stack_trace, 0);
@@ -882,7 +878,7 @@ namespace {
 		push_value(L, original_active);
 
 		try {
-			LuaThreadedCall(L, 3, 2, from_wx(StrDisplay(c)), c->parent, true);
+            LuaThreadedCall(L, 3, 2, from_wx(StrDisplay(c)));
 		}
 		catch (agi::UserCancelException const&) {
 			subsobj->Cancel();
@@ -1017,7 +1013,6 @@ namespace {
 		// store config function
 		push_value(L, "config");
 		lua_pushvalue(L, 5);
-		has_config = lua_isfunction(L, -1);
 		lua_rawset(L, -3);
 
 		// store the table in the registry
@@ -1037,7 +1032,7 @@ namespace {
 		return 0;
 	}
 
-	void LuaExportFilter::ProcessSubs(AssFile *subs, wxWindow *export_dialog)
+	void LuaExportFilter::ProcessSubs(AssFile *subs)
 	{
 		LuaStackcheck stackcheck(L);
 
@@ -1050,21 +1045,14 @@ namespace {
 		assert(lua_isuserdata(L, -1));
 		stackcheck.check_stack(2);
 
-		// config
-		if (has_config && config_dialog) {
-			int results_produced = config_dialog->LuaReadBack(L);
-			assert(results_produced == 1);
-			(void) results_produced;	// avoid warning on release builds
-			// TODO, write back stored options here
-		} else {
-			// no config so put an empty table instead
-			lua_newtable(L);
-		}
+        // config: the config panel is front-end owned and not wired up yet,
+        // so the script receives an empty table
+        lua_newtable(L);
 		assert(lua_istable(L, -1));
 		stackcheck.check_stack(3);
 
 		try {
-			LuaThreadedCall(L, 2, 0, GetName(), export_dialog, false);
+			LuaThreadedCall(L, 2, 0, GetName());
 			stackcheck.check_stack(0);
 			subsobj->ProcessingComplete();
 		}
@@ -1074,34 +1062,6 @@ namespace {
 		}
 	}
 
-	std::unique_ptr<ScriptDialog> LuaExportFilter::GenerateConfigDialog(wxWindow *, agi::Context *c)
-	{
-		if (!has_config)
-			return nullptr;
-
-		set_context(L, c);
-
-		GetFeatureFunction("config");
-
-		// prepare function call
-		auto subsobj = new LuaAssFile(L, c->ass.get());
-		// stored options
-		lua_newtable(L); // TODO, nothing for now
-
-		// do call
-		int err = lua_pcall(L, 2, 1, 0);
-		subsobj->ProcessingComplete();
-
-		if (err) {
-			wxLogWarning(fmt_tl("Runtime error in Lua config dialog function:\n%s", get_wxstring(L, -1)));
-			lua_pop(L, 1); // remove error message
-		} else {
-			// Create config dialogue from table on top of stack
-			config_dialog = new LuaDialog(L, false);
-		}
-
-		return std::unique_ptr<ScriptDialog>{config_dialog};
-	}
 }
 
 namespace Automation4 {

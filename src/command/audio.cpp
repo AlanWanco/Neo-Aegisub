@@ -33,11 +33,10 @@
 
 #include "../ass_dialogue.h"
 #include "../async_video_provider.h"
-#include "../audio_box.h"
 #include "../audio_controller.h"
-#include "../audio_karaoke.h"
 #include "../audio_timing.h"
 #include "../compat.h"
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
@@ -80,13 +79,8 @@ struct audio_open final : public Command {
 	STR_DISP("Open Audio File")
 	STR_HELP("Open an audio file")
 
-	void operator()(agi::Context *c) override {
-		auto formats = MakeWildcard(GetAudioProviderFileExtensions());
-		auto str = from_wx(_("Audio and Video Formats")) + " (" + formats + ")|" + formats + "|"
-		         + from_wx(_("All Files")) + " (*.*)|*.*";
-		auto filename = OpenFileSelector(c, wxGETTEXT_IN_CONTEXT("dialog title", "Open Audio File"), "Path/Last/Audio", "", "", str, c->parent, "?script");
-		if (!filename.empty())
-			c->project->LoadAudio(filename);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("audio/open");
 	}
 };
 
@@ -172,20 +166,8 @@ struct audio_save_clip final : public Command {
 		return c->project->AudioProvider() && !c->selectionController->GetSelectedSet().empty();
 	}
 
-	void operator()(agi::Context *c) override {
-		auto const& sel = c->selectionController->GetSelectedSet();
-		if (sel.empty()) return;
-
-		auto filename = SaveFileSelector(c, _("Save Audio Clip"), "", "", "wav", "", c->parent);
-		if (filename.empty()) return;
-
-		agi::Time start = INT_MAX, end = 0;
-		for (auto line : sel) {
-			start = std::min(start, line->Start);
-			end = std::max(end, line->End);
-		}
-
-		agi::SaveAudioClip(*c->project->AudioProvider(), filename, start, end);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("audio/save/clip");
 	}
 };
 
@@ -400,8 +382,8 @@ struct audio_go_to final : public validate_audio_open {
 	STR_DISP("Go to selection")
 	STR_HELP("Scroll the audio display to center on the current audio selection")
 
-	void operator()(agi::Context *c) override {
-		c->audioBox->ScrollToActiveLine();
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("audio/go_to");
 	}
 };
 
@@ -411,8 +393,8 @@ struct audio_go_to_start final : public validate_audio_open {
 	STR_DISP("Go to selection start")
 	STR_HELP("Scroll the audio display to center on the start of current audio selection")
 
-	void operator()(agi::Context *c) override {
-		c->audioBox->ScrollToActiveLine(AudioBox::ScrollMode::Start);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("audio/go_to/start");
 	}
 };
 
@@ -422,8 +404,8 @@ struct audio_go_to_end final : public validate_audio_open {
 	STR_DISP("Go to selection end")
 	STR_HELP("Scroll the audio display to center on the end of current audio selection")
 
-	void operator()(agi::Context *c) override {
-		c->audioBox->ScrollToActiveLine(AudioBox::ScrollMode::End);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("audio/go_to/end");
 	}
 };
 
@@ -433,8 +415,8 @@ struct audio_scroll_left final : public validate_audio_open {
 		STR_DISP("Scroll left")
 		STR_HELP("Scroll the audio display left")
 
-		void operator()(agi::Context *c) override {
-			c->audioBox->ScrollAudioBy(-128);
+		void operator()(agi::Context *) override {
+			gpui::PushCommand("audio/scroll/left");
 	}
 };
 
@@ -444,8 +426,8 @@ struct audio_scroll_right final : public validate_audio_open {
 		STR_DISP("Scroll right")
 		STR_HELP("Scroll the audio display right")
 
-		void operator()(agi::Context *c) override {
-			c->audioBox->ScrollAudioBy(128);
+		void operator()(agi::Context *) override {
+			gpui::PushCommand("audio/scroll/right");
 	}
 };
 
@@ -546,11 +528,11 @@ struct audio_karaoke final : public Command {
 	STR_HELP("Toggle karaoke mode")
 	CMD_TYPE(COMMAND_TOGGLE)
 
-	bool IsActive(const agi::Context *c) override {
-		return c->karaoke->IsEnabled();
+	bool IsActive(const agi::Context *) override {
+		return false;
 	}
-	void operator()(agi::Context *c) override {
-		c->karaoke->SetEnabled(!c->karaoke->IsEnabled());
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("audio/karaoke");
 	}
 };
 

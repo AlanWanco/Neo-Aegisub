@@ -34,11 +34,8 @@
 #include "../ass_dialogue.h"
 #include "../async_video_provider.h"
 #include "../compat.h"
-#include "../dialog_detached_video.h"
-#include "../dialog_manager.h"
-#include "../dialogs.h"
 #include "../format.h"
-#include "../frame_main.h"
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../include/aegisub/subtitles_provider.h"
 #include "../libresrc/libresrc.h"
@@ -50,7 +47,6 @@
 #include "../selection_controller.h"
 #include "../utils.h"
 #include "../video_controller.h"
-#include "../video_display.h"
 #include "../video_frame.h"
 
 #include <libaegisub/ass/time.h>
@@ -58,10 +54,11 @@
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
-#include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/split.hpp>
-#include <wx/msgdlg.h>
-#include <wx/textdlg.h>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <cstdlib>
+#include <string>
 
 namespace {
 	using cmd::Command;
@@ -76,7 +73,7 @@ struct validator_video_loaded : public Command {
 struct validator_video_attached : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
-		return !!c->project->VideoProvider() && !c->dialog->Get<DialogDetachedVideo>();
+		return !!c->project->VideoProvider();
 	}
 };
 
@@ -94,7 +91,6 @@ struct video_aspect_cinematic final : public validator_video_loaded {
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
 		c->videoController->SetAspectRatio(AspectRatio::Cinematic);
-		c->frame->SetDisplayMode(1,-1);
 	}
 };
 
@@ -109,35 +105,9 @@ struct video_aspect_custom final : public validator_video_loaded {
 		return c->videoController->GetAspectRatioType() == AspectRatio::Custom;
 	}
 
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-
-		std::string value = from_wx(wxGetTextFromUser(
-			_("Enter aspect ratio in either:\n  decimal (e.g. 2.35)\n  fractional (e.g. 16:9)\n  specific resolution (e.g. 853x480)"),
-			_("Enter aspect ratio"),
-			std::to_wstring(c->videoController->GetAspectRatioValue())));
-		if (value.empty()) return;
-
-		double numval = 0;
-		if (agi::util::try_parse(value, &numval)) {
-			//Nothing to see here, move along
-		}
-		else {
-			std::vector<std::string> chunks;
-			split(chunks, value, boost::is_any_of(":/xX"));
-			if (chunks.size() == 2) {
-				double num, den;
-				if (agi::util::try_parse(chunks[0], &num) && agi::util::try_parse(chunks[1], &den))
-					numval = num / den;
-			}
-		}
-
-		if (numval < 0.5 || numval > 5.0)
-			wxMessageBox(_("Invalid value! Aspect ratio must be between 0.5 and 5.0."),_("Invalid Aspect Ratio"),wxOK | wxICON_ERROR | wxCENTER);
-		else {
-			c->videoController->SetAspectRatio(numval);
-			c->frame->SetDisplayMode(1,-1);
-		}
+	void operator()(agi::Context *) override {
+		// The front end owns the prompt and sends the parsed ratio back.
+		gpui::PushCommand("video/aspect/custom");
 	}
 };
 
@@ -155,7 +125,6 @@ struct video_aspect_default final : public validator_video_loaded {
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
 		c->videoController->SetAspectRatio(AspectRatio::Default);
-		c->frame->SetDisplayMode(1,-1);
 	}
 };
 
@@ -173,7 +142,6 @@ struct video_aspect_full final : public validator_video_loaded {
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
 		c->videoController->SetAspectRatio(AspectRatio::Fullscreen);
-		c->frame->SetDisplayMode(1,-1);
 	}
 };
 
@@ -191,7 +159,6 @@ struct video_aspect_wide final : public validator_video_loaded {
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
 		c->videoController->SetAspectRatio(AspectRatio::Widescreen);
-		c->frame->SetDisplayMode(1,-1);
 	}
 };
 
@@ -213,8 +180,9 @@ struct video_copy_coordinates final : public validator_video_loaded {
 	STR_DISP("Copy coordinates to Clipboard")
 	STR_HELP("Copy the current coordinates of the mouse over the video to the clipboard")
 
-	void operator()(agi::Context *c) override {
-		SetClipboard(c->videoDisplay->GetMousePosition().Str());
+	void operator()(agi::Context *) override {
+		// Only the front end knows where the pointer sits on the picture.
+		gpui::PushCommand("video/copy_coordinates");
 	}
 };
 
@@ -233,7 +201,7 @@ struct video_cycle_subtitles_provider final : public cmd::Command {
 		if (it == end(providers)) it = begin(providers);
 
 		OPT_SET("Subtitle/Provider")->SetString(*it);
-		c->frame->StatusTimeout(fmt_tl("Subtitles provider set to %s", *it), 5000);
+		gpui::PushStatus(from_wx(fmt_tl("Subtitles provider set to %s", *it)));
 	}
 };
 
@@ -245,15 +213,12 @@ struct video_detach final : public validator_video_loaded {
 	STR_HELP("Detach the video display from the main window, displaying it in a separate Window")
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
 
-	bool IsActive(const agi::Context *c) override {
-		return !!c->dialog->Get<DialogDetachedVideo>();
+	bool IsActive(const agi::Context *) override {
+		return false;
 	}
 
-	void operator()(agi::Context *c) override {
-		if (DialogDetachedVideo *d = c->dialog->Get<DialogDetachedVideo>())
-			d->Close();
-		else
-			c->dialog->Show<DialogDetachedVideo>(c);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/detach");
 	}
 };
 
@@ -266,25 +231,7 @@ struct video_details final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
-		ShowVideoDetailsDialog(c);
-	}
-};
-
-struct video_focus_seek final : public validator_video_loaded {
-	CMD_NAME("video/focus_seek")
-	STR_MENU("Toggle video slider focus")
-	STR_DISP("Toggle video slider focus")
-	STR_HELP("Toggle focus between the video slider and the previous thing to have focus")
-
-	void operator()(agi::Context *c) override {
-		wxWindow *curFocus = wxWindow::FindFocus();
-		if (curFocus == c->videoSlider) {
-			if (c->previousFocus) c->previousFocus->SetFocus();
-		}
-		else {
-			c->previousFocus = curFocus;
-			c->videoSlider->SetFocus();
-		}
+		gpui::PushCommand("video/details");
 	}
 };
 
@@ -491,7 +438,11 @@ static void save_snapshot(agi::Context *c, bool raw, bool subsonly = false) {
 		// If where ever that is isn't defined, we can't save there
 		if ((basepath == "\\") || (basepath == "/")) {
 			// So save to the current user's home dir instead
-			basepath = wxGetHomeDir().utf8_str().data();
+#ifdef _WIN32
+			basepath = getenv("USERPROFILE") ? getenv("USERPROFILE") : "";
+#else
+			basepath = getenv("HOME") ? getenv("HOME") : "";
+#endif
 		}
 	}
 	// Actual fixed (possibly relative) path, decode it
@@ -552,8 +503,7 @@ struct video_jump final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
-		ShowJumpToDialog(c);
-		c->videoSlider->SetFocus();
+		gpui::PushCommand("video/jump");
 	}
 };
 
@@ -590,13 +540,8 @@ struct video_open final : public Command {
 	STR_DISP("Open Video")
 	STR_HELP("Open a video file")
 
-	void operator()(agi::Context *c) override {
-		auto formats = MakeWildcard(VideoProviderFactory::GetFileExtensions());
-		auto str = from_wx(_("Video Formats")) + " (" + formats + ")|" + formats + "|"
-		         + from_wx(_("All Files")) + " (*.*)|*.*";
-		auto filename = OpenFileSelector(c, _("Open Video File"), "Path/Last/Video", "", "", str, c->parent, "?script");
-		if (!filename.empty())
-			c->project->LoadVideo(filename);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/open");
 	}
 };
 
@@ -607,10 +552,8 @@ struct video_open_dummy final : public Command {
 	STR_DISP("Use Dummy Video")
 	STR_HELP("Open a placeholder video clip with solid color")
 
-	void operator()(agi::Context *c) override {
-		std::string fn = CreateDummyVideo(c->parent);
-		if (!fn.empty())
-			c->project->LoadVideo(fn);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/open/dummy");
 	}
 };
 
@@ -720,21 +663,20 @@ struct video_show_overscan final : public validator_video_loaded {
 		return OPT_GET("Video/Overscan Mask")->GetBool();
 	}
 
-	void operator()(agi::Context *c) override {
+	void operator()(agi::Context *) override {
 		OPT_SET("Video/Overscan Mask")->SetBool(!OPT_GET("Video/Overscan Mask")->GetBool());
-		c->videoDisplay->Render();
 	}
 };
 
 struct video_reset_pan final : public validator_video_loaded {
-       CMD_NAME("video/reset_pan")
-       STR_MENU("Reset Video &Pan")
-       STR_DISP("Reset Video Pan")
-       STR_HELP("Reset the video's position in the video display")
+	CMD_NAME("video/reset_pan")
+	STR_MENU("Reset Video &Pan")
+	STR_DISP("Reset Video Pan")
+	STR_HELP("Reset the video's position in the video display")
 
-       void operator()(agi::Context *c) override {
-		   c->videoDisplay->ResetContentZoom();
-       }
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/reset_pan");
+	}
 };
 
 class video_zoom_100: public validator_video_attached {
@@ -745,13 +687,13 @@ public:
 	STR_HELP("Set zoom to 100%")
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
-	bool IsActive(const agi::Context *c) override {
-		return c->videoDisplay->GetWindowZoom() == 1.;
+	bool IsActive(const agi::Context *) override {
+		return false;
 	}
 
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
-		c->videoDisplay->SetWindowZoom(1.);
+		gpui::PushCommand("video/zoom/100");
 	}
 };
 
@@ -768,42 +710,6 @@ public:
 	}
 };
 
-class video_zoom_200: public validator_video_attached {
-public:
-	CMD_NAME("video/zoom/200")
-	STR_MENU("&200%")
-	STR_DISP("200%")
-	STR_HELP("Set zoom to 200%")
-	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
-
-	bool IsActive(const agi::Context *c) override {
-		return c->videoDisplay->GetWindowZoom() == 2.;
-	}
-
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoDisplay->SetWindowZoom(2.);
-	}
-};
-
-class video_zoom_50: public validator_video_attached {
-public:
-	CMD_NAME("video/zoom/50")
-	STR_MENU("&50%")
-	STR_DISP("50%")
-	STR_HELP("Set zoom to 50%")
-	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
-
-	bool IsActive(const agi::Context *c) override {
-		return c->videoDisplay->GetWindowZoom() == .5;
-	}
-
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoDisplay->SetWindowZoom(.5);
-	}
-};
-
 struct video_zoom_in final : public validator_video_attached {
 	CMD_NAME("video/zoom/in")
 	CMD_ICON(zoom_in_button)
@@ -811,8 +717,8 @@ struct video_zoom_in final : public validator_video_attached {
 	STR_DISP("Zoom In")
 	STR_HELP("Zoom video in")
 
-	void operator()(agi::Context *c) override {
-		c->videoDisplay->SetWindowZoom(c->videoDisplay->GetWindowZoom() + .125);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/zoom/in");
 	}
 };
 
@@ -823,8 +729,8 @@ struct video_zoom_out final : public validator_video_attached {
 	STR_DISP("Zoom Out")
 	STR_HELP("Zoom video out")
 
-	void operator()(agi::Context *c) override {
-		c->videoDisplay->SetWindowZoom(c->videoDisplay->GetWindowZoom() - .125);
+	void operator()(agi::Context *) override {
+		gpui::PushCommand("video/zoom/out");
 	}
 };
 }
@@ -841,7 +747,6 @@ namespace cmd {
 		reg(std::make_unique<video_cycle_subtitles_provider>());
 		reg(std::make_unique<video_detach>());
 		reg(std::make_unique<video_details>());
-		reg(std::make_unique<video_focus_seek>());
 		reg(std::make_unique<video_frame_copy>());
 		reg(std::make_unique<video_frame_copy_raw>());
 		reg(std::make_unique<video_frame_copy_subs>());
@@ -872,8 +777,6 @@ namespace cmd {
 		reg(std::make_unique<video_reset_pan>());
 		reg(std::make_unique<video_stop>());
 		reg(std::make_unique<video_zoom_100>());
-		reg(std::make_unique<video_zoom_200>());
-		reg(std::make_unique<video_zoom_50>());
 		reg(std::make_unique<video_zoom_in>());
 		reg(std::make_unique<video_zoom_out>());
 	}

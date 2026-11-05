@@ -32,8 +32,8 @@
 #include "command.h"
 
 #include "../auto4_base.h"
-#include "../dialogs.h"
-#include "../frame_main.h"
+#include "../compat.h"
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
@@ -51,7 +51,7 @@ struct reload_all final : public Command {
 	void operator()(agi::Context *c) override {
 		config::global_scripts->Reload();
 		c->local_scripts->Reload();
-		c->frame->StatusTimeout(_("Reloaded all Automation scripts"));
+		gpui::PushStatus(from_wx(_("Reloaded all Automation scripts")));
 	}
 };
 
@@ -61,9 +61,9 @@ struct reload_autoload final : public Command {
 	STR_DISP("Reload autoload Automation scripts")
 	STR_HELP("Rescan the Automation autoload folder")
 
-	void operator()(agi::Context *c) override {
+	void operator()([[maybe_unused]] agi::Context *c) override {
 		config::global_scripts->Reload();
-		c->frame->StatusTimeout(_("Reloaded autoload Automation scripts"));
+		gpui::PushStatus(from_wx(_("Reloaded autoload Automation scripts")));
 	}
 };
 
@@ -74,8 +74,8 @@ struct open_manager final : public Command {
 	STR_DISP("Automation")
 	STR_HELP("Open automation manager")
 
-	void operator()(agi::Context *c) override {
-		ShowAutomationDialog(c);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("am/manager");
 	}
 };
 
@@ -86,15 +86,8 @@ struct meta final : public Command {
 	STR_DISP("Automation")
 	STR_HELP("Open automation manager. Ctrl: Rescan autoload folder. Ctrl+Shift: Rescan autoload folder and reload all automation scripts")
 
-	void operator()(agi::Context *c) override {
-		if (wxGetMouseState().CmdDown()) {
-			if (wxGetMouseState().ShiftDown())
-				cmd::call("am/reload", c);
-			else
-				cmd::call("am/reload/autoload", c);
-		}
-		else
-			cmd::call("am/manager", c);
+	void operator()([[maybe_unused]] agi::Context *c) override {
+		gpui::PushCommand("am/meta");
 	}
 };
 

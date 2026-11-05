@@ -32,10 +32,9 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/signal.h>
 
+#include "gpui_loop.h"
+
 #include <cstdint>
-#include <wx/event.h>
-#include <wx/power.h>
-#include <wx/timer.h>
 
 class AudioPlayer;
 class AudioTimingController;
@@ -48,7 +47,7 @@ namespace agi { struct Context; }
 ///
 /// AudioController owns an AudioPlayer and uses it to play audio from the
 /// project's current audio provider.
-class AudioController final : public wxEvtHandler, private agi::signal::ConnectionScope {
+class AudioController final : private agi::signal::ConnectionScope {
 	/// Project context this controller belongs to
 	agi::Context *context;
 
@@ -92,7 +91,7 @@ class AudioController final : public wxEvtHandler, private agi::signal::Connecti
 	PlaybackMode playback_mode = PM_NotPlaying;
 
 	/// Timer used for playback position updates
-	wxTimer playback_timer;
+	gpui::Timer playback_timer;
 
 	/// The audio provider
 	agi::AudioProvider *provider = nullptr;
@@ -100,8 +99,8 @@ class AudioController final : public wxEvtHandler, private agi::signal::Connecti
 
 	void OnAudioProvider(agi::AudioProvider *new_provider);
 
-	/// Event handler for the playback timer
-	void OnPlaybackTimer(wxTimerEvent &event);
+	/// Called by the playback timer to publish the position
+	void OnPlaybackTimer();
 
 	/// @brief Timing controller signals primary playback range changed
 	void OnTimingControllerUpdatedPrimaryRange();
@@ -111,13 +110,6 @@ class AudioController final : public wxEvtHandler, private agi::signal::Connecti
 
 	/// Handler for the current audio player changing
 	void OnAudioPlayerChanged();
-
-#ifdef wxHAS_POWER_EVENTS
-	/// Handle computer going into suspend mode by stopping audio and closing device
-	void OnComputerSuspending(wxPowerEvent &event);
-	/// Handle computer resuming from suspend by re-opening the audio device
-	void OnComputerResuming(wxPowerEvent &event);
-#endif
 
 	/// @brief Convert a count of audio samples to a time in milliseconds
 	/// @param samples Sample count to convert

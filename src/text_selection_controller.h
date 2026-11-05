@@ -18,18 +18,11 @@
 
 #include <libaegisub/signal.h>
 
-class wxStyledTextCtrl;
-class wxStyledTextEvent;
-
+/// The text selection of the active line, owned by the window that draws it.
 class TextSelectionController {
 	int selection_start = 0;
 	int selection_end = 0;
 	int insertion_point = 0;
-	bool changing = false;
-
-	wxStyledTextCtrl *ctrl = nullptr;
-
-	void UpdateUI(wxStyledTextEvent &evt);
 
 	agi::signal::Signal<> AnnounceSelectionChanged;
 
@@ -40,9 +33,6 @@ public:
 	int GetSelectionStart() const { return selection_start; }
 	int GetSelectionEnd() const { return selection_end; }
 	int GetInsertionPoint() const { return insertion_point; }
-
-	void SetControl(wxStyledTextCtrl *ctrl);
-	~TextSelectionController();
 
 	DEFINE_SIGNAL_ADDERS(AnnounceSelectionChanged, AddSelectionListener)
 };

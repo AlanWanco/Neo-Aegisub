@@ -28,7 +28,6 @@
 #include <libaegisub/format.h>
 
 #include <cmath>
-#include <wx/colour.h>
 
 VisualToolRotateXY::VisualToolRotateXY(VisualToolHost *parent, agi::Context *context)
 : VisualTool<VisualDraggableFeature>(parent, context)
@@ -44,8 +43,8 @@ void VisualToolRotateXY::Draw() {
 	DrawAllFeatures();
 
 	// Load colors from options
-	wxColour line_color_primary = to_wx(line_color_primary_opt->GetColor());
-	wxColour line_color_secondary = to_wx(line_color_secondary_opt->GetColor());
+	agi::Color line_color_primary = line_color_primary_opt->GetColor();
+	agi::Color line_color_secondary = line_color_secondary_opt->GetColor();
 
 	// Transform grid
 	gl.SetOrigin(org->pos);
@@ -57,9 +56,9 @@ void VisualToolRotateXY::Draw() {
 	// Draw grid
 	gl.SetLineColour(line_color_secondary, 0.5f, 2);
 	gl.SetModeLine();
-	float r = line_color_secondary.Red() / 255.f;
-	float g = line_color_secondary.Green() / 255.f;
-	float b = line_color_secondary.Blue() / 255.f;
+	float r = line_color_secondary.r / 255.f;
+	float g = line_color_secondary.g / 255.f;
+	float b = line_color_secondary.b / 255.f;
 
 	// Number of lines on each side of each axis
 	static const int radius = 15;

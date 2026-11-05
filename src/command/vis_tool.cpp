@@ -16,10 +16,10 @@
 
 #include "command.h"
 
+#include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
 #include "../project.h"
-#include "../video_display.h"
 #include "../visual_tool_clip.h"
 #include "../visual_tool_cross.h"
 #include "../visual_tool_drag.h"
@@ -40,12 +40,12 @@ namespace {
 			return !!c->project->VideoProvider();
 		}
 
-		bool IsActive(const agi::Context *c) override {
-			return c->videoDisplay->ToolIsType(typeid(T));
+		bool IsActive(const agi::Context *) override {
+			return false;
 		}
 
-		void operator()(agi::Context *c) override {
-			c->videoDisplay->SetTool(std::make_unique<T>(c->videoDisplay, c));
+		void operator()(agi::Context *) override {
+			gpui::PushCommand(name());
 		}
 	};
 
@@ -57,13 +57,12 @@ namespace {
 			return !!c->project->VideoProvider();
 		}
 
-		bool IsActive(const agi::Context *c) override {
-			return c->videoDisplay->ToolIsType(typeid(VisualToolVectorClip)) && c->videoDisplay->GetSubTool() == M;
+		bool IsActive(const agi::Context *) override {
+			return false;
 		}
 
-		void operator()(agi::Context *c) override {
-			c->videoDisplay->SetTool(std::make_unique<VisualToolVectorClip>(c->videoDisplay, c));
-			c->videoDisplay->SetSubTool(M);
+		void operator()(agi::Context *) override {
+			gpui::PushCommand(name());
 		}
 	};
 

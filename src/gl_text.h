@@ -27,22 +27,19 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+/// @file gl_text.h
+/// @see gl_text.cpp
+/// @ingroup video_output
+///
+
 #pragma once
 
-#include <boost/container/map.hpp>
+#include <libaegisub/color.h>
 
 #include <string>
-#include <vector>
 
-#include <wx/font.h>
-
-struct OpenGLTextGlyph;
-class OpenGLTextTexture;
-
-namespace agi { struct Color; }
-
-typedef boost::container::map<int, OpenGLTextGlyph> glyphMap;
-
+/// Text for the visual tools. The front end shapes and draws it, so this only
+/// keeps the current font and colour and reports what to draw.
 class OpenGLText {
 	float r = 1.f, g = 1.f, b = 1.f, a = 1.f;
 
@@ -50,47 +47,30 @@ class OpenGLText {
 	bool fontBold = false;
 	bool fontItalics = false;
 	std::string fontFace;
-	wxFont font;
 
-	glyphMap glyphs;
-
-	std::vector<OpenGLTextTexture> textures;
-
-	OpenGLText(OpenGLText const&) = delete;
-	OpenGLText& operator=(OpenGLText const&) = delete;
-
-	/// @brief Get the glyph for the character chr, creating it if necessary
-	/// @param chr Character to get the glyph of
-	/// @return The appropriate OpenGLTextGlyph
-	OpenGLTextGlyph const& GetGlyph(int chr);
-	/// @brief Create a new glyph
-	OpenGLTextGlyph const& CreateGlyph(int chr);
-
-	void DrawString(const std::string &text,int x,int y);
 public:
-	/// @brief Get the currently active font
-	wxFont GetFont() const { return font; }
-
 	/// @brief Set the currently active font
 	/// @param face    Name of the desired font
 	/// @param size    Size in points of the desired font
 	/// @param bold    Should the font be bold?
 	/// @param italics Should the font be italic?
 	void SetFont(std::string const& face, int size, bool bold, bool italics);
+	/// @brief Get the currently active font
+	std::string const& GetFontFace() const { return fontFace; }
+	int GetFontSize() const { return fontSize; }
 	/// @brief Set the text color
 	/// @param col   Color
 	void SetColour(agi::Color col);
-	/// @brief Print a string on screen
+	/// @brief Record a string for the front end to draw
 	/// @param text String to print
 	/// @param x    x coordinate
 	/// @param y    y coordinate
-	void Print(const std::string &text,int x,int y);
+	void Print(std::string const& text, int x, int y);
 	/// @brief Get the extents of a string printed with the current font in pixels
 	/// @param text String to get extends of
 	/// @param[out] w    Width
 	/// @param[out] h    Height
-	void GetExtent(const std::string &text,int &w,int &h);
+	void GetExtent(std::string const& text, int &w, int &h);
 
-	OpenGLText();
-	~OpenGLText();
+	OpenGLText() = default;
 };

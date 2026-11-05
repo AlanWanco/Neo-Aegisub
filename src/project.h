@@ -24,8 +24,7 @@
 #include <vector>
 
 class AsyncVideoProvider;
-class DialogProgress;
-class wxString;
+class ProgressRunner;
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; }
 struct ProjectProperties;
@@ -47,10 +46,9 @@ class Project : private agi::signal::ConnectionScope {
 	agi::signal::Signal<std::vector<int> const&> AnnounceKeyframesModified;
 
 	bool video_has_subtitles = false;
-	DialogProgress *progress = nullptr;
+	ProgressRunner *progress = nullptr;
 	agi::Context *context = nullptr;
 
-	void ShowError(wxString const& message);
 	void ShowError(std::string const& message);
 
 	bool DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties);
