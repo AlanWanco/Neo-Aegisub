@@ -87,14 +87,30 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 
 void VideoController::OnActiveLineChanged(AssDialogue *line) {
 	if (line && provider && OPT_GET("Video/Subtitle Sync")->GetBool()) {
-		Stop();
+		HaltPlayback();
 		JumpToTime(line->Start);
 	}
 }
 
 void VideoController::RequestFrame() {
 	context->ass->Properties.video_position = frame_n;
+	// Keep a little history: the only request that survives is the newest one,
+	// but a frame can still arrive for a request a tick or two old.
+	request_times[frame_n] = std::chrono::steady_clock::now();
+	while (request_times.size() > 8) request_times.erase(request_times.begin());
 	provider->RequestFrame(frame_n, TimeAtFrame(frame_n));
+}
+
+void VideoController::NoteFrameArrived(int frame_number) {
+	auto const request = request_times.find(frame_number);
+	if (request == request_times.end()) return;
+	using namespace std::chrono;
+	double const measured = duration<double, std::milli>(steady_clock::now() - request->second).count();
+	// Anything older will not arrive now that this one has.
+	request_times.erase(request_times.begin(), std::next(request));
+	// Smooth hard: a single slow frame must not make the picture jump ahead of
+	// the sound, and the estimate only ever shifts the request, not the clock.
+	frame_latency_ms = frame_latency_ms * .7 + mid(0., measured, 120.) * .3;
 }
 
 void VideoController::JumpToFrame(int n) {
@@ -102,7 +118,7 @@ void VideoController::JumpToFrame(int n) {
 
 	bool was_playing = IsPlaying();
 	if (was_playing)
-		Stop();
+		HaltPlayback();
 
 	frame_n = mid(0, n, provider->GetFrameCount() - 1);
 	RequestFrame();
@@ -154,7 +170,7 @@ void VideoController::Play() {
 }
 
 void VideoController::PlayLine() {
-	Stop();
+	HaltPlayback();
 
 	AssDialogue *curline = context->selectionController->GetActiveLine();
 	if (!curline) return;
@@ -175,6 +191,21 @@ void VideoController::PlayLine() {
 }
 
 void VideoController::Stop() {
+	if (!IsPlaying()) return;
+	// The frame asked for last is the one the audio will have reached by the
+	// time it finished decoding, so pausing there would leave the picture a
+	// couple of frames early. Stop where the sound actually stopped.
+	double const stopped_at = GetPlaybackTime();
+	HaltPlayback();
+	int const frame = FrameAtTime(static_cast<int>(stopped_at));
+	if (frame != frame_n) {
+		frame_n = frame;
+		RequestFrame();
+		Seek(frame_n);
+	}
+}
+
+void VideoController::HaltPlayback() {
 	if (IsPlaying()) {
 		playback.Stop();
 		context->audioController->Stop();
@@ -215,10 +246,18 @@ void VideoController::OnPlayTimer(wxTimerEvent &) {
         playback_start_time = steady_clock::now();
     }
     double time = std::min<double>(GetPlaybackTime(), std::numeric_limits<int>::max());
-    int next_frame = FrameAtTime(static_cast<int>(time));
+	int const clock_frame = FrameAtTime(static_cast<int>(time));
+	// Decoding takes a while, and the picture is displayed the moment it lands.
+	// Asking for the frame the audio will have reached by then keeps the two
+	// together; without it the picture trails the sound by the decoding time.
+	int next_frame = clock_frame;
+	if (context->audioController->IsPlaying() && loop_end_ms < 0)
+		next_frame = FrameAtTime(static_cast<int>(time + frame_latency_ms));
 	if (next_frame == frame_n) return;
 
-	if (next_frame >= end_frame) {
+	// The end of the range is decided by the clock, not by the frame asked for
+	// ahead of it, or playback would stop early by the lookahead.
+	if (clock_frame >= end_frame) {
 		if (!OPT_GET("Video/Loop Playback")->GetBool()) {
 			Stop();
 			return;

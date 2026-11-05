@@ -219,6 +219,7 @@ bool VideoDisplay::InitContext() {
 }
 
 void VideoDisplay::UploadFrameData(FrameReadyEvent &evt) {
+    con->videoController->NoteFrameArrived(evt.frame_number);
     // A hidden display (the legacy one under the GPUI shell, or a closing native window) must
     // not hold frames or queue GL work. A shown display gets a fresh frame from VideoSurface::Show.
     if (!IsShownOnScreen()) {

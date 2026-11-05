@@ -34,6 +34,7 @@
 #include <libaegisub/ycbcr.h>
 
 #include <chrono>
+#include <map>
 #include <optional>
 
 #include <wx/timer.h>
@@ -97,6 +98,15 @@ class VideoController final : public wxEvtHandler {
 	/// which may not be the same thing as the currently displayed frame
 	int frame_n = 0;
 
+	/// Measured time from asking the provider for a frame to it arriving, in
+	/// milliseconds. Playback asks for frames this far ahead so the picture that
+	/// lands is the one the audio has already reached instead of trailing it.
+	double frame_latency_ms = 0.;
+
+	/// When each frame still expected from the provider was asked for. Frames
+	/// superseded before they decode never arrive, so this map stays tiny.
+	std::map<int, std::chrono::steady_clock::time_point> request_times;
+
 	/// The picture aspect ratio of the video if the aspect ratio has been
 	/// overridden by the user
 	double ar_value = 1.;
@@ -118,6 +128,11 @@ class VideoController final : public wxEvtHandler {
 	void OnNewVideoProvider(AsyncVideoProvider *provider);
 	void OnActiveLineChanged(AssDialogue *line);
 
+	/// Stops the clocks without moving the displayed frame; callers that are
+	/// about to seek use this instead of Stop() to avoid decoding a frame they
+	/// are leaving anyway.
+	void HaltPlayback();
+
 	void RequestFrame();
 
 public:
@@ -128,6 +143,12 @@ public:
 
 	/// Get the current frame number
 	int GetFrameN() const { return frame_n; }
+
+	/// Tells the controller that a decoded frame arrived, so playback can learn
+	/// how long decoding takes and ask ahead by that much. The frame sink calls
+	/// this; the controller does not bind the frame event itself, because wx
+	/// dispatches an event to a single binding per handler.
+	void NoteFrameArrived(int frame_number);
 
 	/// Get the actual aspect ratio from a predefined AR type
 	double GetARFromType(AspectRatio type) const;
