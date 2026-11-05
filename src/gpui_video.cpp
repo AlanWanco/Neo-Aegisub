@@ -4,12 +4,14 @@
 #include "gpui_video.h"
 
 #include "async_video_provider.h"
+#include "command/command.h"
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "project.h"
 #include "video_controller.h"
 #include "video_display.h"
 #include "video_provider_dummy.h"
+#include "visual_tool_vector_clip.h"
 
 #include <libaegisub/cajun/writer.h>
 #include <libaegisub/color.h>
@@ -18,8 +20,13 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
+
+#include <wx/frame.h>
+#include <wx/sizer.h>
 
 namespace gpui {
 std::string VideoSettings(agi::Context *context, json::Object const& request) {
@@ -112,5 +119,230 @@ std::string VideoSettings(agi::Context *context, json::Object const& request) {
 	auto response = stream.str();
 	response.erase(std::remove(response.begin(), response.end(), '\n'), response.end());
 	return response;
+}
+
+namespace {
+/// Maps the front end's tool names to the existing visual tool commands.
+std::string_view ToolCommand(std::string_view tool) {
+    if (tool == "cross") return "video/tool/cross";
+    if (tool == "drag") return "video/tool/drag";
+    if (tool == "rotate/z") return "video/tool/rotate/z";
+    if (tool == "rotate/xy") return "video/tool/rotate/xy";
+    if (tool == "scale") return "video/tool/scale";
+    if (tool == "clip") return "video/tool/clip";
+    if (tool == "vector_clip") return "video/tool/vector_clip";
+    throw std::invalid_argument("unknown visual tool");
+}
+
+/// JSON numbers may arrive as doubles or integers.
+double NumberOf(json::UnknownElement const& value) {
+    try {
+        return static_cast<json::Double const&>(value);
+    }
+    catch (json::Exception const&) {
+        return static_cast<double>(static_cast<json::Integer const&>(value));
+    }
+}
+
+std::string Encode(json::Object& object) {
+    std::ostringstream stream;
+    agi::JsonWriter::Write(object, stream);
+    auto response = stream.str();
+    response.erase(std::remove(response.begin(), response.end(), '\n'), response.end());
+    return response;
+}
+}
+
+struct VideoSurface::Impl {
+    agi::Context *context;
+    /// Top-level window holding only the canvas; null while closed.
+    wxFrame *frame = nullptr;
+    /// The video display drawing into frame; null while closed.
+    VideoDisplay *display = nullptr;
+    /// The display that owned context->videoDisplay before the window opened.
+    VideoDisplay *previous = nullptr;
+    /// Tool and subtool last requested or observed; applied whenever the window opens.
+    std::string tool = "cross";
+    int subtool = 0;
+    /// Zoom last chosen; unset keeps the legacy display's zoom.
+    std::optional<double> zoom;
+    agi::signal::Connection provider_connection;
+
+    explicit Impl(agi::Context *context) : context(context) {
+        // Unloading the video closes the window: there is nothing left to draw.
+        provider_connection = context->project->AddVideoProviderListener([this](AsyncVideoProvider *provider) {
+            if (!provider) Close(true);
+        });
+    }
+
+    void Show() {
+        if (frame) {
+            frame->Raise();
+            return;
+        }
+        if (!context->project->VideoProvider())
+            throw std::invalid_argument("open a video before showing the video window");
+
+        previous = context->videoDisplay;
+        frame = new wxFrame(nullptr, wxID_ANY, "Aegisub Video");
+        frame->Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) { Close(false); });
+
+        // No sub-toolbar: the native window has no toolbar widgets. VideoDisplay and the
+        // visual tools accept a null toolbar.
+        display = new VideoDisplay(nullptr, nullptr, true, nullptr, frame, context);
+        // The constructor already routes context->videoDisplay here; stated again because
+        // the tool commands act on whatever that pointer names.
+        context->videoDisplay = display;
+        auto sizer = new wxBoxSizer(wxVERTICAL);
+        sizer->Add(display, 1, wxEXPAND);
+        frame->SetSizer(sizer);
+
+        display->SetWindowZoom(zoom.value_or(previous ? previous->GetWindowZoom() : 1.));
+        zoom = display->GetWindowZoom();
+        ApplyTool();
+        frame->Show();
+        display->FitWindowToVideo();
+        display->SetFocus();
+        context->videoController->JumpToFrame(context->videoController->GetFrameN());
+    }
+
+    /// Hides the window and restores context->videoDisplay if it still points here.
+    /// immediate=false defers destruction (required inside the frame's own close event);
+    /// immediate=true destroys now, because ~VideoDisplay reads the context and shutdown
+    /// may release the context before idle-time deletion runs.
+    void Close(bool immediate) {
+        if (!frame) return;
+        if (display) {
+            zoom = display->GetWindowZoom();
+            if (context->videoDisplay == display) {
+                if (previous) previous->SetWindowZoom(*zoom);
+                context->videoDisplay = previous;
+            }
+        }
+        frame->Hide();
+        if (immediate) delete frame;
+        else frame->Destroy();
+        frame = nullptr;
+        display = nullptr;
+        previous = nullptr;
+    }
+
+    /// Selects the tool through its existing command so the catalogue and the tool state agree.
+    void ApplyTool() {
+        std::string_view const command = ToolCommand(tool);
+        if (!cmd::get(command)->IsActive(context)) cmd::call(command, context);
+        if (tool == "vector_clip" && display->ToolIsType(typeid(VisualToolVectorClip)) && display->GetSubTool() != subtool)
+            display->SetSubTool(subtool);
+    }
+
+    void Configure(json::Object const& request) {
+        std::string next_tool = tool;
+        int next_subtool = subtool;
+        std::optional<double> next_zoom = zoom;
+        if (auto it = request.find("tool"); it != request.end()) {
+            std::string const& name = it->second;
+            ToolCommand(name);
+            next_tool = name;
+        }
+        if (auto it = request.find("subtool"); it != request.end()) {
+            if (next_tool != "vector_clip") throw std::invalid_argument("subtool applies only to the vector_clip tool");
+            int64_t const value = static_cast<json::Integer const&>(it->second);
+            if (value < 0 || value >= VCLIP_LAST) throw std::invalid_argument("vector clip subtool is outside the permitted range");
+            next_subtool = static_cast<int>(value);
+        }
+        if (auto it = request.find("zoom"); it != request.end()) {
+            double const value = NumberOf(it->second);
+            if (!std::isfinite(value) || value < .125 || value > 10.)
+                throw std::invalid_argument("video zoom must be between 0.125 and 10");
+            next_zoom = value;
+        }
+        tool = next_tool;
+        subtool = next_subtool;
+        zoom = next_zoom;
+        if (display) {
+            if (zoom) display->SetWindowZoom(*zoom);
+            ApplyTool();
+            SyncFromDisplay();
+        }
+    }
+
+    /// Runs one video/tool command in the window, opening the window first if needed, then
+    /// records the tool that is actually active. Covers video/tool/vclip/* as well.
+    void Command(json::Object const& request) {
+        std::string const& name = request.at("name");
+        if (!std::string_view(name).starts_with("video/tool/"))
+            throw std::invalid_argument("only video/tool commands can be sent to the video window");
+        auto const commands = cmd::get_registered_commands();
+        if (std::find(commands.begin(), commands.end(), std::string_view(name)) == commands.end())
+            throw std::invalid_argument("unknown video tool command");
+        Show();
+        cmd::call(name, context);
+        SyncFromDisplay();
+    }
+
+    /// Reads the tool and subtool actually active in the window so stored state never disagrees with it.
+    void SyncFromDisplay() {
+        tool = ActiveToolName();
+        subtool = display->ToolIsType(typeid(VisualToolVectorClip)) ? display->GetSubTool() : 0;
+    }
+
+    std::string ActiveToolName() const {
+        if (display->ToolIsType(typeid(VisualToolDrag))) return "drag";
+        if (display->ToolIsType(typeid(VisualToolRotateZ))) return "rotate/z";
+        if (display->ToolIsType(typeid(VisualToolRotateXY))) return "rotate/xy";
+        if (display->ToolIsType(typeid(VisualToolScale))) return "scale";
+        if (display->ToolIsType(typeid(VisualToolClip))) return "clip";
+        if (display->ToolIsType(typeid(VisualToolVectorClip))) return "vector_clip";
+        return "cross";
+    }
+
+    std::string Reply() const {
+        json::Object result;
+        result["ok"] = true;
+        result["visible"] = frame && frame->IsShown();
+        result["renderer"] = "opengl";
+        result["tool"] = tool;
+        result["subtool"] = subtool;
+        double shown_zoom = 1.;
+        if (display) shown_zoom = display->GetWindowZoom();
+        else if (zoom) shown_zoom = *zoom;
+        else if (context->videoDisplay) shown_zoom = context->videoDisplay->GetWindowZoom();
+        result["zoom"] = shown_zoom;
+        result["frame"] = display ? display->PresentedFrame() : -1;
+        result["rendered_frames"] = static_cast<int64_t>(display ? display->RenderedFrames() : 0);
+        result["render_failed"] = display ? display->RenderFailed() : false;
+        result["error"] = display ? display->RenderError() : std::string();
+        return Encode(result);
+    }
+};
+
+VideoSurface::VideoSurface(agi::Context *context) : impl(std::make_unique<Impl>(context)) { }
+
+VideoSurface::~VideoSurface() {
+    if (impl) impl->Close(true);
+}
+
+std::string VideoSurface::Handle(json::Object const& request) {
+    std::string const& action = request.at("action");
+    if (action == "show") impl->Show();
+    else if (action == "hide") impl->Close(true);
+    else if (action == "configure") impl->Configure(request);
+    else if (action == "command") impl->Command(request);
+    else if (action == "toggle_move") {
+        impl->tool = "drag";
+        impl->Show();
+        impl->ApplyTool();
+        impl->display->ToggleMove();
+    }
+    else if (action != "state") throw std::invalid_argument("unknown video surface action");
+    return impl->Reply();
+}
+
+bool VideoSurface::IsVisible() const {
+    return impl->frame && impl->frame->IsShown();
+}
+
+void VideoSurface::Close() {
+    impl->Close(true);
 }
 }

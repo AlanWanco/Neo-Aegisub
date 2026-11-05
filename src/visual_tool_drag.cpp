@@ -50,6 +50,7 @@ VisualToolDrag::VisualToolDrag(VisualToolHost *parent, agi::Context *context)
 
 void VisualToolDrag::SetToolbar(wxToolBar *tb) {
 	toolbar = tb;
+    if (!tb) return;
 	toolbar->AddSeparator();
 	toolbar->AddTool(-1, _("Toggle between \\move and \\pos"), GETBUNDLE(visual_move_conv_move, OPT_GET("App/Toolbar Icon Size")->GetInt()));
 	toolbar->Realize();

@@ -37,12 +37,10 @@ use timing_panel::{ShiftState, TimingPanel};
 use timing_processor_panel::{ProcessorState, TimingProcessorPanel};
 mod translation_panel;
 use styling_panel::StylingPanel;
-mod video_overscan;
 mod video_settings_panel;
 mod video_timeline;
 use translation_panel::{TranslationPanel, TranslationState};
 use video_settings_panel::{VideoPage, VideoSettings, VideoSettingsPanel};
-mod trace;
 mod visual_panel;
 mod workspace_theme;
 use gpui_kit::assets::IconName;
@@ -50,12 +48,11 @@ use gpui_kit::component::Sizable;
 use image::Frame as VideoImageFrame;
 use workspace_theme::Palette;
 
-use visual_panel::{VisualPanel, VisualReply, video_base_bounds, zoomed_video_bounds};
+use visual_panel::VisualPanel;
 
 use video_timeline::VideoTimeline;
 
 use document_panels::{DocumentDetails, DocumentPanels, LibraryDetails};
-use trace::trace;
 
 use command_catalog::{Catalog, populate_menu, subtitle_context_menu};
 use std::{
@@ -64,7 +61,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -73,9 +70,9 @@ use anyhow::{Context as _, Result, anyhow};
 use async_net::TcpStream;
 use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
 use gpui_kit::{
-    App, AppContext, Context, Corners, Entity, ExternalPaths, Focusable, Image, IntoElement,
-    Render, ScrollDelta, Subscription, Window, WindowBounds, WindowOptions, canvas, div,
-    prelude::*, px, rgb, size, uniform_list,
+    App, AppContext, Context, Entity, ExternalPaths, Focusable, Image, IntoElement, Render,
+    Subscription, Window, WindowBounds, WindowOptions, canvas, div, prelude::*, px, size,
+    uniform_list,
 };
 use gpui_kit::{
     base::{Disableable, Selectable},
@@ -407,6 +404,8 @@ struct PlaybackSnapshot {
     audio_playing: bool,
     #[serde(default)]
     audio_position: i64,
+    #[serde(default)]
+    video_surface_visible: bool,
 }
 
 /// Progress of a long host task (indexing, exporting, ...). The host used to
@@ -611,17 +610,11 @@ struct Snapshot {
     #[serde(default)]
     video_window_zoom: f32,
     #[serde(default)]
-    video_height: f32,
-    #[serde(default)]
-    video_scroll: i64,
-    #[serde(default)]
-    video_ctrl_scroll: i64,
-    #[serde(default)]
-    video_shift_scroll: i64,
-    #[serde(default)]
     video_overscan: bool,
     #[serde(default)]
     video_epoch: u64,
+    #[serde(default)]
+    video_surface_visible: bool,
     fps: Option<f64>,
     #[serde(default = "no_active_line")]
     active: i64,
@@ -926,17 +919,6 @@ struct StylePreviewReply {
     error: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct FrameReply {
-    frame: Option<i64>,
-    time: Option<i64>,
-    clock_ms: Option<f64>,
-    request: Option<u64>,
-    video: Option<bool>,
-    image: Option<String>,
-    error: Option<String>,
-}
-
 #[derive(Clone)]
 struct Bridge {
     endpoint: String,
@@ -1009,7 +991,6 @@ enum Panel {
     Styles,
     Project,
     Visual,
-    Video,
     Translation,
     Styling,
     Timing,
@@ -1032,7 +1013,6 @@ impl Panel {
         match self {
             Self::Subtitles => "字幕编辑",
             Self::Visual => "视觉排版",
-            Self::Video => "视频预览",
             Self::Translation => "翻译助手",
             Self::Styles => "样式管理",
             Self::Styling => "配样式",
@@ -1057,7 +1037,6 @@ impl Panel {
         match self {
             Self::Subtitles => IconName::Captions,
             Self::Visual => IconName::Frame,
-            Self::Video => IconName::Play,
             Self::Translation => IconName::Languages,
             Self::Styles => IconName::Palette,
             Self::Styling => IconName::CaseSensitive,
@@ -1090,11 +1069,6 @@ enum WorkspaceResizeDrag {
         start_y: gpui_kit::Pixels,
         start_height: f32,
     },
-    /// Width of the video/properties column beside the subtitle list.
-    ColumnSplit {
-        start_x: gpui_kit::Pixels,
-        start_width: f32,
-    },
     /// Width of one fixed column of the subtitle list.
     SubtitleColumn {
         column: SubtitleColumn,
@@ -1113,71 +1087,10 @@ enum WorkspaceResizeDrag {
     },
 }
 
-/// Shared playback frame state. The pump loop reads it without touching the
-/// UI thread, so a request is already pending when the host produces its next
-/// frame.
-#[derive(Default)]
-struct FramePump {
-    /// A pump loop owns the frame request slot while this is set.
-    running: AtomicBool,
-    /// Identity of the current pump; replies from an older one are dropped.
-    id: AtomicU64,
-    /// Sequence of the newest applied reply.
-    applied: AtomicU64,
-    playing: AtomicBool,
-    epoch: AtomicU64,
-    frame: AtomicI64,
-    max_width: AtomicI64,
-    revision: AtomicU64,
-    /// One frame period in microseconds: the pump asks the host a few times per
-    /// frame instead of once per reply, so a frame that appears mid-period is
-    /// picked up on the next poll rather than one period later.
-    period: AtomicU64,
-    /// Frame number of the newest reply already handed to the decoder; repeated
-    /// polls of the same host frame skip the JPEG decode.
-    delivered: AtomicI64,
-}
-
-/// A decoded playback frame waiting for its slot on the presentation clock.
-struct QueuedFrame {
-    frame: i64,
-    revision: u64,
-    image: Arc<gpui_kit::RenderImage>,
-    due: Instant,
-}
-
-/// Frames held ahead of the display; the oldest is released when this fills.
-const PLAYBACK_QUEUE_LIMIT: usize = 8;
-
 struct Workspace {
     bridge: Bridge,
     focus_handle: gpui_kit::FocusHandle,
     snapshot: Snapshot,
-    frame_image: Option<Arc<gpui_kit::RenderImage>>,
-    frame_image_frame: i64,
-    /// Document revision the current image was rendered from. The frame bakes
-    /// in the subtitle, so an edit with an unchanged frame number still needs a
-    /// refetch — tracked per revision so a stale reply never clears the need.
-    frame_image_revision: u64,
-    frame_image_generation: u64,
-    /// Decoded playback frames ordered by their media presentation time.
-    frame_queue: std::collections::VecDeque<QueuedFrame>,
-    /// True while a display-refresh callback is registered for playback. The
-    /// callback re-registers itself each refresh until playback stops.
-    present_loop_armed: bool,
-    /// Width in physical pixels the preview paints at, so the host can ship a
-    /// frame sized for the box instead of the full source resolution.
-    preview_width_px: std::cell::Cell<f32>,
-    frame_request_inflight: bool,
-    frame_request_generation: u64,
-    /// Frame the in-flight picture request is for. A seek moves the decoder
-    /// before the host has pushed a snapshot, so the request has to name its
-    /// own target instead of reading `snapshot.frame` (a round trip behind).
-    seek_target: Option<i64>,
-    /// Playback fetches frames from a background loop instead of the UI thread:
-    /// the host only hands a frame to a client that is already waiting, so the
-    /// next request has to leave the moment the previous answer lands.
-    frame_pump: Arc<FramePump>,
     video_epoch: u64,
     list_scroll_handle: gpui_kit::UniformListScrollHandle,
     /// Row where a press-and-drag selection started, while the button is held.
@@ -1198,8 +1111,6 @@ struct Workspace {
     subtitle_grid_width: f32,
     layout_drag: Option<WorkspaceResizeDrag>,
     audio_panel_height: f32,
-    column_split: Option<f32>,
-    video_preview_height: Option<f32>,
     /// Height of the font preview at the top of the style editor.
     style_preview_height: f32,
     /// Width the user dragged the line inspector to; `None` keeps the default.
@@ -1207,7 +1118,6 @@ struct Workspace {
     time_in_frames: bool,
     show_original: bool,
     editor_original: String,
-    last_preview_height: std::cell::Cell<f32>,
     editor: Entity<TextareaState>,
     search: Entity<InputState>,
     command_search: Entity<InputState>,
@@ -1241,7 +1151,8 @@ struct Workspace {
     /// 视图菜单里的容器开关：字幕区始终在，音频条和视频预览各自可选。
     show_audio: bool,
     show_video: bool,
-    video_restore_layout: Option<(bool, bool)>,
+    /// Whether the native video window is open, as the host last reported it.
+    video_surface_visible: bool,
     properties_line_id: i64,
     _property_events: Vec<Subscription>,
     _command_search_events: Subscription,
@@ -1271,140 +1182,6 @@ struct Workspace {
 }
 
 impl Workspace {
-    fn clear_frame_image(&mut self, cx: &mut Context<Self>) {
-        // Every frame becomes a texture in the sprite atlas, and the atlas keeps
-        // it until it is dropped explicitly. Playing back a video without this
-        // grows the process by one decoded frame per rendered picture until the
-        // window is killed for memory.
-        if let Some(image) = self.frame_image.take() {
-            cx.drop_image(image, None);
-        }
-        self.frame_image_frame = -1;
-        self.frame_image_revision = u64::MAX;
-        for queued in self.frame_queue.drain(..) {
-            cx.drop_image(queued.image, None);
-        }
-    }
-
-    fn replace_frame_image(
-        &mut self,
-        cx: &mut Context<Self>,
-        image: Arc<gpui_kit::RenderImage>,
-        frame: i64,
-        revision: u64,
-    ) {
-        if let Some(previous) = self.frame_image.replace(image) {
-            cx.drop_image(previous, None);
-        }
-        self.frame_image_frame = frame;
-        self.frame_image_revision = revision;
-    }
-
-    /// Presents against the host media clock, including transport and decode
-    /// elapsed time, rather than adding an arrival-dependent buffering delay.
-    fn queue_playback_frame(
-        &mut self,
-        cx: &mut Context<Self>,
-        image: Arc<gpui_kit::RenderImage>,
-        frame: i64,
-        revision: u64,
-        due: Instant,
-    ) {
-        if !self.snapshot.playing {
-            for queued in self.frame_queue.drain(..) {
-                cx.drop_image(queued.image, None);
-            }
-            self.replace_frame_image(cx, image, frame, revision);
-            cx.notify();
-            return;
-        }
-        if self
-            .frame_queue
-            .back()
-            .is_some_and(|queued| queued.frame == frame)
-        {
-            // Same frame delivered twice: the queued copy already covers it.
-            cx.drop_image(image, None);
-            return;
-        }
-        if self.frame_queue.is_empty() && self.frame_image_frame == frame {
-            // Already on screen and nothing newer is queued: showing it again
-            // would only re-upload the same pixels.
-            cx.drop_image(image, None);
-            return;
-        }
-        if self
-            .frame_queue
-            .back()
-            .is_some_and(|queued| frame < queued.frame)
-        {
-            for queued in self.frame_queue.drain(..) {
-                cx.drop_image(queued.image, None);
-            }
-        }
-        self.frame_queue.push_back(QueuedFrame {
-            frame,
-            revision,
-            image,
-            due,
-        });
-        while self.frame_queue.len() > PLAYBACK_QUEUE_LIMIT {
-            if let Some(dropped) = self.frame_queue.pop_front() {
-                cx.drop_image(dropped.image, None);
-            }
-        }
-        if !self.present_loop_armed {
-            // Playback started or the loop ended: notify so render arms it.
-            cx.notify();
-        }
-    }
-
-    /// Shows the newest queued frame whose slot has arrived and releases the
-    /// older due ones. Runs once per display refresh while playing, so a frame
-    /// lands on the refresh that follows its slot.
-    fn present_due_frames(&mut self, cx: &mut Context<Self>) {
-        let now = Instant::now();
-        let mut shown: Option<QueuedFrame> = None;
-        loop {
-            let Some(front) = self.frame_queue.front() else {
-                break;
-            };
-            if self.snapshot.playing && front.due > now {
-                break;
-            }
-            let Some(queued) = self.frame_queue.pop_front() else {
-                break;
-            };
-            if let Some(skipped) = shown.replace(queued) {
-                cx.drop_image(skipped.image, None);
-            }
-        }
-        if let Some(queued) = shown {
-            let shown_at = trace::now();
-            trace!(
-                "show t={shown_at} frame={} late_us={} q={}",
-                queued.frame,
-                now.saturating_duration_since(queued.due).as_micros(),
-                self.frame_queue.len()
-            );
-            self.replace_frame_image(cx, queued.image, queued.frame, queued.revision);
-            cx.notify();
-        }
-    }
-
-    /// One display refresh of the presentation loop. Returns whether the loop
-    /// keeps running: it runs for as long as playback runs, even with an empty
-    /// queue, so a frame that arrives late is shown on the next refresh.
-    fn present_tick(&mut self, cx: &mut Context<Self>) -> bool {
-        trace!("tick t={} q={}", trace::now(), self.frame_queue.len());
-        self.present_due_frames(cx);
-        let playing = self.snapshot.playing && self.frame_pump.playing.load(Ordering::Relaxed);
-        if !playing {
-            self.present_loop_armed = false;
-        }
-        playing
-    }
-
     fn clear_audio_image(&mut self, cx: &mut Context<Self>) {
         self.audio.clear_tiles(cx);
     }
@@ -1604,11 +1381,8 @@ impl Workspace {
                 playback_rate: 1.,
                 aspect: 1.,
                 video_window_zoom: 1.,
-                video_height: 0.,
-                video_scroll: 0,
-                video_ctrl_scroll: 2,
-                video_shift_scroll: 4,
                 video_overscan: false,
+                video_surface_visible: false,
                 video_epoch: 0,
                 fps: None,
                 active: -1,
@@ -1616,17 +1390,6 @@ impl Workspace {
                 text_selection: [0, 0],
                 lines: vec![],
             },
-            frame_image: None,
-            frame_image_frame: -1,
-            frame_image_revision: u64::MAX,
-            frame_image_generation: 0,
-            frame_queue: std::collections::VecDeque::new(),
-            present_loop_armed: false,
-            preview_width_px: std::cell::Cell::new(0.),
-            frame_request_inflight: false,
-            frame_request_generation: 0,
-            seek_target: None,
-            frame_pump: Arc::new(FramePump::default()),
             video_epoch: 0,
             list_scroll_handle: gpui_kit::UniformListScrollHandle::new(),
             grid_drag_anchor: None,
@@ -1644,14 +1407,11 @@ impl Workspace {
             subtitle_grid_width: 0.,
             layout_drag: None,
             audio_panel_height: 80.,
-            column_split: None,
-            video_preview_height: None,
             style_preview_height: 132.,
             properties_rail_width: None,
             time_in_frames: false,
             show_original: false,
             editor_original: String::new(),
-            last_preview_height: std::cell::Cell::new(220.),
             editor,
             search,
             command_search,
@@ -1681,7 +1441,7 @@ impl Workspace {
             quit_after_save: false,
             show_audio: true,
             show_video: true,
-            video_restore_layout: None,
+            video_surface_visible: false,
             properties_line_id: -1,
             _property_events: property_events,
             _command_search_events: command_search_events,
@@ -1799,39 +1559,16 @@ impl Workspace {
         let media_changed = snapshot.video_epoch != self.video_epoch
             || snapshot.video != self.snapshot.video
             || snapshot.aspect != self.snapshot.aspect;
-        // Fitting the preview to its pane is the default for every newly
-        // loaded video; zooming away from it is a deliberate act that has to
-        // survive the snapshot that reports the new zoom back to us.
-        if media_changed {
-            self.cancel_visual_drag(cx);
-            self.visual.reset_zoom();
-            self.visual.fit_video = true;
-        }
-        if active_changed {
-            self.cancel_visual_drag(cx);
-        }
-        if media_changed {
-            self.visual.queue.clear();
-            self.visual.commands.clear();
-            self.visual.drawn = None;
-            self.visual.dragging = false;
-            self.visual.bounds.replace(gpui_kit::Bounds::default());
-            self.visual
-                .canvas_bounds
-                .replace(gpui_kit::Bounds::default());
+        self.video_surface_visible = snapshot.video_surface_visible;
+        // A newly loaded video opens the native window. Polls never reopen a
+        // window the user closed, so only a changed epoch counts here.
+        if snapshot.video && snapshot.video_epoch != self.video_epoch {
+            self.video_surface(vec![json!({"action":"show"})], cx);
         }
         if snapshot.revision != self.snapshot.revision {
             self.subtitle_filter_cache = None;
         }
-        if media_changed {
-            self.clear_frame_image(cx);
-            self.frame_request_generation += 1;
-            self.frame_request_inflight = false;
-            self.seek_target = None;
-        }
         self.video_epoch = snapshot.video_epoch;
-        // Keep the last complete frame visible until its replacement arrives.
-        // Clearing it here makes playback flash whenever the bridge is late.
         if active_changed {
             self.editor_line_id = -1;
             self.editor_dirty_line = -1;
@@ -1842,14 +1579,8 @@ impl Workspace {
                 }
             }
         }
-        if !snapshot.video {
-            self.clear_frame_image(cx);
-            self.frame_request_generation += 1;
-            self.frame_request_inflight = false;
-            self.seek_target = None;
-        }
         self.snapshot = snapshot;
-        if command_state_changed && !self.visual.dragging {
+        if command_state_changed {
             self.refresh_catalog(cx);
         }
         if details_changed || document_changed || media_changed {
@@ -1862,19 +1593,6 @@ impl Workspace {
             && self.snapshot.revision != self.attachments.state.revision
         {
             self.attachment_request(json!({"action":"state"}), cx);
-        }
-        let visual_state = (
-            self.snapshot.revision,
-            self.snapshot.frame,
-            self.snapshot.active,
-            self.video_epoch as i64,
-        );
-        if self.active_panel == Panel::Visual
-            && !self.visual.dragging
-            && self.visual.drawn != Some(visual_state)
-        {
-            self.visual.drawn = Some(visual_state);
-            self.queue_visual(json!({"action":"draw"}), cx);
         }
         for name in forwarded {
             self.invoke(json!({"op": "command", "name": name}), cx);
@@ -1890,6 +1608,8 @@ impl Workspace {
         let playing = self.snapshot.playing;
         let audio_playing = self.snapshot.audio.playing;
         let audio_position = self.snapshot.audio.position;
+        let surface_visible = self.video_surface_visible;
+        self.video_surface_visible = playback.video_surface_visible;
         self.snapshot.frame = playback.frame;
         self.snapshot.video_time = playback.video_time;
         self.snapshot.playing = playback.playing;
@@ -1900,6 +1620,7 @@ impl Workspace {
             || self.snapshot.playing != playing
             || self.snapshot.audio.playing != audio_playing
             || self.snapshot.audio.position != audio_position
+            || self.video_surface_visible != surface_visible
         {
             cx.notify();
         }
@@ -4122,17 +3843,6 @@ impl Workspace {
                     );
                     return;
                 }
-                Some("video/reset_pan") => {
-                    self.cancel_visual_drag(cx);
-                    self.visual.reset_zoom();
-                    cx.notify();
-                    return;
-                }
-                Some(name) if name.starts_with("video/zoom/") => {
-                    self.cancel_visual_drag(cx);
-                    self.visual.fit_video = false;
-                    self.visual.reset_zoom();
-                }
                 Some("subtitle/spellcheck") => {
                     self.open_tool(Panel::Spelling, cx, |view, cx| {
                         view.spelling_request(json!({"action":"state"}), cx)
@@ -4224,13 +3934,6 @@ impl Workspace {
                     | "app/display/full"),
                 ) => {
                     // Container visibility and menu checks belong to this workspace.
-                    if let Some(handle) =
-                        PANEL_WINDOWS.with(|windows| windows.borrow_mut().remove(&Panel::Video))
-                    {
-                        let _ = handle.update(cx, |_, window, _| window.remove_window());
-                        PANEL_VIEWS.with(|views| views.borrow_mut().remove(&Panel::Video));
-                    }
-                    self.video_restore_layout = None;
                     self.show_audio = matches!(name, "app/display/audio_subs" | "app/display/full");
                     self.show_video = matches!(name, "app/display/video_subs" | "app/display/full");
                     self.sync_display_mode(cx);
@@ -4417,29 +4120,6 @@ impl Workspace {
                             Some("line_fields") => view.properties_dirty = false,
                             Some("command") => {
                                 view.pending_text_selection = Some(view.snapshot.text_selection);
-                                if let Some(name) = payload["name"]
-                                    .as_str()
-                                    .and_then(|name| name.strip_prefix("video/tool/"))
-                                {
-                                    let (mode, subtool) = match name {
-                                        "cross" => ("cross", None),
-                                        "drag" => ("drag", None),
-                                        "rotate/z" => ("rotate/z", None),
-                                        "rotate/xy" => ("rotate/xy", None),
-                                        "scale" => ("scale", None),
-                                        "clip" => ("clip", None),
-                                        "vclip/drag" => ("vector_clip", Some(0)),
-                                        "vclip/line" => ("vector_clip", Some(1)),
-                                        "vclip/bicubic" => ("vector_clip", Some(2)),
-                                        "vclip/convert" => ("vector_clip", Some(3)),
-                                        "vclip/insert" => ("vector_clip", Some(4)),
-                                        "vclip/remove" => ("vector_clip", Some(5)),
-                                        "vclip/freehand" => ("vector_clip", Some(6)),
-                                        "vclip/freehand_smooth" => ("vector_clip", Some(7)),
-                                        _ => ("vector_clip", None),
-                                    };
-                                    view.select_visual_tool(mode, subtool, cx);
-                                }
                                 cx.notify();
                             }
                             _ => {}
@@ -4473,13 +4153,11 @@ impl Workspace {
     }
 
     fn flush_video_seek(&mut self, cx: &mut Context<Self>) {
-        // One preview at a time. A seek restarts the decoder at the previous
-        // keyframe, so issuing the next one while the last picture is still
-        // being produced throws that work away: a pointer moving at 60 Hz then
-        // never gets a frame out and the picture trails the pointer by the
-        // keyframe distance. The newest position waits in `pending_frame` and
-        // is flushed by the reply that ends the current cycle.
-        if self.timeline.seeking || self.frame_request_inflight || !self.snapshot.video {
+        // One seek at a time. A seek restarts the decoder at the previous
+        // keyframe, so issuing the next one while the last is still running
+        // throws that work away. The newest position waits in `pending_frame`
+        // and is flushed when the current seek returns.
+        if self.timeline.seeking || !self.snapshot.video {
             return;
         }
         let Some(frame) = self.timeline.pending_frame.take() else {
@@ -4489,21 +4167,13 @@ impl Workspace {
             return;
         };
         self.timeline.seeking = true;
-        self.seek_target = Some(frame);
         let bridge = self.bridge.clone();
         let weak = cx.weak_entity();
         cx.spawn(async move |_, cx| {
-            let succeeded =
-                invoke_weak(&bridge, &weak, cx, json!({"op":"seek", "frame":frame})).await;
+            invoke_weak(&bridge, &weak, cx, json!({"op":"seek", "frame":frame})).await;
             let _ = weak.update(cx, |view, cx| {
                 view.timeline.seeking = false;
-                // The seek only moves the decoder; the picture for it is the
-                // next request. `refresh_frame` names this frame itself rather
-                // than waiting for the host to push it back in a snapshot.
-                if !succeeded {
-                    view.seek_target = None;
-                }
-                view.refresh_frame(cx);
+                view.flush_video_seek(cx);
             });
         })
         .detach();
@@ -4516,98 +4186,51 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.active_panel = Panel::Visual;
-        self.visual.bounds.replace(gpui_kit::Bounds::default());
-        self.visual
-            .canvas_bounds
-            .replace(gpui_kit::Bounds::default());
         self.visual.tool = mode;
         if let Some(subtool) = subtool {
             self.visual.subtool = subtool;
         }
-        self.visual.queue.clear();
-        self.visual.commands.clear();
-        self.visual.drawn = None;
-        self.visual.dragging = false;
+        // The native window draws the tool; only its settings are sent. A
+        // configure never opens a window the user has closed.
+        let mut request = json!({"action":"configure","tool":mode});
+        if mode == "vector_clip" {
+            request["subtool"] = json!(self.visual.subtool);
+        }
+        self.video_surface(vec![request], cx);
         cx.notify();
     }
 
-    fn queue_visual(&mut self, mut request: Value, cx: &mut Context<Self>) {
-        if !self.snapshot.video {
-            return;
-        }
-        let bounds = *self.visual.canvas_bounds.borrow();
-        if bounds.size.width < px(16.) || bounds.size.height < px(16.) {
-            return;
-        }
-        request["op"] = json!("visual");
-        request["tool"] = json!(self.visual.tool);
-        request["width"] = json!(f32::from(bounds.size.width).round() as i64);
-        request["height"] = json!(f32::from(bounds.size.height).round() as i64);
-        if self.visual.tool == "vector_clip" {
-            request["subtool"] = json!(self.visual.subtool);
-        }
-        let replace = self.visual.queue.back().is_some_and(|previous| {
-            previous["action"] == request["action"]
-                && matches!(request["action"].as_str(), Some("move" | "draw"))
-        });
-        if replace {
-            self.visual.queue.pop_back();
-        }
-        self.visual.queue.push_back(request);
-        self.flush_visual(cx);
-    }
-
-    fn flush_visual(&mut self, cx: &mut Context<Self>) {
-        if self.visual.loading {
-            return;
-        }
-        let Some(request) = self.visual.queue.pop_front() else {
-            return;
-        };
-        self.visual.loading = true;
+    /// Sends `video_surface` requests to the native video window in order. A
+    /// reply's `visible` flag mirrors the window; a failed request reports in
+    /// the status line and leaves the flag as it was.
+    fn video_surface(&mut self, requests: Vec<Value>, cx: &mut Context<Self>) {
         let bridge = self.bridge.clone();
         let weak = cx.weak_entity();
-        let changes = matches!(
-            request["action"].as_str(),
-            Some("down" | "double" | "toggle_move" | "up")
-        ) || self.visual.dragging;
-        let request_epoch = self.video_epoch;
-        let refresh_catalog = matches!(request["action"].as_str(), Some("draw" | "up"));
         cx.spawn(async move |_, cx| {
-            let result = bridge.call(request).await.and_then(|value| {
-                serde_json::from_value::<VisualReply>(value).context("invalid visual drawing")
-            });
-            let snapshot = if changes && result.is_ok() {
-                bridge.snapshot().await.ok()
-            } else {
-                None
-            };
-            let _ = weak.update(cx, |view, cx| {
-                view.visual.loading = false;
-                match result {
-                    Ok(reply) => {
-                        let bounds = *view.visual.canvas_bounds.borrow();
-                        if view.video_epoch == request_epoch
-                            && reply.tool == view.visual.tool
-                            && reply.width == f32::from(bounds.size.width).round() as i64
-                            && reply.height == f32::from(bounds.size.height).round() as i64
-                            && (reply.tool != "vector_clip" || reply.subtool == view.visual.subtool)
-                        {
-                            view.visual.commands = reply.commands;
+            for mut request in requests {
+                request["op"] = json!("video_surface");
+                let result = bridge.call(request).await;
+                let _ = weak.update(cx, |view, cx| {
+                    match result {
+                        Ok(reply) => {
+                            if let Some(visible) = reply.get("visible").and_then(Value::as_bool) {
+                                view.video_surface_visible = visible;
+                            }
+                            if reply.get("render_failed").and_then(Value::as_bool) == Some(true) {
+                                view.status = format!(
+                                    "视频窗口渲染失败：{}",
+                                    reply
+                                        .get("error")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("未知错误")
+                                );
+                            }
                         }
+                        Err(error) => view.status = format!("视频窗口失败：{error:#}"),
                     }
-                    Err(error) => view.status = format!("视觉工具失败：{error}"),
-                }
-                if let Some(snapshot) = snapshot {
-                    view.apply_snapshot(snapshot, cx);
-                    view.refresh_frame(cx);
-                }
-                if refresh_catalog {
-                    view.refresh_catalog(cx);
-                }
-                view.flush_visual(cx);
-                cx.notify();
-            });
+                    cx.notify();
+                });
+            }
         })
         .detach();
     }
@@ -4985,7 +4608,6 @@ impl Workspace {
                         view.preferences.receive(state, &sent);
                         view.preferences.confirm_reset = false;
                         view.audio.gesture = None;
-                        view.visual.drawn = None;
                         view.apply_snapshot(snapshot, cx);
                         view.refresh_catalog(cx);
                         view.status = "偏好设置已同步".into();
@@ -6265,368 +5887,6 @@ impl Workspace {
         .detach();
     }
 
-    fn refresh_frame(&mut self, cx: &mut Context<Self>) {
-        let visible = matches!(self.active_panel, Panel::Video | Panel::Visual)
-            || (self.active_panel == Panel::Subtitles && self.show_video);
-        if !visible {
-            self.frame_pump.playing.store(false, Ordering::Release);
-            return;
-        }
-        if !self.snapshot.video {
-            self.clear_frame_image(cx);
-            self.frame_request_inflight = false;
-            self.frame_request_generation += 1;
-            self.frame_pump.running.store(false, Ordering::Release);
-            return;
-        }
-        self.frame_pump.max_width.store(
-            self.preview_width_px.get().round() as i64,
-            Ordering::Relaxed,
-        );
-        self.frame_pump
-            .playing
-            .store(self.snapshot.playing, Ordering::Relaxed);
-        self.frame_pump
-            .epoch
-            .store(self.video_epoch, Ordering::Relaxed);
-        self.frame_pump
-            .frame
-            .store(self.snapshot.frame, Ordering::Relaxed);
-        self.frame_pump
-            .revision
-            .store(self.snapshot.revision, Ordering::Relaxed);
-        self.frame_pump.period.store(
-            playback_period(self.snapshot.fps, self.snapshot.playback_rate).as_micros() as u64,
-            Ordering::Relaxed,
-        );
-        if self.snapshot.playing {
-            // Playback names its own frames; a leftover seek target would ask
-            // for a stale position the next time playback stops.
-            self.seek_target = None;
-            self.start_frame_pump(cx);
-            return;
-        }
-        // A seek moves the decoder before the host pushes its snapshot, so the
-        // request names the frame it is for instead of reading `snapshot.frame`.
-        let request_frame = self.seek_target.unwrap_or(self.snapshot.frame);
-        // Keeping the previous image up while the replacement is fetched stops
-        // visual drags from flashing the placeholder on every step.
-        if self.frame_request_inflight {
-            return;
-        }
-        if self.frame_image_frame == request_frame
-            && self.frame_image_revision == self.snapshot.revision
-        {
-            self.seek_target = None;
-            return;
-        }
-        self.frame_request_inflight = true;
-        self.frame_request_generation += 1;
-        let generation = self.frame_request_generation;
-        let request_epoch = self.video_epoch;
-        let request_revision = self.snapshot.revision;
-        let bridge = self.bridge.clone();
-        let weak = cx.weak_entity();
-        let max_width = self.preview_width_px.get().round() as i64;
-        cx.spawn(async move |_, cx| {
-            let request = bridge.call(json!({"op":"frame", "frame":request_frame, "request":generation, "epoch":request_epoch, "max_width":max_width}));
-            let timeout = cx.background_executor().timer(Duration::from_secs(8));
-            let response = futures_lite::future::or(
-                async move { request.await },
-                async move {
-                    timeout.await;
-                    Err::<Value, _>(anyhow!("Neo Aegisub 视频帧请求超时"))
-                },
-            ).await;
-            match response {
-                Ok(value) => {
-                    let reply: FrameReply = match serde_json::from_value(value) {
-                        Ok(reply) => reply,
-                        Err(error) => {
-                            if let Some(view) = weak.upgrade() { let _ = view.update(cx, |view, cx| { if view.frame_request_generation == generation { view.frame_request_inflight = false; view.status = format!("帧数据格式错误：{error}"); cx.notify(); } }); }
-                            return;
-                        }
-                    };
-                    if reply.request.is_some_and(|request| request != generation) {
-                        if let Some(view) = weak.upgrade() {
-                            let _ = view.update(cx, |view, cx| {
-                                if view.frame_request_generation == generation {
-                                    view.frame_request_inflight = false;
-                                    view.flush_video_seek(cx);
-                                    view.refresh_frame(cx);
-                                }
-                            });
-                        }
-                        return;
-                    }
-                    // JPEG dimensions are authoritative, including scaled previews.
-                    let frame = reply.frame.unwrap_or(-1);
-                    let video_gone = reply.video == Some(false);
-                    let error = reply.error;
-                    let Some(encoded) = reply.image else {
-                        if let Some(view) = weak.upgrade() {
-                            let _ = view.update(cx, |view, cx| {
-                                if view.frame_request_generation != generation { return; }
-                                view.frame_request_inflight = false;
-                                view.seek_target = None;
-                                view.flush_video_seek(cx);
-                                if video_gone {
-                                    view.apply_snapshot(Snapshot { video: false, ..view.snapshot.clone() }, cx);
-                                }
-                                if let Some(error) = error {
-                                    view.status = format!("视频帧请求失败：{error}");
-                                    cx.notify();
-                                } else {
-                                    view.status = "等待 Neo Aegisub 当前视频帧".into();
-                                    cx.notify();
-                                }
-                            });
-                        }
-                        return;
-                    };
-                    let image = match decode_frame_image(encoded, cx).await {
-                        Ok(image) => image,
-                        Err(error) => {
-                            if let Some(view) = weak.upgrade() {
-                                let _ = view.update(cx, |view, cx| {
-                                    if view.frame_request_generation == generation {
-                                        view.frame_request_inflight = false;
-                                        view.seek_target = None;
-                                        view.flush_video_seek(cx);
-                                    }
-                                    view.status = format!("视频帧解码失败：{error}");
-                                    cx.notify();
-                                });
-                            }
-                            return;
-                        }
-                    };
-                    if let Some(view) = weak.upgrade() {
-                        let _ = view.update(cx, |view, cx| {
-                            if view.frame_request_generation != generation {
-                                return;
-                            }
-                            // Any answered request ends the in-flight window.
-                            // Leaving it set after a still frame kept every later
-                            // seek and step from asking for its picture.
-                            view.frame_request_inflight = false;
-                            let expected = view.seek_target.unwrap_or(view.snapshot.frame);
-                            let stale = !view.snapshot.video
-                                || view.video_epoch != request_epoch
-                                // Request order stays monotonic across backward
-                                // seeks; frame numbers do not, so only order is
-                                // compared here.
-                                || generation < view.frame_image_generation
-                                || (!view.snapshot.playing && frame != expected);
-                            if stale {
-                                // A newer pointer position supersedes this
-                                // picture; ask for that one instead of redoing
-                                // the frame nobody is going to see.
-                                view.seek_target = None;
-                                view.flush_video_seek(cx);
-                                view.refresh_frame(cx);
-                                return;
-                            }
-                            if view.seek_target == Some(frame) {
-                                view.seek_target = None;
-                            }
-                            view.replace_frame_image(cx, image, frame, request_revision);
-                            if view.frame_image_revision != view.snapshot.revision {
-                                view.refresh_frame(cx);
-                            }
-                            // The drag may have moved on while this picture was
-                            // decoded; one cycle at a time, newest position next.
-                            view.flush_video_seek(cx);
-                            cx.notify();
-                        });
-                    }
-                }
-                Err(error) => {
-                    if let Some(view) = weak.upgrade() {
-                        let _ = view.update(cx, |view, cx| {
-                            if view.frame_request_generation == generation {
-                                view.frame_request_inflight = false;
-                                view.seek_target = None;
-                                view.flush_video_seek(cx);
-                            }
-                            view.status = format!("获取视频帧失败：{error}");
-                            cx.notify();
-                        });
-                    }
-                }
-            }
-        }).detach();
-    }
-
-    /// Polls the host's cached playback frame independently of image decoding
-    /// and UI updates, so those operations do not delay the next request.
-    fn start_frame_pump(&mut self, cx: &mut Context<Self>) {
-        if self.frame_pump.running.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        // A fresh pump decodes the first frame even when the host still reports
-        // the frame that was on screen when playback stopped.
-        self.frame_pump.delivered.store(-1, Ordering::Release);
-        self.frame_request_inflight = true;
-        self.frame_request_generation += 1;
-        let pump = self.frame_pump.clone();
-        let id = pump.id.fetch_add(1, Ordering::AcqRel) + 1;
-        let bridge = self.bridge.clone();
-        let weak = cx.weak_entity();
-        let executor = cx.background_executor().clone();
-        cx.spawn(async move |_, cx| {
-            // Continue past the newest applied reply: a session that restarted at 0
-            // would have every reply dropped by the `applied` check below.
-            let mut sequence = pump.applied.load(Ordering::Acquire) + 1;
-            let mut first = true;
-            loop {
-                if !pump.playing.load(Ordering::Relaxed) {
-                    break;
-                }
-                // Ask twice per frame period. The host answers from the frame it
-                // has already encoded, so a poll is cheap and the newest frame is
-                // seen within half a period of being decoded instead of a whole
-                // request/reply cycle later.
-                if !first {
-                    let period = pump.period.load(Ordering::Relaxed).max(2_000);
-                    executor.timer(Duration::from_micros(period / 2)).await;
-                }
-                first = false;
-                let request_frame = pump.frame.load(Ordering::Relaxed);
-                let epoch = pump.epoch.load(Ordering::Relaxed);
-                let max_width = pump.max_width.load(Ordering::Relaxed);
-                let revision = pump.revision.load(Ordering::Relaxed);
-                let asked_at = trace::now();
-                let seq = sequence;
-                trace!("req t={asked_at} frame={request_frame} seq={seq} period={}", pump.period.load(Ordering::Relaxed));
-                let call = bridge.call(json!({"op":"frame", "frame":request_frame, "request":sequence, "epoch":epoch, "max_width":max_width}));
-                let cancelled = {
-                    let pump = pump.clone();
-                    let executor = executor.clone();
-                    async move {
-                        // Abandon only when playback ended or the host stopped
-                        // answering: a reply that misses one frame period is
-                        // still worth showing, and cancelling it would leave the
-                        // decoder's frame on the floor.
-                        let deadline = Instant::now() + Duration::from_millis(250);
-                        loop {
-                            executor.timer(Duration::from_millis(20)).await;
-                            if !pump.playing.load(Ordering::Relaxed) {
-                                break Err::<Value, _>(anyhow!("playback stopped"));
-                            }
-                            if Instant::now() >= deadline {
-                                break Err::<Value, _>(anyhow!("host did not answer the frame request"));
-                            }
-                        }
-                    }
-                };
-                let response = futures_lite::future::or(call, cancelled).await;
-                let answered_at = trace::now();
-                sequence += 1;
-                let reply = match response {
-                    Ok(value) => match serde_json::from_value::<FrameReply>(value) {
-                        Ok(reply) => reply,
-                        Err(error) => {
-                            if let Some(view) = weak.upgrade() {
-                                let _ = view.update(cx, |view, cx| {
-                                    if view.frame_pump.id.load(Ordering::Relaxed) == id {
-                                        view.status = format!("帧数据格式错误：{error}");
-                                        cx.notify();
-                                    }
-                                });
-                            }
-                            continue;
-                        }
-                    },
-                    Err(error) => {
-                        if pump.playing.load(Ordering::Relaxed) {
-                            if let Some(view) = weak.upgrade() {
-                                let _ = view.update(cx, |view, cx| {
-                                    if view.frame_pump.id.load(Ordering::Relaxed) == id {
-                                        view.status = format!("获取视频帧失败：{error}");
-                                        cx.notify();
-                                    }
-                                });
-                            }
-                            break;
-                        }
-                        break;
-                    }
-                };
-                let frame = reply.frame.unwrap_or(-1);
-                let received_at = Instant::now();
-                let media_timing = reply.time.zip(reply.clock_ms);
-                trace!("resp t={answered_at} frame={frame} seq={seq} rtt_us={}", answered_at.saturating_sub(asked_at));
-                let video_gone = reply.video == Some(false);
-                let Some(encoded) = reply.image else {
-                    if video_gone {
-                        if let Some(view) = weak.upgrade() {
-                            let _ = view.update(cx, |view, cx| {
-                                view.apply_snapshot(Snapshot { video: false, ..view.snapshot.clone() }, cx);
-                            });
-                        }
-                        break;
-                    }
-                    continue;
-                };
-                // Polling faster than the source repeats the same host frame;
-                // decoding it again would only rebuild an identical image.
-                if frame >= 0
-                    && pump.delivered.swap(frame, Ordering::AcqRel) == frame
-                {
-                    trace!("same t={answered_at} frame={frame}");
-                    continue;
-                }
-                let sequence_now = sequence - 1;
-                let weak_decode = weak.clone();
-                let decode_started = trace::now();
-                cx.spawn(async move |cx| {
-                    let image = match decode_frame_image(encoded, cx).await {
-                        Ok(image) => image,
-                        Err(error) => {
-                            if let Some(view) = weak_decode.upgrade() {
-                                let _ = view.update(cx, |view, cx| {
-                                    view.status = format!("视频帧解码失败：{error}");
-                                    cx.notify();
-                                });
-                            }
-                            return;
-                        }
-                    };
-                    let decoded_at = trace::now();
-                    trace!("dec t={decoded_at} frame={frame} us={}", decoded_at.saturating_sub(decode_started));
-                    if let Some(view) = weak_decode.upgrade() {
-                        let _ = view.update(cx, |view, cx| {
-                            if view.frame_pump.id.load(Ordering::Relaxed) != id { return; }
-                            if !view.snapshot.video || view.video_epoch != epoch { return; }
-                            if view.frame_pump.applied.load(Ordering::Acquire) >= sequence_now {
-                                return;
-                            }
-                            view.frame_pump.applied.store(sequence_now, Ordering::Release);
-                            view.frame_image_generation = view.frame_image_generation.max(sequence_now + 1);
-                            let Some((media_ms, clock_ms)) = media_timing else {
-                                view.status = "视频帧缺少媒体时钟".into();
-                                cx.notify();
-                                return;
-                            };
-                            let remaining_ms = (media_ms as f64 - clock_ms) / view.snapshot.playback_rate;
-                            let due = received_at + Duration::from_secs_f64(remaining_ms.max(0.) / 1000.);
-                            view.queue_playback_frame(cx, image, frame, revision, due);
-                        });
-                    }
-                }).detach();
-            }
-            pump.running.store(false, Ordering::Release);
-            if let Some(view) = weak.upgrade() {
-                let _ = view.update(cx, |view, cx| {
-                    if view.frame_pump.id.load(Ordering::Relaxed) == id {
-                        view.frame_request_inflight = false;
-                    }
-                    view.refresh_frame(cx);
-                });
-            }
-        }).detach();
-    }
     /// Aegisub stores line breaks as `\N` (or `\n` for soft breaks); a literal
     /// newline inside a Dialogue field would corrupt the file.
     fn editor_text(&self, cx: &mut Context<Self>) -> String {
@@ -7374,12 +6634,6 @@ impl Workspace {
 
     fn activate_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
-        if self.active_panel == Panel::Visual && panel != Panel::Visual {
-            self.visual.dragging = false;
-            self.visual.queue.clear();
-            self.queue_visual(json!({"action":"cancel"}), cx);
-        }
-        self.visual.pan_last = None;
         self.active_panel = panel;
         if panel == Panel::Commands {
             self.refresh_catalog(cx);
@@ -7436,9 +6690,12 @@ impl Workspace {
             self.refresh_document(cx);
             self.styling_action("start", None, cx);
         }
-        if panel == Panel::Visual {
-            self.visual.drawn = None;
-            self.queue_visual(json!({"action":"draw"}), cx);
+        if panel == Panel::Visual && self.snapshot.video {
+            let mut configure = json!({"action":"configure","tool":self.visual.tool});
+            if self.visual.tool == "vector_clip" {
+                configure["subtool"] = json!(self.visual.subtool);
+            }
+            self.video_surface(vec![configure, json!({"action":"show"})], cx);
         }
         cx.notify();
     }
@@ -7612,98 +6869,6 @@ impl Workspace {
             .child(navigation)
     }
 
-    fn cancel_visual_drag(&mut self, cx: &mut Context<Self>) {
-        if self.visual.dragging {
-            self.visual.dragging = false;
-            self.visual.queue.clear();
-            self.queue_visual(json!({"action":"cancel"}), cx);
-        }
-    }
-
-    fn adjust_video_view(
-        &mut self,
-        position: gpui_kit::Point<gpui_kit::Pixels>,
-        zoom: f32,
-        cx: &mut Context<Self>,
-    ) {
-        self.cancel_visual_drag(cx);
-        self.visual.zoom_at(position, zoom / self.visual.zoom);
-        cx.notify();
-    }
-
-    fn pan_video(&mut self, delta: gpui_kit::Point<gpui_kit::Pixels>, cx: &mut Context<Self>) {
-        self.cancel_visual_drag(cx);
-        self.visual.pan_by(delta);
-        cx.notify();
-    }
-
-    fn update_video_pan(
-        &mut self,
-        position: gpui_kit::Point<gpui_kit::Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(previous) = self.visual.pan_last {
-            self.visual.pan_last = Some(position);
-            self.pan_video(position - previous, cx);
-        }
-    }
-
-    fn handle_video_scroll(&mut self, event: &gpui_kit::ScrollWheelEvent, cx: &mut Context<Self>) {
-        if !self.snapshot.video {
-            return;
-        }
-        let primary = if cfg!(target_os = "macos") {
-            event.modifiers.platform
-        } else {
-            event.modifiers.control
-        };
-        if primary && event.modifiers.shift {
-            return;
-        }
-        let action = if primary {
-            self.snapshot.video_ctrl_scroll
-        } else if event.modifiers.shift {
-            self.snapshot.video_shift_scroll
-        } else {
-            self.snapshot.video_scroll
-        };
-        let delta = match event.delta {
-            ScrollDelta::Pixels(delta) => {
-                gpui_kit::point(f32::from(delta.x) / 40., f32::from(delta.y) / 40.)
-            }
-            ScrollDelta::Lines(delta) => delta,
-        };
-        match action {
-            0 | 1 if delta.y != 0. => {
-                let direction = if action == 1 { -1. } else { 1. };
-                self.cancel_visual_drag(cx);
-                self.visual.fit_video = false;
-                self.invoke(json!({"op":"video_settings", "action":"window_zoom", "value":(self.snapshot.video_window_zoom + direction * 0.125 * delta.y).clamp(0.125, 10.).to_string()}), cx);
-            }
-            2 | 3 if delta.y != 0. => {
-                let direction = if action == 3 { -1. } else { 1. };
-                self.adjust_video_view(
-                    event.position,
-                    self.visual.zoom * 1.125_f32.powf(direction * delta.y),
-                    cx,
-                );
-            }
-            4 | 5 => {
-                let distance = if action == 4 {
-                    delta
-                } else {
-                    gpui_kit::point(delta.y, delta.x)
-                };
-                self.pan_video(
-                    gpui_kit::point(px(distance.x * 5.), px(distance.y * 5.)),
-                    cx,
-                );
-            }
-            _ => return,
-        }
-        cx.stop_propagation();
-    }
-
     /// Raw text of the line being timed, tags and all: the audio strip shows it
     /// the way the editor's "show original" line does, so the strip reads as
     /// part of the script rather than as a rendered cue.
@@ -7719,60 +6884,10 @@ impl Workspace {
     fn render_player(
         &self,
         window: &Window,
-        side_by_side: bool,
-        fill: bool,
         focused: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let p = Palette::current(cx);
-        let aspect = self.snapshot.aspect as f32;
-        let zoom = self.visual.zoom;
-        let pan = self.visual.pan;
-        let height =
-            self.snapshot.video_height * self.snapshot.video_window_zoom / window.scale_factor();
-        let display_size = (self.snapshot.video && !self.visual.fit_video)
-            .then(|| size(px(height * aspect), px(height)));
-        let available_height = f32::from(window.viewport_size().height);
-        let view_height = if self.active_panel == Panel::Video {
-            (available_height - 200.).max(160.)
-        } else if fill {
-            // The line properties moved beside the text editor, so nothing is
-            // stacked under the preview any more: it takes the whole column.
-            (available_height - 430.).max(160.)
-        } else if self.visual.fit_video || !self.snapshot.video {
-            if side_by_side {
-                (available_height - 510.).clamp(130., 140.)
-            } else if self.active_panel == Panel::Visual {
-                (available_height - 350.).max(160.)
-            } else {
-                (available_height - 620.).clamp(90., 240.)
-            }
-        } else {
-            let reserved_height = if side_by_side {
-                510.
-            } else if self.active_panel == Panel::Visual {
-                350.
-            } else {
-                620.
-            };
-            let max_height = available_height - reserved_height;
-            height.clamp(80., max_height.max(80.))
-        };
-        let view_height = if fill {
-            view_height
-        } else {
-            self.video_preview_height.unwrap_or(view_height)
-        };
-        self.last_preview_height.set(view_height);
-        self.preview_width_px
-            .set((view_height * aspect * window.scale_factor()).clamp(320., 1920.));
-        let image = self.frame_image.clone();
-        let has_image = image.is_some();
-        let overscan = self.snapshot.video && self.snapshot.video_overscan;
-        let viewport = self.visual.viewport_bounds.clone();
-        let canvas_region = self.visual.canvas_bounds.clone();
-        let image_region = self.visual.bounds.clone();
-        let visual_active = self.active_panel == Panel::Visual;
         let status = if self.snapshot.video {
             format!(
                 "帧 {:05} · {:.2}:1 · {} fps",
@@ -7787,8 +6902,10 @@ impl Workspace {
             "未加载视频".into()
         };
         let weak = cx.weak_entity();
-        let fit = self.visual.fit_video;
         let window_zoom = self.snapshot.video_window_zoom;
+        let overscan = self.snapshot.video && self.snapshot.video_overscan;
+        // The picture, overscan mask, pan and zoom are drawn by the native
+        // video window; these controls only send commands to the host.
         let controls = div()
             .h_flex()
             .flex_wrap()
@@ -7802,22 +6919,10 @@ impl Workspace {
             .child(Icon::new(IconName::Play).size(px(14.)).text_color(p.muted))
             .child(
                 div()
-                    .id("detach-video-preview")
+                    .id("video-surface-title")
                     .cursor_pointer()
                     .on_click(cx.listener(|view, _, _, cx| {
-                        if view.detached == Some(Panel::Video) {
-                            return;
-                        }
-                        let restore = (view.show_audio, view.show_video);
-                        view.open_tool(Panel::Video, cx, |view, cx| {
-                            view.key_focus = KeyFocus::Video;
-                            cx.notify();
-                        });
-                        view.video_restore_layout.get_or_insert(restore);
-                        view.show_video = false;
-                        view.show_audio = true;
-                        view.sync_display_mode(cx);
-                        cx.notify();
+                        view.video_surface(vec![json!({"action":"show"})], cx);
                     }))
                     .text_size(px(12.))
                     .font_semibold()
@@ -7832,11 +6937,7 @@ impl Workspace {
                     .small()
                     .px(gpui_kit::px(13.))
                     .py(gpui_kit::px(3.))
-                    .label(if fit {
-                        "适应".to_owned()
-                    } else {
-                        format!("{}%", window_zoom * 100.)
-                    })
+                    .label(format!("{}%", window_zoom * 100.))
                     .child(Icon::new(IconName::ChevronDown).size(px(15.)))
                     .ghost()
                     .tooltip("视频框倍率")
@@ -7850,8 +6951,8 @@ impl Workspace {
                         ] {
                             let weak = weak.clone();
                             menu = menu.item(
-                                gpui_kit::component::menu::PopupMenuItem::new(label)
-                                    .checked(!fit && window_zoom == value)
+                                PopupMenuItem::new(label)
+                                    .checked(window_zoom == value)
                                     .on_click(move |_, _, cx| {
                                         let _ = weak.update(cx, |view, cx| {
                                             view.invoke(json!({"op":"command", "name":name}), cx);
@@ -7859,42 +6960,8 @@ impl Workspace {
                                     }),
                             );
                         }
-                        let weak = weak.clone();
-                        menu.item(
-                            gpui_kit::component::menu::PopupMenuItem::new("刷新当前视频帧")
-                                .on_click(move |_, _, cx| {
-                                    let _ = weak.update(cx, |view, cx| {
-                                        view.clear_frame_image(cx);
-                                        view.refresh_frame(cx);
-                                    });
-                                }),
-                        )
+                        menu
                     }),
-            )
-            .child(
-                Button::new("video-fit")
-                    .rounded(gpui_kit::px(999.))
-                    .small()
-                    .px(gpui_kit::px(13.))
-                    .py(gpui_kit::px(3.))
-                    .icon(IconName::Maximize)
-                    .label("适应窗口")
-                    .tooltip(if fit {
-                        "适应窗口：画面随预览区缩放（点击关闭）"
-                    } else {
-                        "适应窗口：画面随预览区缩放"
-                    })
-                    .ghost()
-                    .selected(fit)
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.cancel_visual_drag(cx);
-                        let fit = !view.visual.fit_video;
-                        view.visual.fit_video = fit;
-                        if fit {
-                            view.visual.reset_zoom();
-                        }
-                        cx.notify();
-                    })),
             )
             .child(div().flex_1())
             .child(
@@ -7908,8 +6975,7 @@ impl Workspace {
                     .tooltip("缩小画面")
                     .ghost()
                     .on_click(cx.listener(|view, _, _, cx| {
-                        let bounds = *view.visual.viewport_bounds.borrow();
-                        view.adjust_video_view(bounds.center(), view.visual.zoom / 1.125, cx);
+                        view.invoke(json!({"op":"command", "name":"video/zoom/out"}), cx)
                     })),
             )
             .child(
@@ -7918,7 +6984,7 @@ impl Workspace {
                     .text_color(p.muted)
                     .w(px(48.))
                     .text_center()
-                    .child(format!("{:.0}%", zoom * 100.)),
+                    .child(format!("{:.0}%", window_zoom * 100.)),
             )
             .child(
                 Button::new("video-content-in")
@@ -7931,8 +6997,7 @@ impl Workspace {
                     .tooltip("放大画面")
                     .ghost()
                     .on_click(cx.listener(|view, _, _, cx| {
-                        let bounds = *view.visual.viewport_bounds.borrow();
-                        view.adjust_video_view(bounds.center(), view.visual.zoom * 1.125, cx);
+                        view.invoke(json!({"op":"command", "name":"video/zoom/in"}), cx)
                     })),
             )
             .child(
@@ -7949,40 +7014,6 @@ impl Workspace {
                         view.invoke(json!({"op":"command", "name":"video/reset_pan"}), cx)
                     })),
             )
-            .child(
-                Button::new("video-pan-menu")
-                    .rounded(gpui_kit::px(999.))
-                    .small()
-                    .px(gpui_kit::px(13.))
-                    .py(gpui_kit::px(3.))
-                    .child(Icon::new(IconName::Move).size(px(15.)))
-                    .accessibility_label("平移画面")
-                    .tooltip("平移画面")
-                    .ghost()
-                    .dropdown_menu({
-                        let weak = cx.weak_entity();
-                        move |mut menu, _, _| {
-                            for (label, x, y) in [
-                                ("向左平移", -20., 0.),
-                                ("向右平移", 20., 0.),
-                                ("向上平移", 0., -20.),
-                                ("向下平移", 0., 20.),
-                            ] {
-                                let weak = weak.clone();
-                                menu = menu.item(
-                                    gpui_kit::component::menu::PopupMenuItem::new(label).on_click(
-                                        move |_, _, cx| {
-                                            let _ = weak.update(cx, |view, cx| {
-                                                view.pan_video(gpui_kit::point(px(x), px(y)), cx)
-                                            });
-                                        },
-                                    ),
-                                );
-                            }
-                            menu
-                        }
-                    }),
-            )
             .child(div().w(px(1.)).h(px(16.)).mx_1().bg(p.divider))
             .child(
                 Button::new("video-overscan")
@@ -7992,7 +7023,6 @@ impl Workspace {
                     .py(gpui_kit::px(3.))
                     .icon(IconName::Frame)
                     .label("安全区")
-                    .toggled(overscan)
                     .tooltip("电视过扫描安全区")
                     .ghost()
                     .selected(overscan)
@@ -8000,18 +7030,44 @@ impl Workspace {
                         view.invoke(json!({"op":"command", "name":"video/show_overscan"}), cx)
                     })),
             );
-        // The empty stage follows the theme; a loaded video keeps a dark
-        // letterbox so frames and subtitles read against it either way.
-        let stage_dark = self.snapshot.video;
-        let stage_bg: gpui_kit::Hsla = if stage_dark {
-            rgb(0x0e1013).into()
+        let surface_message = if !self.snapshot.video {
+            "打开视频，预览字幕效果"
+        } else if self.video_surface_visible {
+            "视频在独立窗口中显示"
         } else {
-            p.inset
+            "视频窗口已关闭"
         };
-        let stage_text: gpui_kit::Hsla = if stage_dark {
-            rgb(0xa1aabd).into()
+        let launch = if self.snapshot.video {
+            Button::new("video-surface-toggle")
+                .rounded(gpui_kit::px(999.))
+                .small()
+                .px(gpui_kit::px(13.))
+                .py(gpui_kit::px(3.))
+                .icon(IconName::Maximize)
+                .label(if self.video_surface_visible {
+                    "关闭视频窗口"
+                } else {
+                    "打开视频窗口"
+                })
+                .on_click(cx.listener(|view, _, _, cx| {
+                    let action = if view.video_surface_visible {
+                        "hide"
+                    } else {
+                        "show"
+                    };
+                    view.video_surface(vec![json!({"action":action})], cx);
+                }))
+                .into_any_element()
         } else {
-            p.muted
+            Button::new("empty-open-video")
+                .rounded(gpui_kit::px(999.))
+                .small()
+                .px(gpui_kit::px(13.))
+                .py(gpui_kit::px(3.))
+                .label("打开视频")
+                .child(Icon::new(IconName::FolderOpen).size(px(15.)))
+                .on_click(cx.listener(|view, _, _, cx| view.pick_file("video", cx)))
+                .into_any_element()
         };
         // The seek bar is not built here: `Timeline::render` owns it so it can
         // sit on the seam between this readout and the transport row.
@@ -8019,10 +7075,8 @@ impl Workspace {
             .v_flex()
             .w_full()
             .min_w_0()
-            .min_h_0()
+            .flex_shrink_0()
             .overflow_hidden()
-            .when(side_by_side && !fill, |card| card.flex_shrink_0())
-            .when(fill, |card| card.flex_1())
             .rounded(px(crate::workspace_theme::RADIUS_LG))
             .border_1()
             .border_color(if focused { p.accent } else { p.border })
@@ -8034,131 +7088,39 @@ impl Workspace {
             )
             .when(self.snapshot.video, |v| v.child(controls))
             .child(
-                div()
-                    .id("video-frame-surface")
-                    .when(fill, |surface| surface.flex_1().min_h(px(120.)))
-                    .when(!fill, |surface| surface.h(px(view_height)).flex_shrink_0())
-                    .w_full()
-                    .relative()
-                    .overflow_hidden()
-                    .bg(stage_bg)
-                    .child(
-                        canvas(
-                            move |bounds, _window, _cx| {
-                                *viewport.borrow_mut() = bounds;
-                                let base = video_base_bounds(bounds, aspect, display_size);
-                                let target = zoomed_video_bounds(base, zoom, pan);
-                                // Visual overlay owns its layout and resize notification while shown.
-                                if !visual_active {
-                                    *canvas_region.borrow_mut() = base;
-                                    *image_region.borrow_mut() = target;
-                                }
-                                (target, image)
-                            },
-                            move |viewport, (target, image), window, _| {
-                                if let Some(image) = image {
-                                    let _ = window.paint_image(
-                                        viewport,
-                                        target,
-                                        Corners::default(),
-                                        image,
-                                        0,
-                                        false,
-                                    );
-                                    if overscan {
-                                        window.with_content_mask(
-                                            Some(gpui_kit::ContentMask { bounds: viewport }),
-                                            |window| video_overscan::paint(target, aspect, window),
-                                        );
-                                    }
-                                }
-                            },
-                        )
-                        .absolute()
-                        .size_full(),
-                    )
-                    .when(!has_image, |v| {
-                        v.child(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .v_flex()
-                                .gap_3()
-                                .items_center()
-                                .justify_center()
-                                .text_color(stage_text)
-                                .child(Icon::new(IconName::Play).size(px(32.)))
-                                .child(div().text_sm().child(if self.snapshot.video {
-                                    "正在加载视频帧"
-                                } else {
-                                    "打开视频，预览字幕效果"
-                                }))
-                                .when(!self.snapshot.video, |v| {
-                                    v.child(
-                                        Button::new("empty-open-video")
-                                            .rounded(gpui_kit::px(999.))
-                                            .small()
-                                            .px(gpui_kit::px(13.))
-                                            .py(gpui_kit::px(3.))
-                                            .label("打开视频")
-                                            .child(Icon::new(IconName::FolderOpen).size(px(15.)))
-                                            .on_click(cx.listener(|view, _, _, cx| {
-                                                view.pick_file("video", cx)
-                                            })),
-                                    )
-                                }),
-                        )
-                    })
-                    .when(self.snapshot.video && visual_active, |v| {
-                        v.child(self.visual.overlay(aspect, display_size, cx))
-                    })
-                    .when(self.snapshot.video, |v| {
-                        v.on_scroll_wheel(cx.listener(
-                            |view, event: &gpui_kit::ScrollWheelEvent, _, cx| {
-                                view.handle_video_scroll(event, cx)
-                            },
-                        ))
-                        .on_mouse_down(
-                            gpui_kit::MouseButton::Middle,
-                            cx.listener(|view, event: &gpui_kit::MouseDownEvent, window, cx| {
-                                view.cancel_visual_drag(cx);
-                                view.focus_handle.focus(window, cx);
-                                view.visual.pan_last = Some(event.position);
-                            }),
-                        )
-                        .on_mouse_up(
-                            gpui_kit::MouseButton::Middle,
-                            cx.listener(|view, event: &gpui_kit::MouseUpEvent, _, cx| {
-                                view.update_video_pan(event.position, cx);
-                                view.visual.pan_last = None;
-                            }),
-                        )
-                        .on_mouse_up_out(
-                            gpui_kit::MouseButton::Middle,
-                            cx.listener(|view, event: &gpui_kit::MouseUpEvent, _, cx| {
-                                view.update_video_pan(event.position, cx);
-                                view.visual.pan_last = None;
-                            }),
-                        )
-                    }),
-            )
-            .child(
-                // Frame and scaling readout; the seek bar rides on its lower
-                // border, owned by the transport block that follows.
+                // One row: the native window's launch and state on the left,
+                // the readout on the right. The picture lives in that window.
                 div()
                     .h_flex()
                     .justify_between()
+                    .items_center()
+                    .gap_3()
                     .px_3()
                     .py_2()
                     .text_xs()
-                    .bg(stage_bg)
+                    .bg(p.inset)
                     .border_b_1()
                     .border_color(p.divider)
-                    .text_color(stage_text)
-                    .child(status)
-                    .when(f32::from(window.viewport_size().width) > 1100., |v| {
-                        v.child("⌘/Ctrl 滚轮缩放 · Shift 平移")
-                    }),
+                    .text_color(p.muted)
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(IconName::Play).size(px(14.)))
+                            .child(div().text_sm().child(surface_message))
+                            .child(launch),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_3()
+                            .child(status)
+                            .when(f32::from(window.viewport_size().width) > 1100., |v| {
+                                v.child("滚轮缩放与拖动在视频窗口中进行")
+                            }),
+                    ),
             )
             .child(self.timeline.render(&self.snapshot, cx))
     }
@@ -9449,68 +8411,6 @@ fn parse_time(value: &str) -> Result<i64> {
         .ok_or_else(|| anyhow!("时间码超出范围"))
 }
 
-/// Wall-clock time per frame at the current playback rate: the host advances
-/// `fps * rate` frames each second. Falls back to 30 fps when the stream rate is
-/// unknown (VFR) and to 1x when the rate is not a positive finite number.
-fn playback_period(fps: Option<f64>, rate: f64) -> Duration {
-    let fps = fps
-        .filter(|fps| fps.is_finite() && *fps > 0.)
-        .unwrap_or(30.);
-    let rate = if rate.is_finite() && rate > 0. {
-        rate
-    } else {
-        1.
-    };
-    Duration::from_secs_f64(1. / (fps * rate))
-}
-
-/// Registers the next display refresh for the presentation loop. The callback
-/// runs on each platform frame and re-registers itself while playback runs.
-fn present_next_refresh(weak: gpui_kit::WeakEntity<Workspace>, window: &Window) {
-    window.on_next_frame(move |window, cx| {
-        let keep_going = weak
-            .update(cx, |view, cx| view.present_tick(cx))
-            .unwrap_or(false);
-        if keep_going {
-            present_next_refresh(weak, window);
-        }
-    });
-}
-
-/// Decodes one base64 JPEG preview frame into a paintable image, off the UI
-/// thread: the decode plus channel swap costs more than a frame interval.
-async fn decode_frame_image(
-    encoded: String,
-    cx: &mut gpui_kit::AsyncApp,
-) -> Result<Arc<gpui_kit::RenderImage>> {
-    let bytes = cx
-        .background_executor()
-        .spawn(async move {
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-        })
-        .await?;
-    cx.background_executor()
-        .spawn(async move {
-            let decoder = image::ImageReader::with_format(
-                std::io::Cursor::new(bytes),
-                image::ImageFormat::Jpeg,
-            )
-            .into_decoder()?;
-            let rgba = image::DynamicImage::from_decoder(decoder)?.into_rgba8();
-            let (width, height) = rgba.dimensions();
-            let mut bgra = rgba.into_raw();
-            for pixel in bgra.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-            let image = image::RgbaImage::from_raw(width, height, bgra)
-                .context("video frame dimensions do not match its pixel data")?;
-            Ok::<_, anyhow::Error>(Arc::new(gpui_kit::RenderImage::new(vec![
-                VideoImageFrame::new(image),
-            ])))
-        })
-        .await
-}
-
 fn set_status(
     weak: &gpui_kit::WeakEntity<Workspace>,
     cx: &mut gpui_kit::AsyncApp,
@@ -9537,7 +8437,6 @@ async fn invoke_weak(
                     let _ = view.update(cx, |view, cx| {
                         view.status = "已同步当前项目".into();
                         view.apply_snapshot(snapshot, cx);
-                        view.refresh_frame(cx);
                     });
                 }
                 true
@@ -9555,10 +8454,6 @@ async fn invoke_weak(
 }
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.snapshot.playing && !self.present_loop_armed {
-            self.present_loop_armed = true;
-            present_next_refresh(cx.weak_entity(), window);
-        }
         let focus_area = self.focus_area(window, cx);
         if let Some(line) = self
             .snapshot
@@ -9692,87 +8587,65 @@ impl Render for Workspace {
             .id("aegisub-gpui-workspace")
             .track_focus(&self.focus_handle)
             .capture_key_down(cx.listener(Self::handle_key))
-            .on_drop(cx.listener(|view, paths: &ExternalPaths, _, cx| {
-                view.open_dropped(paths, cx)
-            }))
-            .on_mouse_move(cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
-                if let Some(drag) = view.layout_drag {
-                    if event.pressed_button == Some(gpui_kit::MouseButton::Left) {
-                        match drag {
-                            WorkspaceResizeDrag::SubtitleEditor {
-                                start_y,
-                                start_height,
-                            } => {
-                                view.subtitle_editor_height = (start_height
-                                    + f32::from(event.position.y - start_y))
+            .on_drop(cx.listener(|view, paths: &ExternalPaths, _, cx| view.open_dropped(paths, cx)))
+            .on_mouse_move(
+                cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                    if let Some(drag) = view.layout_drag {
+                        if event.pressed_button == Some(gpui_kit::MouseButton::Left) {
+                            match drag {
+                                WorkspaceResizeDrag::SubtitleEditor {
+                                    start_y,
+                                    start_height,
+                                } => {
+                                    view.subtitle_editor_height = (start_height
+                                        + f32::from(event.position.y - start_y))
                                     .clamp(210., 420.);
-                            }
-                            WorkspaceResizeDrag::AudioPanel {
-                                start_y,
-                                start_height,
-                            } => {
-                                view.audio_panel_height = (start_height
-                                    + f32::from(event.position.y - start_y))
+                                }
+                                WorkspaceResizeDrag::AudioPanel {
+                                    start_y,
+                                    start_height,
+                                } => {
+                                    view.audio_panel_height = (start_height
+                                        + f32::from(event.position.y - start_y))
                                     .clamp(64., 320.);
-                            }
-                            WorkspaceResizeDrag::ColumnSplit {
-                                start_x,
-                                start_width,
-                            } => {
-                                view.column_split = Some(
-                                    (start_width + f32::from(event.position.x - start_x))
-                                        .clamp(300., 1400.),
-                                );
-                            }
-                            WorkspaceResizeDrag::PropertiesRail {
-                                start_x,
-                                start_width,
-                            } => {
-                                // The inspector sits on the right, so dragging
-                                // the handle left makes it wider.
-                                view.properties_rail_width = Some(
-                                    (start_width - f32::from(event.position.x - start_x))
-                                        .clamp(200., 520.),
-                                );
-                            }
-                            WorkspaceResizeDrag::SubtitleColumn {
-                                column,
-                                start_x,
-                                start_width,
-                            } => {
-                                let width = (start_width
-                                    + f32::from(event.position.x - start_x))
+                                }
+                                WorkspaceResizeDrag::PropertiesRail {
+                                    start_x,
+                                    start_width,
+                                } => {
+                                    // The inspector sits on the right, so dragging
+                                    // the handle left makes it wider.
+                                    view.properties_rail_width = Some(
+                                        (start_width - f32::from(event.position.x - start_x))
+                                            .clamp(200., 520.),
+                                    );
+                                }
+                                WorkspaceResizeDrag::SubtitleColumn {
+                                    column,
+                                    start_x,
+                                    start_width,
+                                } => {
+                                    let width = (start_width
+                                        + f32::from(event.position.x - start_x))
                                     .clamp(40., 600.);
-                                view.set_subtitle_column_width(column, width);
+                                    view.set_subtitle_column_width(column, width);
+                                }
+                                WorkspaceResizeDrag::StylePreview {
+                                    start_y,
+                                    start_height,
+                                } => {
+                                    view.style_preview_height = (start_height
+                                        + f32::from(event.position.y - start_y))
+                                    .clamp(64., 320.);
+                                }
                             }
-                            WorkspaceResizeDrag::StylePreview {
-                                start_y,
-                                start_height,
-                            } => {
-                                view.style_preview_height =
-                                    (start_height + f32::from(event.position.y - start_y))
-                                        .clamp(64., 320.);
-                            }
+                            cx.notify();
+                        } else {
+                            view.layout_drag = None;
                         }
-                        cx.notify();
-                    } else {
-                        view.layout_drag = None;
                     }
-                }
-                if view.visual.pan_last.is_some() {
-                    if event.pressed_button == Some(gpui_kit::MouseButton::Middle) {
-                        view.update_video_pan(event.position, cx);
-                    } else { view.visual.pan_last = None; }
-                }
-                if view.active_panel == Panel::Visual
-                    && view.visual.dragging
-                    && event.pressed_button == Some(gpui_kit::MouseButton::Left)
-                    && !view.visual.viewport_bounds.borrow().contains(&event.position)
-                {
-                    let (x, y) = view.visual.local(event.position);
-                    view.queue_visual(json!({"action":"move", "x":x,"y":y,"shift":event.modifiers.shift,"control":event.modifiers.control || event.modifiers.platform,"alt":event.modifiers.alt}), cx);
-                }
-            }))
+                }),
+            )
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|view, _, _, cx| {
@@ -9786,7 +8659,8 @@ impl Render for Workspace {
             )
             .size_full()
             .overflow_hidden()
-            .h_flex().items_stretch()
+            .h_flex()
+            .items_stretch()
             .bg(canvas)
             .text_color(p.text);
         let mut body = div()
@@ -9796,22 +8670,6 @@ impl Render for Workspace {
             .min_h_0()
             .overflow_hidden();
         if self.active_panel == Panel::Subtitles {
-            let side_by_side = self.show_video && f32::from(window.viewport_size().width) >= 900.;
-            let sidebar = if self
-                .sidebar_collapsed
-                .unwrap_or(f32::from(window.viewport_size().width) < 1150.)
-            {
-                60.
-            } else {
-                164.
-            };
-            let body_width = (f32::from(window.viewport_size().width) - sidebar - 48.).max(320.);
-            let column_width = self
-                .column_split
-                .unwrap_or((body_width - 12.) / 2.)
-                .clamp(280., (body_width - 280.).max(280.));
-            // The inspector moves beside the text editor once the right column
-            // can hold both without squeezing the editor into a sliver.
             // The inspector stacks under the editor, so there is no side rail
             // to size or drag any more.
             let properties_rail: Option<f32> = None;
@@ -9839,31 +8697,6 @@ impl Render for Workspace {
                         cx.notify();
                     }),
                 );
-            let column_handle = div()
-                .id("workspace-column-resize-handle")
-                .aria_label("调整视频与字幕列表宽度")
-                .role(gpui_kit::Role::Splitter)
-                .w(px(4.))
-                .h_full()
-                .flex_shrink_0()
-                .v_flex()
-                .items_center()
-                .justify_center()
-                .cursor_col_resize()
-                .child(div().h(px(48.)).w(px(3.)).rounded(px(2.)).bg(grip))
-                .on_mouse_down(
-                    gpui_kit::MouseButton::Left,
-                    cx.listener(move |view, event: &gpui_kit::MouseDownEvent, _, cx| {
-                        view.layout_drag = Some(WorkspaceResizeDrag::ColumnSplit {
-                            start_x: event.position.x,
-                            start_width: column_width,
-                        });
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                );
-            // A visible video uses the left column on wide windows. Without video,
-            // audio sits above the full-width subtitle editor and list.
             let line_text = self.timed_line_text();
             let audio_strip = self
                 .audio
@@ -9878,16 +8711,10 @@ impl Render for Workspace {
                 )
                 .into_any_element();
             let player = self
-                .render_player(
-                    window,
-                    side_by_side,
-                    side_by_side,
-                    focus_area == KeyFocus::Video,
-                    cx,
-                )
+                .render_player(window, focus_area == KeyFocus::Video, cx)
                 .into_any_element();
             let mut columns = div()
-                .h_flex()
+                .v_flex()
                 .items_stretch()
                 .flex_1()
                 .min_w_0()
@@ -9896,10 +8723,8 @@ impl Render for Workspace {
             if self.show_audio || self.show_video {
                 let mut left = div()
                     .v_flex()
-                    .when(side_by_side, |column| {
-                        column.w(px(column_width)).h_full().flex_shrink_0()
-                    })
-                    .when(!side_by_side, |column| column.w_full())
+                    .w_full()
+                    .flex_shrink_0()
                     .min_w_0()
                     .min_h_0()
                     .gap_0p5();
@@ -9907,14 +8732,11 @@ impl Render for Workspace {
                     left = left.child(audio_strip).child(audio_handle);
                 }
                 if self.show_video {
-                    // No handle under the preview: it already fills whatever the
-                    // audio strip leaves, so there is no height to trade.
+                    // No handle under the preview: the compact card has a fixed height,
+                    // so there is no height to trade.
                     left = left.child(player);
                 }
                 columns = columns.child(left);
-                if side_by_side {
-                    columns = columns.child(column_handle);
-                }
             }
             columns = columns.child({
                 // The editor and the subtitle list are one region: they share
@@ -9933,9 +8755,6 @@ impl Render for Workspace {
                     .border_color(if focused { p.accent } else { p.border })
                     .child(self.render_subtitle_panel(properties_rail, focused, cx))
             });
-            if !side_by_side {
-                columns = columns.flex_col();
-            }
             body = body.child(
                 div()
                     .v_flex()
@@ -9947,13 +8766,11 @@ impl Render for Workspace {
                     .p_2()
                     .child(columns),
             );
-        } else if self.active_panel == Panel::Video {
-            body = body.child(self.render_player(window, false, false, true, cx));
         } else if self.active_panel == Panel::Visual {
             body = body.child(
                 page::page(cx, "visual-panel")
                     .child(self.visual.toolbar(cx))
-                    .child(self.render_player(window, false, false, true, cx))
+                    .child(self.render_player(window, true, cx))
                     .child(page::hint(
                         cx,
                         "双击十字定位；拖动控制点调整，Shift 约束，Ctrl/⌘ 多选。",
@@ -10474,7 +9291,6 @@ fn panel_window_size(panel: Panel) -> gpui_kit::Size<gpui_kit::Pixels> {
         Panel::Styling => (820., 520.),
         Panel::Project => (900., 620.),
         Panel::Visual => (1100., 780.),
-        Panel::Video => (1000., 720.),
         Panel::Translation => (900., 600.),
         Panel::Timing => (860., 660.),
         Panel::Processor => (900., 600.),
@@ -10537,8 +9353,6 @@ fn open_workspace(
                 PANEL_VIEWS.with(|views| {
                     views.borrow_mut().insert(panel, workspace.downgrade());
                 });
-            } else {
-                MAIN_VIEW.with(|view| *view.borrow_mut() = Some(workspace.downgrade()));
             }
             // The wx frame used to ask this itself, but by the time the GPUI
             // window is gone the host has no client to talk to and falls back to
@@ -10549,24 +9363,6 @@ fn open_workspace(
                     return true;
                 };
                 view.update(cx, |view, cx| {
-                    if view.detached == Some(Panel::Video) {
-                        PANEL_WINDOWS.with(|windows| windows.borrow_mut().remove(&Panel::Video));
-                        PANEL_VIEWS.with(|views| views.borrow_mut().remove(&Panel::Video));
-                        MAIN_VIEW.with(|main| {
-                            if let Some(main) =
-                                main.borrow().as_ref().and_then(|view| view.upgrade())
-                            {
-                                main.update(cx, |main, cx| {
-                                    if let Some((audio, video)) = main.video_restore_layout.take() {
-                                        main.show_audio = audio;
-                                        main.show_video = video;
-                                        main.sync_display_mode(cx);
-                                        cx.notify();
-                                    }
-                                });
-                            }
-                        });
-                    }
                     if view.detached.is_some() || !view.snapshot.modified {
                         return true;
                     }
@@ -10634,7 +9430,6 @@ fn open_workspace(
                                         view.status = "已重新连接 Neo Aegisub".into();
                                     }
                                     view.apply_snapshot(snapshot, cx);
-                                    view.refresh_frame(cx);
                                 });
                             }
                         }
@@ -10644,7 +9439,6 @@ fn open_workspace(
                             if let Some(view) = weak.upgrade() {
                                 let _ = view.update(cx, |view, cx| {
                                     view.apply_playback(playback, cx);
-                                    view.refresh_frame(cx);
                                 });
                             }
                         }
@@ -10657,9 +9451,6 @@ fn open_workspace(
                             }
                         }
                     }
-                    // The frame request is throttled by frame_request_inflight,
-                    // so a short tick during playback costs nothing and keeps
-                    // the next request from waiting on a fixed timer.
                     cx.background_executor()
                         .timer(Duration::from_millis(if playing { 16 } else { 350 }))
                         .await;
@@ -10682,8 +9473,6 @@ fn open_panel_window(
 }
 
 thread_local! {
-    static MAIN_VIEW: std::cell::RefCell<Option<gpui_kit::WeakEntity<Workspace>>> =
-        std::cell::RefCell::new(None);
     /// One window per tool: clicking the same sidebar row twice should raise the
     /// window that is already open instead of stacking duplicates.
     static PANEL_WINDOWS: std::cell::RefCell<

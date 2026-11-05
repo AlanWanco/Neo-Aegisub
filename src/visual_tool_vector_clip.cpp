@@ -48,6 +48,10 @@ void VisualToolVectorClip::AddTool(std::string command_name, VisualToolVectorCli
 
 void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 	this->toolBar = toolBar;
+    if (!toolBar) {
+        SetSubTool(features.empty() ? VCLIP_LINE : VCLIP_DRAG);
+        return;
+    }
 
 	toolBar->AddSeparator();
 

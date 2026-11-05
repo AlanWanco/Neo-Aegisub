@@ -13,7 +13,6 @@
 #include "gpui_translation.h"
 #include "gpui_timing.h"
 #include "gpui_search.h"
-#include "gpui_visual.h"
 #include "gpui_video.h"
 #include "gpui_preferences.h"
 #include "gpui_spelling.h"
@@ -40,28 +39,21 @@
 #include "text_selection_controller.h"
 #include "video_controller.h"
 #include "video_display.h"
-#include "video_frame.h"
 
 #include <libaegisub/cajun/reader.h>
 #include <libaegisub/cajun/visitor.h>
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/log.h>
 
-#include <wx/base64.h>
 #include <wx/filefn.h>
 #include <wx/choicdlg.h>
-#include <wx/image.h>
 #include <wx/msgdlg.h>
-#include <wx/mstream.h>
 #include <wx/sckaddr.h>
 #include <wx/socket.h>
-#include <wx/timer.h>
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
-#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -76,26 +68,6 @@
 #include <vector>
 
 namespace {
-/// Diagnostic playback trace: with `AEGISUB_GPUI_HOST_TRACE=<path>` the host
-/// writes a line per decoded preview frame and per cache hit, so a stutter
-/// reported on another machine can be attributed to decoding, encoding or the
-/// request cadence. Unset means no file is opened and no time is taken.
-void HostTrace(char const *format, ...) {
-	static std::FILE *const file = [] {
-		char const *path = std::getenv("AEGISUB_GPUI_HOST_TRACE");
-		return path ? std::fopen(path, "w") : nullptr;
-	}();
-	if (!file) return;
-	static auto const origin = std::chrono::steady_clock::now();
-	auto const us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - origin).count();
-	std::fprintf(file, "%lld ", static_cast<long long>(us));
-	va_list args;
-	va_start(args, format);
-	std::vfprintf(file, format, args);
-	va_end(args);
-	std::fputc('\n', file);
-	std::fflush(file);
-}
 
 std::mutex notice_mutex;
 struct PendingNotice {
@@ -138,14 +110,6 @@ void DetachClient() {
 	if (attached_clients > 0) --attached_clients;
 }
 constexpr size_t max_message_size = 2 * 1024 * 1024;
-/// How long a frame request may wait before the poll timer re-requests it.
-constexpr auto frame_retry_interval = std::chrono::milliseconds(1500);
-/// Re-requests before the bridge answers with an explicit timeout error.
-constexpr int max_frame_retries = 3;
-/// How long a request the bridge already issued counts as still on its way.
-/// The duplicate this suppresses arrives within a few milliseconds of the
-/// seek that issued it, so the window only needs to outlast the round trip.
-constexpr auto pending_request_window = std::chrono::milliseconds(500);
 
 
 std::string make_token() {
@@ -184,32 +148,6 @@ std::string quote_json(std::string_view value) {
 	return out.str();
 }
 
-std::string to_base64_jpeg(VideoFrame const& frame, double aspect, int max_width, int& width, int& height) {
-	int display_width = std::max(1, static_cast<int>(std::round(frame.height * aspect)));
-	// The wx display uploads the frame at its native size and lets OpenGL
-	// scale it. Resampling here is only worth its cost when it removes a
-	// large share of the pixels; below that, hand the scaling to the frontend.
-	constexpr double kMinShrink = 0.7;
-	wxImage image;
-	if (max_width > 0 && max_width < display_width * kMinShrink) {
-		int const scaled_height = std::max(1, static_cast<int>(std::round(frame.height * (double(max_width) / display_width))));
-		image = GetImageShrunk(frame, max_width, scaled_height);
-	}
-	else {
-		image = GetImage(frame);
-		if (display_width != image.GetWidth())
-			image.Rescale(display_width, image.GetHeight(), wxIMAGE_QUALITY_BILINEAR);
-	}
-	width = image.GetWidth();
-	height = image.GetHeight();
-	image.SetOption(wxIMAGE_OPTION_QUALITY, 72);
-	wxMemoryOutputStream stream;
-	if (!image.SaveFile(stream, wxBITMAP_TYPE_JPEG))
-		return {};
-	std::vector<unsigned char> bytes(stream.GetSize());
-	stream.CopyTo(bytes.data(), bytes.size());
-	return std::string(wxBase64Encode(bytes.data(), bytes.size()).utf8_str());
-}
 
 struct JsonStringCheck final : json::ConstVisitor {
 	bool is_string = false;
@@ -298,83 +236,28 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		std::string response;
 		size_t response_offset = 0;
 		bool responding = false;
-		bool waiting_for_frame = false;
-		bool awaiting_current = false;
-		int max_width = 0;
-		int requested_frame = -1;
-		uint64_t request_id = 0;
-		uint64_t video_epoch = 0;
-		AsyncVideoProvider *provider = nullptr;
-		/// When the current request started waiting. The poll timer uses it to
-		/// re-request frames the provider dropped instead of leaving the
-		/// preview on the loading placeholder forever.
-		std::chrono::steady_clock::time_point waiting_since{};
-		int frame_retries = 0;
 	};
 
 	agi::Context *context;
+	gpui::VideoSurface video_surface;
 	gpui::Audio audio;
-	gpui::Visual visual;
 	gpui::Spelling spelling;
 	wxSocketServer *server = nullptr;
 	std::map<wxSocketBase *, Client> clients;
-	wxTimer frame_poll;
 	/// wxWidgets 3.3 added an RAII socket initializer; 3.2 needs manual management.
 	bool sockets_initialized = false;
 	unsigned short port = 0;
 	uint64_t video_epoch = 0;
-	/// The newest frame the bridge already encoded for a client. Playback
-	/// requests are answered from this copy, so the frontend's request latency
-	/// no longer includes the host's own frame interval: a reply arrives in
-	/// microseconds instead of up to one decoded frame later.
-	struct CachedFrame {
-		std::string jpeg;
-		int frame = -1;
-		int width = 0;
-		int height = 0;
-		int max_width = -1;
-		uint64_t epoch = 0;
-		bool valid = false;
-		/// Media time of the frame in ms, reported with every reply for it.
-		int time_ms = 0;
-	} cached_frame;
-	/// The frame the host decoded last. A seek makes the controller request that
-	/// frame on its own, and the frontend asks for the same one right after;
-	/// encoding this copy skips a second seek-and-decode of the source.
-	std::shared_ptr<VideoFrame> last_decoded;
-	int last_decoded_frame = -1;
-	uint64_t last_decoded_epoch = 0;
-	/// The frame a request already asked the provider for and that has not
-	/// arrived yet. A seek asks for its frame, then the frontend's frame
-	/// request for the same number arrives before the decode finishes;
-	/// re-requesting it would cancel the running decode and restart from the
-	/// previous keyframe, so a drag would pay for every step twice. The stamp
-	/// keeps the note from outliving the decode it describes when a request
-	/// is dropped without a frame arriving.
-	int pending_frame_request = -1;
-	std::chrono::steady_clock::time_point pending_frame_request_at{};
-	/// When the frontend last asked for a playback frame. The cache is only
-	/// refreshed while those requests keep coming.
-	std::chrono::steady_clock::time_point last_playback_poll{};
 	uint64_t revision = 1;
 	uint64_t details_revision = 1;
 	agi::signal::Connection commit_connection;
 	AsyncVideoProvider *observed_provider = nullptr;
 	std::string token = make_token();
 
-	explicit Impl(agi::Context *context) : context(context), audio(context), visual(context), spelling(context), frame_poll(this, wxID_ANY) {
+	explicit Impl(agi::Context *context) : context(context), video_surface(context), audio(context), spelling(context) {
 		Bind(wxEVT_SOCKET, &Impl::OnSocket, this);
-		Bind(wxEVT_TIMER, &Impl::OnFramePoll, this, frame_poll.GetId());
 		commit_connection = context->ass->AddCommitListener([this](int type, const AssDialogue *) {
 			++revision;
-			// A commit can change the subtitles burned into the current frame,
-			// so a cached still picture stops being authoritative.
-			cached_frame.valid = false;
-			last_decoded.reset();
-			// The re-render supersedes the decode in flight, which then never
-			// arrives; forgetting it lets the next request ask again instead
-			// of waiting for the retry timer.
-			pending_frame_request = -1;
 			if (type == AssFile::COMMIT_NEW || (type & (AssFile::COMMIT_STYLES | AssFile::COMMIT_SCRIPTINFO)))
 				++details_revision;
 		});
@@ -383,7 +266,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 	~Impl() {
 		Stop();
 		Unbind(wxEVT_SOCKET, &Impl::OnSocket, this);
-		Unbind(wxEVT_TIMER, &Impl::OnFramePoll, this, frame_poll.GetId());
 	}
 
 	void CloseClient(wxSocketBase *socket) {
@@ -396,22 +278,9 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		DetachClient();
 	}
 
-	/// Asks the provider for one frame and records that it is on its way.
-	void RequestProviderFrame(AsyncVideoProvider *provider, int frame) {
-		pending_frame_request = frame;
-		pending_frame_request_at = std::chrono::steady_clock::now();
-		provider->RequestFrame(frame, context->videoController->TimeAtFrame(frame));
-	}
-
-	/// A request the bridge already issued for this frame may still be
-	/// decoding. Asking again would cancel it, so the caller holds off.
-	bool FrameRequestPending(int frame) const {
-		return pending_frame_request == frame
-			&& std::chrono::steady_clock::now() - pending_frame_request_at < pending_request_window;
-	}
 
 	void Stop() {
-		frame_poll.Stop();
+		video_surface.Close();
 		for (auto it = clients.begin(); it != clients.end();) {
 			auto socket = it->first;
 			++it;
@@ -423,10 +292,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			server->Destroy();
 			server = nullptr;
 		}
-		if (context && context->videoController)
-			context->videoController->Unbind(EVT_FRAME_READY, &Impl::OnFrameReady, this);
 		observed_provider = nullptr;
-		pending_frame_request = -1;
 		++video_epoch;
 		port = 0;
 		if (sockets_initialized) {
@@ -435,67 +301,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		}
 	}
 
-	void OnFramePoll(wxTimerEvent&) {
-		auto provider_now = context->project->VideoProvider();
-		if (provider_now != observed_provider) {
-			observed_provider = provider_now;
-			++video_epoch;
-		}
-		if (!provider_now) {
-			std::vector<wxSocketBase *> pending;
-			for (auto const& [socket, client] : clients)
-				if (client.waiting_for_frame) pending.push_back(socket);
-			for (auto socket : pending) {
-				auto it = clients.find(socket);
-				if (it != clients.end()) {
-					it->second.waiting_for_frame = false;
-					it->second.frame_retries = 0;
-					BeginResponse(socket, it->second, "{\"ok\":true,\"video\":false,\"frame\":-1,\"request\":" + std::to_string(it->second.request_id) + ",\"image\":null}");
-				}
-			}
-			return;
-		}
-
-		int const frame_number = context->videoController->GetFrameN();
-		bool const playing = context->videoController->IsPlaying();
-		auto const now = std::chrono::steady_clock::now();
-		std::vector<wxSocketBase *> timed_out;
-		for (auto& [socket, client] : clients) {
-			if (!client.waiting_for_frame) continue;
-			bool const current_request = client.requested_frame == frame_number
-				&& client.video_epoch == video_epoch
-				&& client.provider == provider_now;
-			if (!current_request) {
-				client.requested_frame = frame_number;
-				client.video_epoch = video_epoch;
-				client.provider = provider_now;
-				client.awaiting_current = true;
-				client.waiting_since = now;
-				client.frame_retries = 0;
-				if (!playing) RequestProviderFrame(provider_now, frame_number);
-				continue;
-			}
-			// A subtitle update can supersede the request (ProcAsync drops
-			// older versions) without emitting a frame, and a render error
-			// never reaches OnFrameReady; retry so the preview does not stay
-			// on the loading placeholder forever.
-			if (now - client.waiting_since < frame_retry_interval) continue;
-			if (client.frame_retries >= max_frame_retries) {
-				timed_out.push_back(socket);
-				continue;
-			}
-			++client.frame_retries;
-			client.waiting_since = now;
-			if (!playing) RequestProviderFrame(provider_now, frame_number);
-		}
-		for (auto socket : timed_out) {
-			auto it = clients.find(socket);
-			if (it == clients.end()) continue;
-			it->second.waiting_for_frame = false;
-			it->second.frame_retries = 0;
-			BeginResponse(socket, it->second, R"({"ok":false,"error":"video frame request timed out"})");
-		}
-	}
 
 	void OnSocket(wxSocketEvent& event) {
 		wxSocketBase *socket = event.GetSocket();
@@ -572,82 +377,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		WriteResponse(socket, client);
 	}
 
-	void OnFrameReady(FrameReadyEvent& event) {
-		auto current_provider = context->project->VideoProvider();
-		if (current_provider != observed_provider) {
-			observed_provider = current_provider;
-			++video_epoch;
-		}
-		std::vector<wxSocketBase *> ready;
-		int const current_frame = context->videoController->GetFrameN();
-		bool const playing = context->videoController->IsPlaying();
-		int const frame_number = event.frame_number;
-		int const time_ms = static_cast<int>(event.time);
-		last_decoded = event.frame;
-		last_decoded_frame = frame_number;
-		last_decoded_epoch = video_epoch;
-		if (frame_number == pending_frame_request) pending_frame_request = -1;
-		for (auto const& [socket, client] : clients) {
-			bool const matching_still_frame = client.requested_frame == current_frame
-				&& event.frame_number == current_frame;
-			if (client.waiting_for_frame && client.video_epoch == video_epoch && client.provider == current_provider
-				&& (playing || matching_still_frame)) {
-				ready.push_back(socket);
-			}
-		}
-		{
-			static auto last_ready = std::chrono::steady_clock::now();
-			auto const ready_at = std::chrono::steady_clock::now();
-			auto const gap = std::chrono::duration_cast<std::chrono::microseconds>(ready_at - last_ready).count();
-			HostTrace("ready frame=%d playing=%d waiters=%zu gap_us=%lld", frame_number, playing ? 1 : 0, ready.size(), static_cast<long long>(gap));
-			last_ready = ready_at;
-		}
-		for (auto socket : ready) {
-			auto it = clients.find(socket);
-			if (it == clients.end()) continue;
-			it->second.waiting_for_frame = false;
-			it->second.frame_retries = 0;
-			it->second.awaiting_current = false;
-			it->second.provider = nullptr;
-			int const max_width = it->second.max_width;
-			int width = 0;
-			int height = 0;
-			auto const encode_start = std::chrono::steady_clock::now();
-			std::string encoded = to_base64_jpeg(*event.frame, context->videoController->GetAspectRatioValue(), max_width, width, height);
-			HostTrace("encode frame=%d width=%d bytes=%zu us=%lld", frame_number, width, encoded.size(), static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start).count()));
-			if (encoded.empty()) {
-				BeginResponse(socket, it->second, R"({"ok":false,"error":"could not encode preview frame"})");
-				continue;
-			}
-			std::ostringstream out;
-			out << "{\"ok\":true,\"video\":true,\"frame\":" << frame_number
-			    << ",\"request\":" << it->second.request_id
-			    << ",\"time\":" << time_ms
-			    << ",\"clock_ms\":" << context->videoController->GetPlaybackTime()
-			    << ",\"width\":" << width << ",\"height\":" << height
-			    << ",\"image\":" << quote_json(encoded) << '}';
-			BeginResponse(socket, it->second, out.str());
-			// A still frame is cached too: the frontend asks again right after
-			// a seek, and answering from the copy avoids decoding it twice.
-			cached_frame = {std::move(encoded), frame_number, width, height, max_width, video_epoch, true, time_ms};
-		}
-		// Playback requests are answered from the cached copy, so a ready frame
-		// usually arrives with nobody waiting. Refresh the copy anyway, or the
-		// frontend would keep receiving the frame it just displayed. Skip it
-		// when no playback request arrived recently: encoding every frame for a
-		// viewer that stopped polling is pure UI-thread work.
-		if (playing && cached_frame.valid && ready.empty()
-			&& std::chrono::steady_clock::now() - last_playback_poll < std::chrono::seconds(1)) {
-			int width = 0;
-			int height = 0;
-			auto const encode_start = std::chrono::steady_clock::now();
-			std::string encoded = to_base64_jpeg(*event.frame, context->videoController->GetAspectRatioValue(), cached_frame.max_width, width, height);
-			HostTrace("encode frame=%d width=%d bytes=%zu us=%lld refresh=1", frame_number, width, encoded.size(), static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start).count()));
-			if (!encoded.empty())
-				cached_frame = {std::move(encoded), frame_number, width, height, cached_frame.max_width, video_epoch, true, time_ms};
-		}
-		event.Skip();
-	}
 
 	void WriteResponse(wxSocketBase *socket, Client& client) {
 		while (client.response_offset < client.response.size()) {
@@ -699,7 +428,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		if (op == "snapshot") { BeginResponse(socket, client, Snapshot()); return; }
 		if (op == "playback") { BeginResponse(socket, client, PlaybackSnapshot()); return; }
 		if (op == "video_settings") { BeginResponse(socket, client, gpui::VideoSettings(context, object)); return; }
-		if (op == "visual") { BeginResponse(socket, client, visual.Interact(object)); return; }
+		if (op == "video_surface") { BeginResponse(socket, client, video_surface.Handle(object)); return; }
 		if (op == "audio_render") { BeginResponse(socket, client, audio.Render(object)); return; }
 		if (op == "audio_action") { BeginResponse(socket, client, audio.Interact(object)); return; }
 		if (op == "automation_manager") { BeginResponse(socket, client, gpui::AutomationManager(context, object)); return; }
@@ -708,7 +437,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		return;
 	}
 	if (op == "color") { BeginResponse(socket, client, gpui::ColorPanel(context, object)); return; }
-		if (op == "catalog") { BeginResponse(socket, client, gpui::CommandCatalog(context, visual)); return; }
+		if (op == "catalog") { BeginResponse(socket, client, gpui::CommandCatalog(context)); return; }
 		if (op == "attachments") {
 			if (auto expected = object.find("revision"); expected != object.end()) {
 				if (static_cast<json::Integer const&>(expected->second) != static_cast<int64_t>(revision)) { BeginResponse(socket, client, R"({"ok":false,"error":"document changed; refresh attachments first"})"); return; }
@@ -742,7 +471,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		}
 		if (op == "search") { BeginResponse(socket, client, gpui::Search(context, object)); return; }
 		if (op == "shift_times") { BeginResponse(socket, client, gpui::ShiftTimesPanel(context, object)); return; }
-		if (op == "frame") { QueueFrame(object, socket, client); return; }
 		if (op == "select") { BeginResponse(socket, client, Select(object)); return; }
 		if (op == "edit") { BeginResponse(socket, client, Edit(object)); return; }
 		if (op == "line_fields") { BeginResponse(socket, client, LineFields(object)); return; }
@@ -814,6 +542,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		out << "{\"ok\":true"
 		    << ",\"video\":" << (provider ? "true" : "false")
 		    << ",\"video_epoch\":" << video_epoch
+		    << ",\"video_surface_visible\":" << (video_surface.IsVisible() ? "true" : "false")
 		    << ",\"playing\":" << (context->videoController->IsPlaying() ? "true" : "false")
 		    << ",\"frame\":" << context->videoController->GetFrameN()
 		    << ",\"video_time\":" << (provider ? context->videoController->TimeAtFrame(context->videoController->GetFrameN()) : 0)
@@ -839,6 +568,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		    << ",\"can_save\":" << (context->subsController->CanSave() ? "true" : "false")
 		    << ",\"revision\":" << revision << ",\"details_revision\":" << details_revision
 		    << ",\"video\":" << (context->project->VideoProvider() ? "true" : "false")
+		    << ",\"video_surface_visible\":" << (video_surface.IsVisible() ? "true" : "false")
 		    << ",\"timecodes\":" << (context->project->Timecodes().IsLoaded() ? "true" : "false")
 		    << ",\"playing\":" << (context->videoController->IsPlaying() ? "true" : "false")
 		    << ",\"frame\":" << context->videoController->GetFrameN()
@@ -962,93 +692,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		return out.str();
 	}
 
-	void QueueFrame(json::Object const& object, wxSocketBase *socket, Client& client) {
-		auto provider = context->project->VideoProvider();
-		if (provider != observed_provider) {
-			observed_provider = provider;
-			++video_epoch;
-		}
-		if (!provider) {
-			uint64_t request_id = 0;
-			if (auto request_it = object.find("request"); request_it != object.end())
-				request_id = static_cast<uint64_t>(static_cast<json::Integer const&>(request_it->second));
-			BeginResponse(socket, client, "{\"ok\":true,\"video\":false,\"frame\":-1,\"request\":" + std::to_string(request_id) + ",\"image\":null}");
-			return;
-		}
-		auto frame_it = object.find("frame");
-		auto request_it = object.find("request");
-		int frame_number = frame_it == object.end() ? context->videoController->GetFrameN() : static_cast<int>(static_cast<json::Integer const&>(frame_it->second));
-		frame_number = std::clamp(frame_number, 0, provider->GetFrameCount() - 1);
-		uint64_t request_id = request_it == object.end() ? 0 : static_cast<uint64_t>(static_cast<json::Integer const&>(request_it->second));
-		HostTrace("request frame=%d playing=%d", frame_number, context->videoController->IsPlaying() ? 1 : 0);
-		if (auto width_it = object.find("max_width"); width_it != object.end())
-			client.max_width = static_cast<int>(static_cast<json::Integer const&>(width_it->second));
-		bool const playing = context->videoController->IsPlaying();
-		if (playing) {
-			last_playback_poll = std::chrono::steady_clock::now();
-			// Playback advances the decoder itself; a still request noted
-			// before it started says nothing about what is decoding now.
-			pending_frame_request = -1;
-		}
-		// Answer from the copy already encoded for this width whenever it is the
-		// frame being asked for. While playing the decoder advances on its own
-		// schedule, so waiting for its next frame would put a whole frame
-		// interval between request and reply; for a still frame the copy is what
-		// the seek just decoded, and reusing it skips a second full decode.
-		bool const cached_now = cached_frame.valid
-			&& cached_frame.max_width == client.max_width
-			&& cached_frame.epoch == video_epoch
-			&& (playing || cached_frame.frame == frame_number);
-		if (cached_now) {
-			HostTrace("hit frame=%d playing=%d", cached_frame.frame, playing ? 1 : 0);
-			std::ostringstream out;
-			out << "{\"ok\":true,\"video\":true,\"frame\":" << cached_frame.frame
-			    << ",\"request\":" << request_id
-			    << ",\"width\":" << cached_frame.width
-			    << ",\"height\":" << cached_frame.height
-			    << ",\"time\":" << cached_frame.time_ms
-			    << ",\"clock_ms\":" << context->videoController->GetPlaybackTime()
-			    << ",\"image\":\"" << cached_frame.jpeg << "\"}";
-			BeginResponse(socket, client, out.str());
-			return;
-		}
-		// A seek already made the controller decode this exact frame; encoding
-		// that copy is a memcpy plus JPEG instead of another decode of the
-		// source, which is what a drag over the timeline would otherwise pay
-		// on every step.
-		if (!playing && last_decoded && last_decoded_frame == frame_number && last_decoded_epoch == video_epoch) {
-			int width = 0;
-			int height = 0;
-			auto const encode_start = std::chrono::steady_clock::now();
-			std::string encoded = to_base64_jpeg(*last_decoded, context->videoController->GetAspectRatioValue(), client.max_width, width, height);
-			HostTrace("encode frame=%d width=%d bytes=%zu us=%lld reuse=1", frame_number, width, encoded.size(), static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start).count()));
-			if (!encoded.empty()) {
-				int const time_ms = context->videoController->TimeAtFrame(frame_number);
-				cached_frame = {encoded, frame_number, width, height, client.max_width, video_epoch, true, time_ms};
-				std::ostringstream out;
-				out << "{\"ok\":true,\"video\":true,\"frame\":" << frame_number
-				    << ",\"request\":" << request_id
-				    << ",\"width\":" << width << ",\"height\":" << height
-				    << ",\"time\":" << time_ms
-				    << ",\"clock_ms\":" << context->videoController->GetPlaybackTime()
-				    << ",\"image\":" << quote_json(encoded) << '}';
-				BeginResponse(socket, client, out.str());
-				return;
-			}
-		}
-		client.waiting_for_frame = true;
-		client.waiting_since = std::chrono::steady_clock::now();
-		client.frame_retries = 0;
-		client.awaiting_current = frame_number != context->videoController->GetFrameN();
-		client.requested_frame = frame_number;
-		client.request_id = request_id;
-		client.video_epoch = video_epoch;
-		client.provider = provider;
-		// Playback already requests every advancing frame. Do not enqueue a
-		// competing request which can cancel the decoder's current work.
-		if (!context->videoController->IsPlaying() && !FrameRequestPending(frame_number))
-			RequestProviderFrame(provider, frame_number);
-	}
 
 	std::string Select(json::Object const& object) {
 		auto id_it = object.find("id");
@@ -1202,10 +845,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		if (!context->project->VideoProvider()) return R"({"ok":false,"error":"no video is loaded"})";
 		int const target = static_cast<int>(std::clamp<int64_t>(frame, 0, context->project->VideoProvider()->GetFrameCount() - 1));
 		context->videoController->JumpToFrame(target);
-		// JumpToFrame asks the provider for the frame itself; remember it so
-		// the frame request that follows does not ask a second time.
-		pending_frame_request = target;
-		pending_frame_request_at = std::chrono::steady_clock::now();
 		return R"({"ok":true})";
 	}
 
@@ -1321,8 +960,10 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		if (!command->Validate(context))
 			return R"({"ok":false,"error":"command is not available in the current project state"})";
 		if (name.starts_with("video/tool/")) {
-			visual.SelectCommand(name);
-			return R"({"ok":true})";
+			json::Object request;
+			request["action"] = "command";
+			request["name"] = name;
+			return video_surface.Handle(request);
 		}
 		if (auto selection = object.find("text_selection"); selection != object.end()) {
 			auto const& range = static_cast<json::Array const&>(selection->second);
@@ -1410,8 +1051,6 @@ bool GpuiBridge::Start() {
 		return false;
 	}
 	impl->port = bound.Service();
-	impl->context->videoController->Bind(EVT_FRAME_READY, &GpuiBridge::Impl::OnFrameReady, impl.get());
-	impl->frame_poll.Start(40);
 	impl->server = server.release();
 	impl->server->SetEventHandler(*impl, wxID_ANY);
 	impl->server->SetNotify(wxSOCKET_CONNECTION_FLAG | wxSOCKET_LOST_FLAG);

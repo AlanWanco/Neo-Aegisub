@@ -45,7 +45,9 @@
 #include "visual_tool_scale.h"
 #include "visual_tool_vector_clip.h"
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <typeinfo>
 #include <vector>
 #include <wx/glcanvas.h>
@@ -122,18 +124,26 @@ class VideoDisplay final : public wxGLCanvas, public VisualToolHost {
 	std::unique_ptr<VideoOutGL> videoOut;
 	/// Suspend drawing after a GL failure until another video is loaded.
 	bool render_failed = false;
+    /// Message of the error that stopped rendering
+    std::string render_error;
+    /// Frames drawn to the screen
+    uint64_t rendered_frames = 0;
+    /// Frame number on screen, -1 before the first one
+    int presented_frame = -1;
+    /// Frame number of pending_frame
+    int pending_frame_number = -1;
 
 	/// The active visual typesetting tool
 	std::unique_ptr<VisualToolBase> tool;
-	/// The main toolbar that chooses the visual typesetting tool.
+    /// The main toolbar that chooses the visual typesetting tool; may be null.
 	wxToolBar *visualToolToolbar;
-	/// The toolbar used by individual typesetting tools
+    /// The toolbar used by individual typesetting tools; null in the native window
 	wxToolBar *toolBar;
 
 	/// The OpenGL context for this display
 	std::unique_ptr<wxGLContext> glContext;
 
-	/// The dropdown box for selecting window zoom levels
+    /// The dropdown box for selecting window zoom levels; may be null
 	wxComboBox *zoomBox;
 
 	/// Whether the display can be freely resized by the user
@@ -221,7 +231,10 @@ class VideoDisplay final : public wxGLCanvas, public VisualToolHost {
 	void ZoomAndPan(double newZoomValue, Vector2D anchorPoint, wxPoint newPosition);
 
 public:
-	/// @brief Constructor
+    /// @brief Constructor
+    /// @param visualSubToolBar Sub-toolbar the visual tools fill; may be null
+    /// @param visualToolToolbar Main visual tool toolbar; may be null
+    /// @param zoomBox Window zoom dropdown; may be null
 	VideoDisplay(
 		wxToolBar *visualSubToolBar,
 		wxToolBar *visualToolToolbar,
@@ -258,6 +271,7 @@ public:
 	void SetTool(std::unique_ptr<VisualToolBase> new_tool);
 
 	void SetSubTool(int subtool) const { tool->SetSubTool(subtool); };
+	void ToggleMove() { if (tool) tool->ToggleMove(); }
 
 	bool ToolIsType(std::type_info const& type) const;
 
@@ -265,4 +279,15 @@ public:
 
 	/// Discard all OpenGL state
 	void Unload();
+
+    /// Fit the window client area to the video at the current zoom; no-op while hidden
+    void FitWindowToVideo() { FitClientSizeToVideo(); }
+    /// Whether rendering stopped after a GL or decode error
+    bool RenderFailed() const { return render_failed; }
+    /// The error that stopped rendering; empty if none
+    const std::string& RenderError() const { return render_error; }
+    /// Number of frames drawn to the screen
+    uint64_t RenderedFrames() const { return rendered_frames; }
+    /// Frame number of the frame on screen, -1 if none
+    int PresentedFrame() const { return presented_frame; }
 };

@@ -57,6 +57,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <wx/combobox.h>
 #include <wx/menu.h>
 #include <wx/textctrl.h>
@@ -77,6 +80,26 @@ wxGLAttributes buildGLAttributes() {
 	return attrs;
 }
 
+/// Opt-in smoke trace. AEGISUB_GPUI_HOST_TRACE names a file that traced lines are appended to,
+/// because GUI builds on Windows have no visible stderr. Unset, nothing is traced or formatted.
+std::FILE *HostTraceFile() {
+    static std::FILE *const file = [] {
+        char const *path = std::getenv("AEGISUB_GPUI_HOST_TRACE");
+        if (!path || !*path) return static_cast<std::FILE *>(nullptr);
+        std::FILE *opened = std::fopen(path, "a");
+        if (!opened) LOG_E("video/display") << "Cannot open AEGISUB_GPUI_HOST_TRACE file: " << path;
+        return opened;
+    }();
+    return file;
+}
+
+void HostTrace(std::string const& message) {
+    std::FILE *file = HostTraceFile();
+    if (!file) return;
+    auto const micros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    std::fprintf(file, "%lld gpui-host %s\n", static_cast<long long>(micros), message.c_str());
+    std::fflush(file);
+}
 }
 
 /// An OpenGL error occurred while uploading or displaying a frame
@@ -110,9 +133,11 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, wxToolBar *visualToolToolbar, boo
 , freeSize(freeSize)
 , scale_factor(GetContentScaleFactor())
 {
-	zoomBox->SetValue(fmt_wx("%g%%", windowZoomValue * 100.));
-	zoomBox->Bind(wxEVT_COMBOBOX, &VideoDisplay::SetWindowZoomFromBox, this);
-	zoomBox->Bind(wxEVT_TEXT_ENTER, &VideoDisplay::SetWindowZoomFromBoxText, this);
+    if (zoomBox) {
+        zoomBox->SetValue(fmt_wx("%g%%", windowZoomValue * 100.));
+        zoomBox->Bind(wxEVT_COMBOBOX, &VideoDisplay::SetWindowZoomFromBox, this);
+        zoomBox->Bind(wxEVT_TEXT_ENTER, &VideoDisplay::SetWindowZoomFromBoxText, this);
+    }
 
 	con->videoController->Bind(EVT_FRAME_READY, &VideoDisplay::UploadFrameData, this);
 	connections = agi::signal::make_vector({
@@ -194,11 +219,20 @@ bool VideoDisplay::InitContext() {
 }
 
 void VideoDisplay::UploadFrameData(FrameReadyEvent &evt) {
-	pending_frame = evt.frame;
-	Render();
+    // A hidden display (the legacy one under the GPUI shell, or a closing native window) must
+    // not hold frames or queue GL work. A shown display gets a fresh frame from VideoSurface::Show.
+    if (!IsShownOnScreen()) {
+        pending_frame.reset();
+        return;
+    }
+    pending_frame = evt.frame;
+    pending_frame_number = evt.frame_number;
+    if (HostTraceFile()) HostTrace(agi::format("ready frame=%d", evt.frame_number));
+    Render();
 }
 
 void VideoDisplay::Render() try {
+    auto const render_start = std::chrono::steady_clock::now();
 	if (render_failed || !con->project->VideoProvider() || !InitContext() || (!videoOut && !pending_frame))
 		return;
 
@@ -212,19 +246,27 @@ void VideoDisplay::Render() try {
 
 	try {
 		if (pending_frame) {
-			videoOut->UploadFrameData(*pending_frame);
-			pending_frame.reset();
+            auto const upload_start = std::chrono::steady_clock::now();
+            videoOut->UploadFrameData(*pending_frame);
+            presented_frame = pending_frame_number;
+            pending_frame.reset();
+            if (HostTraceFile()) {
+                auto const micros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - upload_start).count();
+                HostTrace(agi::format("upload frame=%d us=%lld", presented_frame, static_cast<long long>(micros)));
+            }
 		}
 	}
 	catch (const VideoOutInitException& err) {
-		render_failed = true;
+        render_failed = true;
+        render_error = err.GetMessage();
 		wxLogError(
 			fmt_tl("Failed to initialize video display. Closing other running programs and updating your video card drivers may fix this.\nError message reported: %s",
 			err.GetMessage()));
 		return;
 	}
 	catch (const VideoOutRenderException& err) {
-		render_failed = true;
+        render_failed = true;
+        render_error = err.GetMessage();
 		wxLogError(
 			fmt_tl("Could not upload video frame to graphics card.\nError message reported: %s",
 			err.GetMessage()));
@@ -265,12 +307,19 @@ void VideoDisplay::Render() try {
 	if ((mouse_pos || !autohideTools->GetBool()) && tool)
 		tool->Draw();
 
-	SwapBuffers();
+    SwapBuffers();
+    ++rendered_frames;
+    if (HostTraceFile()) {
+        auto const micros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - render_start).count();
+        HostTrace(agi::format("present frame=%d count=%llu render_us=%lld", presented_frame,
+            static_cast<unsigned long long>(rendered_frames), static_cast<long long>(micros)));
+    }
 }
 catch (const agi::Exception &err) {
 	// Closing here can reenter rendering or destroy a provider still in use
 	// by the loading operation. Keep the project loaded and stop drawing.
-	render_failed = true;
+    render_failed = true;
+    render_error = err.GetMessage();
 	wxLogError(
 		fmt_tl("An error occurred trying to render the video frame on the screen.\nError message reported: %s",
 		err.GetMessage()));
@@ -360,7 +409,7 @@ void VideoDisplay::PositionVideo(bool preserveContentSize) {
 		// Update windowZoomValue
 		// We must use content_height before content zoom has been applied to it
 		windowZoomValue = double(content_height) / vidH;
-		zoomBox->ChangeValue(fmt_wx("%g%%", windowZoomValue * 100.));
+        if (zoomBox) zoomBox->ChangeValue(fmt_wx("%g%%", windowZoomValue * 100.));
 		con->ass->Properties.video_zoom = windowZoomValue;
 	}
 
@@ -423,7 +472,7 @@ void VideoDisplay::FitClientSizeToVideo() {
 		SetMinClientSize(newViewportSize / scale_factor);
 		SetMaxClientSize(newViewportSize / scale_factor);
 
-		GetGrandParent()->Layout();
+        if (auto *grand = GetGrandParent()) grand->Layout();
 	}
 
 	UpdateViewportSize(true, newViewportSize); // must be called after setting the client size
@@ -549,16 +598,21 @@ void VideoDisplay::OnContextMenu(wxContextMenuEvent&) {
 }
 
 void VideoDisplay::OnKeyDown(wxKeyEvent &event) {
-	hotkey::check("Video", con, event);
+	if (!hotkey::check("Video", con, event) && event.GetKeyCode() == WXK_SPACE && !event.HasAnyModifiers()) {
+		event.Skip(false);
+		con->videoController->Play();
+	}
 }
 
 void VideoDisplay::SetWindowZoom(double value) {
 	if (!std::isfinite(value) || value <= 0) return;
 	windowZoomValue = std::clamp(value, .125, 10.);
 	size_t selIndex = windowZoomValue / .125 - 1;
-	if (selIndex < zoomBox->GetCount())
-		zoomBox->SetSelection(selIndex);
-	zoomBox->ChangeValue(fmt_wx("%g%%", windowZoomValue * 100.));
+    if (zoomBox) {
+        if (selIndex < zoomBox->GetCount())
+            zoomBox->SetSelection(selIndex);
+        zoomBox->ChangeValue(fmt_wx("%g%%", windowZoomValue * 100.));
+    }
 	con->ass->Properties.video_zoom = windowZoomValue;
 	FitClientSizeToVideo();
 }
@@ -643,8 +697,10 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 	tool = std::move(new_tool);
 
 	// Hide the tool bar first to eliminate unnecessary size changes
-	toolBar->Show(false);
-	toolBar->ClearTools();
+    if (toolBar) {
+        toolBar->Show(false);
+        toolBar->ClearTools();
+    }
 	tool->SetToolbar(toolBar);
 
 	// Update size as the new typesetting tool may have changed the subtoolbar size
@@ -652,7 +708,7 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 		FitClientSizeToVideo();
 	else {
 		// FitClientSizeToVideo fits the window to the video, which we don't want to do
-		GetGrandParent()->Layout();
+        if (auto *grand = GetGrandParent()) grand->Layout();
 		PositionVideo();
 	}
 	RefreshVisualToolbar();

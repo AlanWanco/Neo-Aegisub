@@ -9,9 +9,8 @@
 namespace agi { struct Context; }
 
 namespace gpui {
-class Visual;
 /// UI dependency of a legacy command: shared model, wx dialog, or wx control.
 std::string_view CommandSurface(std::string_view name);
 /// Current-context command catalog and the effective legacy menu hierarchy.
-std::string CommandCatalog(agi::Context *context, Visual const& visual);
+std::string CommandCatalog(agi::Context *context);
 }

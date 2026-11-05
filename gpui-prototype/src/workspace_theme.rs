@@ -26,6 +26,7 @@ gpui_kit::assets::icon_assets!(
         Strikethrough,
         SkipBack,
         SkipForward,
+        Repeat,
         Crosshair,
         Video,
         FileInput,
