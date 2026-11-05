@@ -10,8 +10,8 @@
 #include "project.h"
 #include "video_controller.h"
 #include "video_display.h"
+#include "video_frame.h"
 #include "video_provider_dummy.h"
-#include "visual_tool_vector_clip.h"
 
 #include <libaegisub/cajun/writer.h>
 #include <libaegisub/color.h>
@@ -20,13 +20,13 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
-#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
 
-#include <wx/frame.h>
-#include <wx/sizer.h>
+#include <cstring>
+#include <memory>
+#include <vector>
 
 namespace gpui {
 std::string VideoSettings(agi::Context *context, json::Object const& request) {
@@ -56,14 +56,6 @@ std::string VideoSettings(agi::Context *context, json::Object const& request) {
 		OPT_SET("Colour/Video Dummy/Last Colour")->SetColor(value);
 		OPT_SET("Video/Dummy/Pattern")->SetBool(pattern);
 	}
-	else if (action == "window_zoom") {
-		if (!provider) throw std::invalid_argument("open a video before changing zoom");
-		double zoom = 0;
-		std::string const& text = request.at("value");
-		if (!agi::util::try_parse(text, &zoom) || !std::isfinite(zoom) || zoom < .125 || zoom > 10.)
-			throw std::invalid_argument("video zoom must be between 0.125 and 10");
-		context->videoDisplay->SetWindowZoom(zoom);
-	}
 	else if (action == "jump_frame" || action == "jump_time") {
 		if (!provider) throw std::invalid_argument("open a video before seeking");
 		int frame = action == "jump_frame" ? integer("frame", 0, provider->GetFrameCount() - 1) : context->videoController->FrameAtTime(integer("time", 0, 35999990));
@@ -91,7 +83,6 @@ std::string VideoSettings(agi::Context *context, json::Object const& request) {
 	json::Object result;
 	result["ok"] = true;
 	result["loaded"] = !!provider;
-	result["window_zoom"] = context->videoDisplay->GetWindowZoom();
 	result["dummy_fps"] = OPT_GET("Video/Dummy/FPS String")->GetString();
 	result["dummy_width"] = OPT_GET("Video/Dummy/Last/Width")->GetInt();
 	result["dummy_height"] = OPT_GET("Video/Dummy/Last/Height")->GetInt();
@@ -122,28 +113,6 @@ std::string VideoSettings(agi::Context *context, json::Object const& request) {
 }
 
 namespace {
-/// Maps the front end's tool names to the existing visual tool commands.
-std::string_view ToolCommand(std::string_view tool) {
-    if (tool == "cross") return "video/tool/cross";
-    if (tool == "drag") return "video/tool/drag";
-    if (tool == "rotate/z") return "video/tool/rotate/z";
-    if (tool == "rotate/xy") return "video/tool/rotate/xy";
-    if (tool == "scale") return "video/tool/scale";
-    if (tool == "clip") return "video/tool/clip";
-    if (tool == "vector_clip") return "video/tool/vector_clip";
-    throw std::invalid_argument("unknown visual tool");
-}
-
-/// JSON numbers may arrive as doubles or integers.
-double NumberOf(json::UnknownElement const& value) {
-    try {
-        return static_cast<json::Double const&>(value);
-    }
-    catch (json::Exception const&) {
-        return static_cast<double>(static_cast<json::Integer const&>(value));
-    }
-}
-
 std::string Encode(json::Object& object) {
     std::ostringstream stream;
     agi::JsonWriter::Write(object, stream);
@@ -153,196 +122,85 @@ std::string Encode(json::Object& object) {
 }
 }
 
-struct VideoSurface::Impl {
+struct VideoFrames::Impl {
     agi::Context *context;
-    /// Top-level window holding only the canvas; null while closed.
-    wxFrame *frame = nullptr;
-    /// The video display drawing into frame; null while closed.
-    VideoDisplay *display = nullptr;
-    /// The display that owned context->videoDisplay before the window opened.
-    VideoDisplay *previous = nullptr;
-    /// Tool and subtool last requested or observed; applied whenever the window opens.
-    std::string tool = "cross";
-    int subtool = 0;
-    /// Zoom last chosen; unset keeps the legacy display's zoom.
-    std::optional<double> zoom;
+    /// Newest frame from the provider, composited with subtitles.
+    std::shared_ptr<VideoFrame> latest;
+    int latest_number = -1;
+    /// Bumped whenever `latest` is replaced or dropped.
+    int64_t serial = 0;
+    bool listening = false;
     agi::signal::Connection provider_connection;
 
     explicit Impl(agi::Context *context) : context(context) {
-        // Unloading the video closes the window: there is nothing left to draw.
-        provider_connection = context->project->AddVideoProviderListener([this](AsyncVideoProvider *provider) {
-            if (!provider) Close(true);
+        context->videoController->Bind(EVT_FRAME_READY, &Impl::OnFrame, this);
+        listening = true;
+        // A frame of the previous video must not be shown for the new one.
+        provider_connection = context->project->AddVideoProviderListener([this](AsyncVideoProvider *) {
+            latest.reset();
+            latest_number = -1;
+            ++serial;
         });
     }
 
-    void Show() {
-        if (frame) {
-            frame->Raise();
-            return;
-        }
-        if (!context->project->VideoProvider())
-            throw std::invalid_argument("open a video before showing the video window");
-
-        previous = context->videoDisplay;
-        frame = new wxFrame(nullptr, wxID_ANY, "Aegisub Video");
-        frame->Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) { Close(false); });
-
-        // No sub-toolbar: the native window has no toolbar widgets. VideoDisplay and the
-        // visual tools accept a null toolbar.
-        display = new VideoDisplay(nullptr, nullptr, true, nullptr, frame, context);
-        // The constructor already routes context->videoDisplay here; stated again because
-        // the tool commands act on whatever that pointer names.
-        context->videoDisplay = display;
-        auto sizer = new wxBoxSizer(wxVERTICAL);
-        sizer->Add(display, 1, wxEXPAND);
-        frame->SetSizer(sizer);
-
-        display->SetWindowZoom(zoom.value_or(previous ? previous->GetWindowZoom() : 1.));
-        zoom = display->GetWindowZoom();
-        ApplyTool();
-        frame->Show();
-        display->FitWindowToVideo();
-        display->SetFocus();
-        context->videoController->JumpToFrame(context->videoController->GetFrameN());
+    void OnFrame(FrameReadyEvent& event) {
+        context->videoController->NoteFrameArrived(event.frame_number);
+        latest = event.frame;
+        latest_number = event.frame_number;
+        ++serial;
     }
 
-    /// Hides the window and restores context->videoDisplay if it still points here.
-    /// immediate=false defers destruction (required inside the frame's own close event);
-    /// immediate=true destroys now, because ~VideoDisplay reads the context and shutdown
-    /// may release the context before idle-time deletion runs.
-    void Close(bool immediate) {
-        if (!frame) return;
-        if (display) {
-            zoom = display->GetWindowZoom();
-            if (context->videoDisplay == display) {
-                if (previous) previous->SetWindowZoom(*zoom);
-                context->videoDisplay = previous;
-            }
-        }
-        frame->Hide();
-        if (immediate) delete frame;
-        else frame->Destroy();
-        frame = nullptr;
-        display = nullptr;
-        previous = nullptr;
-    }
-
-    /// Selects the tool through its existing command so the catalogue and the tool state agree.
-    void ApplyTool() {
-        std::string_view const command = ToolCommand(tool);
-        if (!cmd::get(command)->IsActive(context)) cmd::call(command, context);
-        if (tool == "vector_clip" && display->ToolIsType(typeid(VisualToolVectorClip)) && display->GetSubTool() != subtool)
-            display->SetSubTool(subtool);
-    }
-
-    void Configure(json::Object const& request) {
-        std::string next_tool = tool;
-        int next_subtool = subtool;
-        std::optional<double> next_zoom = zoom;
-        if (auto it = request.find("tool"); it != request.end()) {
-            std::string const& name = it->second;
-            ToolCommand(name);
-            next_tool = name;
-        }
-        if (auto it = request.find("subtool"); it != request.end()) {
-            if (next_tool != "vector_clip") throw std::invalid_argument("subtool applies only to the vector_clip tool");
-            int64_t const value = static_cast<json::Integer const&>(it->second);
-            if (value < 0 || value >= VCLIP_LAST) throw std::invalid_argument("vector clip subtool is outside the permitted range");
-            next_subtool = static_cast<int>(value);
-        }
-        if (auto it = request.find("zoom"); it != request.end()) {
-            double const value = NumberOf(it->second);
-            if (!std::isfinite(value) || value < .125 || value > 10.)
-                throw std::invalid_argument("video zoom must be between 0.125 and 10");
-            next_zoom = value;
-        }
-        tool = next_tool;
-        subtool = next_subtool;
-        zoom = next_zoom;
-        if (display) {
-            if (zoom) display->SetWindowZoom(*zoom);
-            ApplyTool();
-            SyncFromDisplay();
-        }
-    }
-
-    /// Runs one video/tool command in the window, opening the window first if needed, then
-    /// records the tool that is actually active. Covers video/tool/vclip/* as well.
-    void Command(json::Object const& request) {
-        std::string const& name = request.at("name");
-        if (!std::string_view(name).starts_with("video/tool/"))
-            throw std::invalid_argument("only video/tool commands can be sent to the video window");
-        auto const commands = cmd::get_registered_commands();
-        if (std::find(commands.begin(), commands.end(), std::string_view(name)) == commands.end())
-            throw std::invalid_argument("unknown video tool command");
-        Show();
-        cmd::call(name, context);
-        SyncFromDisplay();
-    }
-
-    /// Reads the tool and subtool actually active in the window so stored state never disagrees with it.
-    void SyncFromDisplay() {
-        tool = ActiveToolName();
-        subtool = display->ToolIsType(typeid(VisualToolVectorClip)) ? display->GetSubTool() : 0;
-    }
-
-    std::string ActiveToolName() const {
-        if (display->ToolIsType(typeid(VisualToolDrag))) return "drag";
-        if (display->ToolIsType(typeid(VisualToolRotateZ))) return "rotate/z";
-        if (display->ToolIsType(typeid(VisualToolRotateXY))) return "rotate/xy";
-        if (display->ToolIsType(typeid(VisualToolScale))) return "scale";
-        if (display->ToolIsType(typeid(VisualToolClip))) return "clip";
-        if (display->ToolIsType(typeid(VisualToolVectorClip))) return "vector_clip";
-        return "cross";
-    }
-
-    std::string Reply() const {
-        json::Object result;
-        result["ok"] = true;
-        result["visible"] = frame && frame->IsShown();
-        result["renderer"] = "opengl";
-        result["tool"] = tool;
-        result["subtool"] = subtool;
-        double shown_zoom = 1.;
-        if (display) shown_zoom = display->GetWindowZoom();
-        else if (zoom) shown_zoom = *zoom;
-        else if (context->videoDisplay) shown_zoom = context->videoDisplay->GetWindowZoom();
-        result["zoom"] = shown_zoom;
-        result["frame"] = display ? display->PresentedFrame() : -1;
-        result["rendered_frames"] = static_cast<int64_t>(display ? display->RenderedFrames() : 0);
-        result["render_failed"] = display ? display->RenderFailed() : false;
-        result["error"] = display ? display->RenderError() : std::string();
-        return Encode(result);
+    void Close() {
+        if (listening) context->videoController->Unbind(EVT_FRAME_READY, &Impl::OnFrame, this);
+        listening = false;
+        provider_connection.Disconnect();
+        latest.reset();
+        latest_number = -1;
     }
 };
 
-VideoSurface::VideoSurface(agi::Context *context) : impl(std::make_unique<Impl>(context)) { }
+VideoFrames::VideoFrames(agi::Context *context) : impl(std::make_unique<Impl>(context)) { }
 
-VideoSurface::~VideoSurface() {
-    if (impl) impl->Close(true);
+VideoFrames::~VideoFrames() {
+    if (impl) impl->Close();
 }
 
-std::string VideoSurface::Handle(json::Object const& request) {
-    std::string const& action = request.at("action");
-    if (action == "show") impl->Show();
-    else if (action == "hide") impl->Close(true);
-    else if (action == "configure") impl->Configure(request);
-    else if (action == "command") impl->Command(request);
-    else if (action == "toggle_move") {
-        impl->tool = "drag";
-        impl->Show();
-        impl->ApplyTool();
-        impl->display->ToggleMove();
+void VideoFrames::Close() {
+    impl->Close();
+}
+
+RawReply VideoFrames::Frame(json::Object const& request) {
+    int64_t since = -1;
+    if (auto it = request.find("since"); it != request.end())
+        since = static_cast<json::Integer const&>(it->second);
+
+    json::Object result;
+    result["ok"] = true;
+    result["pixel_format"] = std::string("bgra8");
+    result["serial"] = impl->serial;
+    result["frame"] = static_cast<int64_t>(impl->latest_number);
+    auto const& frame = impl->latest;
+    if (!frame || since == impl->serial) {
+        result["width"] = static_cast<int64_t>(0);
+        result["height"] = static_cast<int64_t>(0);
+        result["byte_length"] = static_cast<int64_t>(0);
+        result["unchanged"] = !!frame;
+        return {Encode(result), {}};
     }
-    else if (action != "state") throw std::invalid_argument("unknown video surface action");
-    return impl->Reply();
-}
 
-bool VideoSurface::IsVisible() const {
-    return impl->frame && impl->frame->IsShown();
-}
-
-void VideoSurface::Close() {
-    impl->Close(true);
+    size_t const width = static_cast<size_t>(frame->width), height = static_cast<size_t>(frame->height);
+    size_t const row = width * 4;
+    if (frame->pitch < 0 || static_cast<size_t>(frame->pitch) < row || frame->data.size() < static_cast<size_t>(frame->pitch) * height)
+        throw std::runtime_error("video frame has an unexpected pixel layout");
+    std::vector<unsigned char> pixels(row * height);
+    for (size_t y = 0; y < height; ++y) {
+        size_t const source = frame->flipped ? height - 1 - y : y;
+        std::memcpy(pixels.data() + y * row, frame->data.data() + source * static_cast<size_t>(frame->pitch), row);
+    }
+    result["width"] = static_cast<int64_t>(width);
+    result["height"] = static_cast<int64_t>(height);
+    result["byte_length"] = static_cast<int64_t>(pixels.size());
+    result["unchanged"] = false;
+    return {Encode(result), std::move(pixels)};
 }
 }

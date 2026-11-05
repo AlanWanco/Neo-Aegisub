@@ -100,6 +100,7 @@ aegisub_src = files(
     'gpui_translation.cpp',
     'gpui_timing.cpp',
     'gpui_search.cpp',
+    'gpui_visual.cpp',
     'gpui_video.cpp',
     'gpui_preferences.cpp',
     'gpui_spelling.cpp',

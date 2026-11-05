@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "gpui_command_catalog.h"
+#include "gpui_visual.h"
 
 #include "auto4_base.h"
 #include "command/command.h"
@@ -71,7 +72,7 @@ std::string_view CommandSurface(std::string_view name) {
 	return "shared";
 }
 
-std::string CommandCatalog(agi::Context *context) {
+std::string CommandCatalog(agi::Context *context, Visual const& visual) {
 	std::set<std::string> macros;
 	for (auto macro : config::global_scripts->GetMacros()) macros.insert(macro->name());
 	for (auto macro : context->local_scripts->GetMacros()) macros.insert(macro->name());
@@ -107,7 +108,8 @@ std::string CommandCatalog(agi::Context *context) {
 			}
 		}
 		entry["enabled"] = enabled;
-		entry["active"] = (flags & (cmd::COMMAND_RADIO | cmd::COMMAND_TOGGLE)) && command->IsActive(context);
+		entry["active"] = name.starts_with("video/tool/") ? visual.IsActive(name) :
+			(flags & (cmd::COMMAND_RADIO | cmd::COMMAND_TOGGLE)) && command->IsActive(context);
 		entry["shortcut"] = hotkey::get_hotkey_str_first("Default", name);
 		commands.emplace_back(std::move(entry));
 	}

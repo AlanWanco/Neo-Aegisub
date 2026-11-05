@@ -14,6 +14,7 @@
 #include "gpui_timing.h"
 #include "gpui_search.h"
 #include "gpui_video.h"
+#include "gpui_visual.h"
 #include "gpui_preferences.h"
 #include "gpui_spelling.h"
 #include "ui_theme.h"
@@ -235,12 +236,15 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		std::string request;
 		std::string response;
 		size_t response_offset = 0;
+		std::vector<unsigned char> body;
+		size_t body_offset = 0;
 		bool responding = false;
 	};
 
 	agi::Context *context;
-	gpui::VideoSurface video_surface;
+	gpui::VideoFrames video_frames;
 	gpui::Audio audio;
+	gpui::Visual visual;
 	gpui::Spelling spelling;
 	wxSocketServer *server = nullptr;
 	std::map<wxSocketBase *, Client> clients;
@@ -254,7 +258,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 	AsyncVideoProvider *observed_provider = nullptr;
 	std::string token = make_token();
 
-	explicit Impl(agi::Context *context) : context(context), video_surface(context), audio(context), spelling(context) {
+	explicit Impl(agi::Context *context) : context(context), video_frames(context), audio(context), visual(context), spelling(context) {
 		Bind(wxEVT_SOCKET, &Impl::OnSocket, this);
 		commit_connection = context->ass->AddCommitListener([this](int type, const AssDialogue *) {
 			++revision;
@@ -280,7 +284,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 
 
 	void Stop() {
-		video_surface.Close();
+		video_frames.Close();
 		for (auto it = clients.begin(); it != clients.end();) {
 			auto socket = it->first;
 			++it;
@@ -330,7 +334,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			return;
 		}
 		if (event.GetSocketEvent() == wxSOCKET_INPUT) {
-			ReadRequest(socket, it->second);
+			if (!it->second.responding) ReadRequest(socket, it->second);
 			return;
 		}
 		if (event.GetSocketEvent() == wxSOCKET_OUTPUT)
@@ -366,10 +370,24 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 	}
 
 	void BeginResponse(wxSocketBase *socket, Client& client, std::string response) {
+		client.body.clear();
+		client.body_offset = 0;
+		StartResponse(socket, client, std::move(response));
+	}
+
+	/// Raw replies send `head`, a newline, then `body` bytes verbatim. The body is
+	/// moved out of the reply: never copied, escaped, or parsed as JSON.
+	void BeginResponse(wxSocketBase *socket, Client& client, gpui::RawReply reply) {
+		client.body = std::move(reply.body);
+		client.body_offset = 0;
+		StartResponse(socket, client, std::move(reply.head));
+	}
+
+	void StartResponse(wxSocketBase *socket, Client& client, std::string head) {
 		// A new answer starts from the beginning of its own body; keeping the
 		// previous offset would skip bytes of the new response.
 		client.response_offset = 0;
-		client.response = std::move(response);
+		client.response = std::move(head);
 		client.response.push_back('\n');
 		client.responding = true;
 		socket->SetNotify(wxSOCKET_OUTPUT_FLAG | wxSOCKET_LOST_FLAG);
@@ -377,20 +395,26 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		WriteResponse(socket, client);
 	}
 
+	enum class WriteState { Done, Blocked, Failed };
+
+	static WriteState WriteBytes(wxSocketBase *socket, char const *data, size_t size, size_t& offset) {
+		while (offset < size) {
+			size_t const count = std::min<size_t>(65536, size - offset);
+			socket->Write(data + offset, count);
+			size_t const written = socket->LastCount();
+			offset += written;
+			if (socket->Error())
+				return socket->LastError() == wxSOCKET_WOULDBLOCK ? WriteState::Blocked : WriteState::Failed;
+			if (!written) return WriteState::Blocked;
+		}
+		return WriteState::Done;
+	}
 
 	void WriteResponse(wxSocketBase *socket, Client& client) {
-		while (client.response_offset < client.response.size()) {
-			size_t const count = std::min<size_t>(65536, client.response.size() - client.response_offset);
-			socket->Write(client.response.data() + client.response_offset, count);
-			size_t const written = socket->LastCount();
-			client.response_offset += written;
-			if (socket->Error()) {
-				if (socket->LastError() == wxSOCKET_WOULDBLOCK) return;
-				CloseClient(socket);
-				return;
-			}
-			if (!written) return;
-		}
+		auto state = WriteBytes(socket, client.response.data(), client.response.size(), client.response_offset);
+		if (state == WriteState::Done)
+			state = WriteBytes(socket, reinterpret_cast<char const *>(client.body.data()), client.body.size(), client.body_offset);
+		if (state == WriteState::Blocked) return;
 		CloseClient(socket);
 	}
 
@@ -428,7 +452,8 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		if (op == "snapshot") { BeginResponse(socket, client, Snapshot()); return; }
 		if (op == "playback") { BeginResponse(socket, client, PlaybackSnapshot()); return; }
 		if (op == "video_settings") { BeginResponse(socket, client, gpui::VideoSettings(context, object)); return; }
-		if (op == "video_surface") { BeginResponse(socket, client, video_surface.Handle(object)); return; }
+		if (op == "video_frame") { BeginResponse(socket, client, video_frames.Frame(object)); return; }
+		if (op == "visual") { BeginResponse(socket, client, visual.Interact(object)); return; }
 		if (op == "audio_render") { BeginResponse(socket, client, audio.Render(object)); return; }
 		if (op == "audio_action") { BeginResponse(socket, client, audio.Interact(object)); return; }
 		if (op == "automation_manager") { BeginResponse(socket, client, gpui::AutomationManager(context, object)); return; }
@@ -437,7 +462,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		return;
 	}
 	if (op == "color") { BeginResponse(socket, client, gpui::ColorPanel(context, object)); return; }
-		if (op == "catalog") { BeginResponse(socket, client, gpui::CommandCatalog(context)); return; }
+		if (op == "catalog") { BeginResponse(socket, client, gpui::CommandCatalog(context, visual)); return; }
 		if (op == "attachments") {
 			if (auto expected = object.find("revision"); expected != object.end()) {
 				if (static_cast<json::Integer const&>(expected->second) != static_cast<int64_t>(revision)) { BeginResponse(socket, client, R"({"ok":false,"error":"document changed; refresh attachments first"})"); return; }
@@ -542,7 +567,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		out << "{\"ok\":true"
 		    << ",\"video\":" << (provider ? "true" : "false")
 		    << ",\"video_epoch\":" << video_epoch
-		    << ",\"video_surface_visible\":" << (video_surface.IsVisible() ? "true" : "false")
 		    << ",\"playing\":" << (context->videoController->IsPlaying() ? "true" : "false")
 		    << ",\"frame\":" << context->videoController->GetFrameN()
 		    << ",\"video_time\":" << (provider ? context->videoController->TimeAtFrame(context->videoController->GetFrameN()) : 0)
@@ -568,7 +592,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		    << ",\"can_save\":" << (context->subsController->CanSave() ? "true" : "false")
 		    << ",\"revision\":" << revision << ",\"details_revision\":" << details_revision
 		    << ",\"video\":" << (context->project->VideoProvider() ? "true" : "false")
-		    << ",\"video_surface_visible\":" << (video_surface.IsVisible() ? "true" : "false")
 		    << ",\"timecodes\":" << (context->project->Timecodes().IsLoaded() ? "true" : "false")
 		    << ",\"playing\":" << (context->videoController->IsPlaying() ? "true" : "false")
 		    << ",\"frame\":" << context->videoController->GetFrameN()
@@ -587,7 +610,6 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		    << ",\"video_duration\":" << (current_provider ? context->videoController->TimeAtFrame(current_provider->GetFrameCount() - 1, agi::vfr::END) : 0)
 		    << ",\"playback_rate\":" << context->videoController->GetPlaybackRate()
 		    << ",\"aspect\":" << (current_provider ? context->videoController->GetAspectRatioValue() : 1.0)
-		    << ",\"video_window_zoom\":" << context->videoDisplay->GetWindowZoom()
 		    << ",\"video_height\":" << (current_provider ? current_provider->GetHeight() : 0)
 		    << ",\"video_scroll\":" << OPT_GET("Video/Scroll Action")->GetInt()
 		    << ",\"video_ctrl_scroll\":" << OPT_GET("Video/Ctrl Scroll Action")->GetInt()
@@ -959,12 +981,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		auto command = cmd::get(name);
 		if (!command->Validate(context))
 			return R"({"ok":false,"error":"command is not available in the current project state"})";
-		if (name.starts_with("video/tool/")) {
-			json::Object request;
-			request["action"] = "command";
-			request["name"] = name;
-			return video_surface.Handle(request);
-		}
+		if (name.starts_with("video/tool/")) { visual.SelectCommand(name); return R"({"ok":true})"; }
 		if (auto selection = object.find("text_selection"); selection != object.end()) {
 			auto const& range = static_cast<json::Array const&>(selection->second);
 			auto line = context->selectionController->GetActiveLine();

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "gpui_audio.h"
+
 #include <libaegisub/cajun/elements.h>
 
 #include <memory>
@@ -12,34 +14,28 @@ namespace agi { struct Context; }
 namespace gpui {
 std::string VideoSettings(agi::Context *context, json::Object const& request);
 
-/// Native OpenGL window showing only the video, driven by the GPUI front end.
-///
-/// The window is a top-level wxFrame whose only child is the VideoDisplay canvas: no menus and
-/// no toolbars. While it is open, agi::Context::videoDisplay points at it. Closing it, unloading
-/// the video or calling Close() restores the previous display.
-class VideoSurface final {
+/// Window-less video output. Decoded, subtitle-composited frames are kept as they
+/// arrive from the video provider and handed to the frontend as raw pixels; the
+/// frontend draws them on its own GPU surface. The host creates no video window.
+class VideoFrames final {
     struct Impl;
     std::unique_ptr<Impl> impl;
 
 public:
-    explicit VideoSurface(agi::Context *context);
-    /// Hides and destroys the window immediately and restores the previous context->videoDisplay.
+    explicit VideoFrames(agi::Context *context);
     /// The context must still be alive.
-    ~VideoSurface();
-    VideoSurface(VideoSurface const&) = delete;
-    VideoSurface& operator=(VideoSurface const&) = delete;
+    ~VideoFrames();
+    VideoFrames(VideoFrames const&) = delete;
+    VideoFrames& operator=(VideoFrames const&) = delete;
 
-    /// Answers one {"op":"video_surface", ...} request and returns the JSON reply. Actions:
-    ///   "show", "hide", "state"
-    ///   "configure": optional "tool" (cross, drag, rotate/z, rotate/xy, scale, clip, vector_clip),
-    ///                "subtool" (vector_clip only, 0 to VCLIP_LAST-1) and "zoom" (0.125 to 10)
-    ///   "command":   "name" is a video/tool/* command, including video/tool/vclip/*. Opens the
-    ///                window if needed, runs the command and reports the tool actually active.
-    /// Throws std::invalid_argument for a rejected request.
-    std::string Handle(json::Object const& request);
-    bool IsVisible() const;
+    /// Answers {"op":"video_frame", "since":N?}. The head reports `serial`, `frame`
+    /// (-1 when none), `width`, `height`, `pixel_format` ("bgra8") and `byte_length`.
+    /// The body is the newest frame, tightly packed, top row first. When `since`
+    /// equals the current `serial`, or no frame exists, the body is empty and
+    /// `unchanged` says whether the caller's copy is current.
+    RawReply Frame(json::Object const& request);
 
-    /// Hides and destroys the window immediately and restores the previous context->videoDisplay.
+    /// Stops listening for frames and drops the held one. Safe to repeat.
     void Close();
 };
 }
