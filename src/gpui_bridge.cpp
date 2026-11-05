@@ -335,6 +335,8 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		int max_width = -1;
 		uint64_t epoch = 0;
 		bool valid = false;
+		/// Media time of the frame in ms, reported with every reply for it.
+		int time_ms = 0;
 	} cached_frame;
 	/// The frame the host decoded last. A seek makes the controller request that
 	/// frame on its own, and the frontend asks for the same one right after;
@@ -580,6 +582,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		int const current_frame = context->videoController->GetFrameN();
 		bool const playing = context->videoController->IsPlaying();
 		int const frame_number = event.frame_number;
+		int const time_ms = static_cast<int>(event.time);
 		last_decoded = event.frame;
 		last_decoded_frame = frame_number;
 		last_decoded_epoch = video_epoch;
@@ -619,12 +622,14 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			std::ostringstream out;
 			out << "{\"ok\":true,\"video\":true,\"frame\":" << frame_number
 			    << ",\"request\":" << it->second.request_id
+			    << ",\"time\":" << time_ms
+			    << ",\"clock_ms\":" << context->videoController->GetPlaybackTime()
 			    << ",\"width\":" << width << ",\"height\":" << height
 			    << ",\"image\":" << quote_json(encoded) << '}';
 			BeginResponse(socket, it->second, out.str());
 			// A still frame is cached too: the frontend asks again right after
 			// a seek, and answering from the copy avoids decoding it twice.
-			cached_frame = {std::move(encoded), frame_number, width, height, max_width, video_epoch, true};
+			cached_frame = {std::move(encoded), frame_number, width, height, max_width, video_epoch, true, time_ms};
 		}
 		// Playback requests are answered from the cached copy, so a ready frame
 		// usually arrives with nobody waiting. Refresh the copy anyway, or the
@@ -639,7 +644,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			std::string encoded = to_base64_jpeg(*event.frame, context->videoController->GetAspectRatioValue(), cached_frame.max_width, width, height);
 			HostTrace("encode frame=%d width=%d bytes=%zu us=%lld refresh=1", frame_number, width, encoded.size(), static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start).count()));
 			if (!encoded.empty())
-				cached_frame = {std::move(encoded), frame_number, width, height, cached_frame.max_width, video_epoch, true};
+				cached_frame = {std::move(encoded), frame_number, width, height, cached_frame.max_width, video_epoch, true, time_ms};
 		}
 		event.Skip();
 	}
@@ -975,6 +980,7 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 		int frame_number = frame_it == object.end() ? context->videoController->GetFrameN() : static_cast<int>(static_cast<json::Integer const&>(frame_it->second));
 		frame_number = std::clamp(frame_number, 0, provider->GetFrameCount() - 1);
 		uint64_t request_id = request_it == object.end() ? 0 : static_cast<uint64_t>(static_cast<json::Integer const&>(request_it->second));
+		HostTrace("request frame=%d playing=%d", frame_number, context->videoController->IsPlaying() ? 1 : 0);
 		if (auto width_it = object.find("max_width"); width_it != object.end())
 			client.max_width = static_cast<int>(static_cast<json::Integer const&>(width_it->second));
 		bool const playing = context->videoController->IsPlaying();
@@ -1000,6 +1006,8 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			    << ",\"request\":" << request_id
 			    << ",\"width\":" << cached_frame.width
 			    << ",\"height\":" << cached_frame.height
+			    << ",\"time\":" << cached_frame.time_ms
+			    << ",\"clock_ms\":" << context->videoController->GetPlaybackTime()
 			    << ",\"image\":\"" << cached_frame.jpeg << "\"}";
 			BeginResponse(socket, client, out.str());
 			return;
@@ -1015,11 +1023,14 @@ struct GpuiBridge::Impl final : wxEvtHandler {
 			std::string encoded = to_base64_jpeg(*last_decoded, context->videoController->GetAspectRatioValue(), client.max_width, width, height);
 			HostTrace("encode frame=%d width=%d bytes=%zu us=%lld reuse=1", frame_number, width, encoded.size(), static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encode_start).count()));
 			if (!encoded.empty()) {
-				cached_frame = {encoded, frame_number, width, height, client.max_width, video_epoch, true};
+				int const time_ms = context->videoController->TimeAtFrame(frame_number);
+				cached_frame = {encoded, frame_number, width, height, client.max_width, video_epoch, true, time_ms};
 				std::ostringstream out;
 				out << "{\"ok\":true,\"video\":true,\"frame\":" << frame_number
 				    << ",\"request\":" << request_id
 				    << ",\"width\":" << width << ",\"height\":" << height
+				    << ",\"time\":" << time_ms
+				    << ",\"clock_ms\":" << context->videoController->GetPlaybackTime()
 				    << ",\"image\":" << quote_json(encoded) << '}';
 				BeginResponse(socket, client, out.str());
 				return;

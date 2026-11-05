@@ -929,6 +929,8 @@ struct StylePreviewReply {
 #[derive(Clone, Debug, Deserialize)]
 struct FrameReply {
     frame: Option<i64>,
+    time: Option<i64>,
+    clock_ms: Option<f64>,
     request: Option<u64>,
     video: Option<bool>,
     image: Option<String>,
@@ -1144,23 +1146,8 @@ struct QueuedFrame {
     due: Instant,
 }
 
-/// Anchor of the presentation schedule: frame `base_frame` is due
-/// `PLAYBACK_PRESENT_LAG` after `base`, and each later frame one `period` after
-/// the previous one. A different playback rate re-anchors the schedule.
-#[derive(Clone, Copy)]
-struct PresentClock {
-    base: Instant,
-    base_frame: i64,
-    period: Duration,
-}
-
-/// Jitter budget before a frame's slot. Measured on a 30 fps clip: 0 ms and
-/// 16 ms leave uneven 16/50 ms steps, 33 ms (one frame period) is smooth.
-const PLAYBACK_PRESENT_LAG: Duration = Duration::from_millis(33);
 /// Frames held ahead of the display; the oldest is released when this fills.
 const PLAYBACK_QUEUE_LIMIT: usize = 8;
-/// Re-anchor when a frame's slot is more than this many periods off schedule.
-const PLAYBACK_RESYNC_PERIODS: u32 = 4;
 
 struct Workspace {
     bridge: Bridge,
@@ -1173,10 +1160,8 @@ struct Workspace {
     /// refetch — tracked per revision so a stale reply never clears the need.
     frame_image_revision: u64,
     frame_image_generation: u64,
-    /// Decoded playback frames not yet shown, oldest first. Each one shows at its
-    /// slot on `present_clock` rather than the moment it arrives.
+    /// Decoded playback frames ordered by their media presentation time.
     frame_queue: std::collections::VecDeque<QueuedFrame>,
-    present_clock: Option<PresentClock>,
     /// True while a display-refresh callback is registered for playback. The
     /// callback re-registers itself each refresh until playback stops.
     present_loop_armed: bool,
@@ -1296,7 +1281,6 @@ impl Workspace {
         }
         self.frame_image_frame = -1;
         self.frame_image_revision = u64::MAX;
-        self.present_clock = None;
         for queued in self.frame_queue.drain(..) {
             cx.drop_image(queued.image, None);
         }
@@ -1316,21 +1300,17 @@ impl Workspace {
         self.frame_image_revision = revision;
     }
 
-    /// Hands a decoded playback frame to the presentation clock. Frames show at
-    /// evenly spaced slots `PLAYBACK_PRESENT_LAG` behind arrival, so jitter from
-    /// the host timer, JPEG encode, socket and decode no longer lands on the
-    /// display's refresh grid as uneven 33/50 ms steps. A frame whose slot is far
-    /// off (a seek, a rate change or a stalled host) re-anchors the schedule and
-    /// drops the queue, because queued frames belong to the old schedule.
+    /// Presents against the host media clock, including transport and decode
+    /// elapsed time, rather than adding an arrival-dependent buffering delay.
     fn queue_playback_frame(
         &mut self,
         cx: &mut Context<Self>,
         image: Arc<gpui_kit::RenderImage>,
         frame: i64,
         revision: u64,
+        due: Instant,
     ) {
         if !self.snapshot.playing {
-            self.present_clock = None;
             for queued in self.frame_queue.drain(..) {
                 cx.drop_image(queued.image, None);
             }
@@ -1353,36 +1333,15 @@ impl Workspace {
             cx.drop_image(image, None);
             return;
         }
-        let now = Instant::now();
-        let period = playback_period(self.snapshot.fps, self.snapshot.playback_rate);
-        let slack = period * PLAYBACK_RESYNC_PERIODS;
-        let in_order = self
+        if self
             .frame_queue
             .back()
-            .is_none_or(|queued| frame > queued.frame);
-        let kept = self.present_clock.filter(|clock| {
-            let due = playback_due(*clock, frame);
-            in_order
-                && clock.period == period
-                && frame >= clock.base_frame
-                && due + slack >= now
-                && due <= now + PLAYBACK_PRESENT_LAG + slack
-        });
-        let clock = match kept {
-            Some(clock) => clock,
-            None => {
-                for queued in self.frame_queue.drain(..) {
-                    cx.drop_image(queued.image, None);
-                }
-                PresentClock {
-                    base: now,
-                    base_frame: frame,
-                    period,
-                }
+            .is_some_and(|queued| frame < queued.frame)
+        {
+            for queued in self.frame_queue.drain(..) {
+                cx.drop_image(queued.image, None);
             }
-        };
-        self.present_clock = Some(clock);
-        let due = playback_due(clock, frame);
+        }
         self.frame_queue.push_back(QueuedFrame {
             frame,
             revision,
@@ -1439,10 +1398,11 @@ impl Workspace {
     fn present_tick(&mut self, cx: &mut Context<Self>) -> bool {
         trace!("tick t={} q={}", trace::now(), self.frame_queue.len());
         self.present_due_frames(cx);
-        if !self.snapshot.playing {
+        let playing = self.snapshot.playing && self.frame_pump.playing.load(Ordering::Relaxed);
+        if !playing {
             self.present_loop_armed = false;
         }
-        self.snapshot.playing
+        playing
     }
 
     fn clear_audio_image(&mut self, cx: &mut Context<Self>) {
@@ -1661,7 +1621,6 @@ impl Workspace {
             frame_image_revision: u64::MAX,
             frame_image_generation: 0,
             frame_queue: std::collections::VecDeque::new(),
-            present_clock: None,
             present_loop_armed: false,
             preview_width_px: std::cell::Cell::new(0.),
             frame_request_inflight: false,
@@ -6307,6 +6266,12 @@ impl Workspace {
     }
 
     fn refresh_frame(&mut self, cx: &mut Context<Self>) {
+        let visible = matches!(self.active_panel, Panel::Video | Panel::Visual)
+            || (self.active_panel == Panel::Subtitles && self.show_video);
+        if !visible {
+            self.frame_pump.playing.store(false, Ordering::Release);
+            return;
+        }
         if !self.snapshot.video {
             self.clear_frame_image(cx);
             self.frame_request_inflight = false;
@@ -6493,11 +6458,8 @@ impl Workspace {
         }).detach();
     }
 
-    /// Keeps one frame request pending for a whole playback session. The host
-    /// only hands a frame to a client that is already waiting, so the next
-    /// request has to leave the moment the previous answer lands — a round trip
-    /// through the UI thread costs most of a frame interval and drops every
-    /// fifth frame of a 30 fps video.
+    /// Polls the host's cached playback frame independently of image decoding
+    /// and UI updates, so those operations do not delay the next request.
     fn start_frame_pump(&mut self, cx: &mut Context<Self>) {
         if self.frame_pump.running.swap(true, Ordering::AcqRel) {
             return;
@@ -6592,6 +6554,8 @@ impl Workspace {
                     }
                 };
                 let frame = reply.frame.unwrap_or(-1);
+                let received_at = Instant::now();
+                let media_timing = reply.time.zip(reply.clock_ms);
                 trace!("resp t={answered_at} frame={frame} seq={seq} rtt_us={}", answered_at.saturating_sub(asked_at));
                 let video_gone = reply.video == Some(false);
                 let Some(encoded) = reply.image else {
@@ -6640,7 +6604,14 @@ impl Workspace {
                             }
                             view.frame_pump.applied.store(sequence_now, Ordering::Release);
                             view.frame_image_generation = view.frame_image_generation.max(sequence_now + 1);
-                            view.queue_playback_frame(cx, image, frame, revision);
+                            let Some((media_ms, clock_ms)) = media_timing else {
+                                view.status = "视频帧缺少媒体时钟".into();
+                                cx.notify();
+                                return;
+                            };
+                            let remaining_ms = (media_ms as f64 - clock_ms) / view.snapshot.playback_rate;
+                            let due = received_at + Duration::from_secs_f64(remaining_ms.max(0.) / 1000.);
+                            view.queue_playback_frame(cx, image, frame, revision, due);
                         });
                     }
                 }).detach();
@@ -7834,7 +7805,9 @@ impl Workspace {
                     .id("detach-video-preview")
                     .cursor_pointer()
                     .on_click(cx.listener(|view, _, _, cx| {
-                        if view.detached == Some(Panel::Video) { return; }
+                        if view.detached == Some(Panel::Video) {
+                            return;
+                        }
                         let restore = (view.show_audio, view.show_video);
                         view.open_tool(Panel::Video, cx, |view, cx| {
                             view.key_focus = KeyFocus::Video;
@@ -7921,28 +7894,6 @@ impl Workspace {
                             view.visual.reset_zoom();
                         }
                         cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("video-seek-double-click")
-                    .small().ghost()
-                    .label("双击跳转")
-                    .tooltip("双击字幕行时跳转到该行开始时间")
-                    .selected(self.snapshot.appearance.seek_on_double_click)
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        let value = if view.snapshot.appearance.seek_on_double_click { "0" } else { "1" };
-                        view.preferences_request(json!({"action":"apply", "fields":{"Video/Seek On Double Click":value}}), cx);
-                    })),
-            )
-            .child(
-                Button::new("video-loop-playback")
-                    .small().ghost()
-                    .label("循环播放")
-                    .tooltip("播放结束后自动重头播放；播放当前行时循环该行，手动暂停不重播")
-                    .selected(self.snapshot.appearance.loop_playback)
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        let value = if view.snapshot.appearance.loop_playback { "0" } else { "1" };
-                        view.preferences_request(json!({"action":"apply", "fields":{"Video/Loop Playback":value}}), cx);
                     })),
             )
             .child(div().flex_1())
@@ -9513,13 +9464,6 @@ fn playback_period(fps: Option<f64>, rate: f64) -> Duration {
     Duration::from_secs_f64(1. / (fps * rate))
 }
 
-/// Slot time of `frame` on `clock`: the anchor frame is due `PLAYBACK_PRESENT_LAG`
-/// after the clock base, and each later frame one period after the previous.
-fn playback_due(clock: PresentClock, frame: i64) -> Instant {
-    let steps = (frame - clock.base_frame).max(0);
-    clock.base + PLAYBACK_PRESENT_LAG + clock.period.mul_f64(steps as f64)
-}
-
 /// Registers the next display refresh for the presentation loop. The callback
 /// runs on each platform frame and re-registers itself while playback runs.
 fn present_next_refresh(weak: gpui_kit::WeakEntity<Workspace>, window: &Window) {
@@ -10535,7 +10479,7 @@ fn panel_window_size(panel: Panel) -> gpui_kit::Size<gpui_kit::Pixels> {
         Panel::Timing => (860., 660.),
         Panel::Processor => (900., 600.),
         Panel::Resample => (880., 620.),
-        Panel::Search => (880., 640.),
+        Panel::Search => (560., 640.),
         Panel::Paste => (820., 620.),
         Panel::VideoSettings => (820., 620.),
         Panel::Attachments => (900., 600.),

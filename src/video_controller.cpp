@@ -196,11 +196,26 @@ void VideoController::SetPlaybackRate(double rate) {
 	PlaybackRateChange(rate);
 }
 
+double VideoController::GetPlaybackTime() const {
+    if (!IsPlaying()) return TimeAtFrame(frame_n);
+    if (context->audioController->IsPlaying())
+        return context->audioController->GetPlaybackPosition();
+
+    using namespace std::chrono;
+    double elapsed = duration<double, std::milli>(steady_clock::now() - playback_start_time).count();
+    return start_ms + elapsed * playback_rate;
+}
+
 void VideoController::OnPlayTimer(wxTimerEvent &) {
-	using namespace std::chrono;
-	double elapsed = duration<double, std::milli>(steady_clock::now() - playback_start_time).count();
-	double time = std::min<double>(start_ms + elapsed * playback_rate, std::numeric_limits<int>::max());
-	int next_frame = FrameAtTime(static_cast<int>(time));
+    using namespace std::chrono;
+    // While audio plays it is the master clock. Re-anchor the video-only clock to it so
+    // that if audio stops early (range end) video continues from the last heard position.
+    if (context->audioController->IsPlaying()) {
+        start_ms = context->audioController->GetPlaybackPosition();
+        playback_start_time = steady_clock::now();
+    }
+    double time = std::min<double>(GetPlaybackTime(), std::numeric_limits<int>::max());
+    int next_frame = FrameAtTime(static_cast<int>(time));
 	if (next_frame == frame_n) return;
 
 	if (next_frame >= end_frame) {

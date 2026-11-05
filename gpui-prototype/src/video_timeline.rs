@@ -1,4 +1,4 @@
-use gpui_kit::base::{Disableable, Slider as BaseSlider, SliderIndicator, SliderTrack};
+use gpui_kit::base::{Disableable, Selectable, Slider as BaseSlider, SliderIndicator, SliderTrack};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::{
     StyledExt, Theme,
@@ -213,6 +213,18 @@ impl VideoTimeline {
         let p = Palette::current(cx);
         let mut controls = div().h_flex().flex_wrap().gap_1().items_center()
             .child(
+                Button::new("video-loop-playback")
+                    .small().ghost()
+                    .child(gpui_kit::component::Icon::new(IconName::Repeat).size(px(15.)))
+                    .accessibility_label("循环播放")
+                    .tooltip("循环播放；播放当前行时循环该行，手动暂停不重播")
+                    .selected(snapshot.appearance.loop_playback)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        let value = if view.snapshot.appearance.loop_playback { "0" } else { "1" };
+                        view.preferences_request(json!({"action":"apply", "fields":{"Video/Loop Playback":value}}), cx);
+                    })),
+            )
+            .child(
                 Button::new("play-video").rounded(gpui_kit::px(999.)).small().px(gpui_kit::px(13.)).py(gpui_kit::px(3.))
                     .icon(if snapshot.playing { IconName::Pause } else { IconName::Play })
                     .label(if snapshot.playing { "暂停" } else { "播放" })
@@ -284,6 +296,26 @@ impl VideoTimeline {
                     })),
             );
         }
+        controls = controls.child(div().flex_1()).child(
+            crate::page::toggle_chip(
+                cx,
+                "video-seek-double-click",
+                "双击跳转",
+                snapshot.appearance.seek_on_double_click,
+                false,
+            )
+            .on_click(cx.listener(|view, _, _, cx| {
+                let value = if view.snapshot.appearance.seek_on_double_click {
+                    "0"
+                } else {
+                    "1"
+                };
+                view.preferences_request(
+                    json!({"action":"apply", "fields":{"Video/Seek On Double Click":value}}),
+                    cx,
+                );
+            })),
+        );
         let active = snapshot
             .lines
             .iter()

@@ -170,6 +170,11 @@ public:
 	void SetPlaybackRate(double rate);
 	double GetPlaybackRate() const { return playback_rate; }
 
+    /// Host media clock in source milliseconds. The audio clock while audio plays,
+    /// the video clock while only video plays, and the current frame's time when
+    /// stopped or paused. Frame-accurate and rate-aware.
+    double GetPlaybackTime() const;
+
 	DEFINE_SIGNAL_ADDERS(Seek, AddSeekListener)
 	DEFINE_SIGNAL_ADDERS(ARChange, AddARChangeListener)
 	DEFINE_SIGNAL_ADDERS(PlaybackRateChange, AddPlaybackRateListener)

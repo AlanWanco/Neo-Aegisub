@@ -187,17 +187,17 @@ impl SearchPanel {
                 view.open_search(index == 1, cx);
             },
         );
-        let mut fields = vec![crate::page::field_cell(crate::page::field(
+        let mut fields = vec![crate::page::field(
             cx,
             "查找内容",
             Input::new(&self.find).h(px(32.)).disabled(disabled),
-        ))];
+        )];
         if !self.selection_mode {
-            fields.push(crate::page::field_cell(crate::page::field(
+            fields.push(crate::page::field(
                 cx,
                 "替换为",
                 Input::new(&self.replace).h(px(32.)).disabled(disabled),
-            )));
+            ));
         }
         let field_kind = crate::page::segmented(
             cx,
@@ -269,7 +269,8 @@ impl SearchPanel {
                     "查找与替换"
                 },
                 None,
-                crate::page::section_body().child(crate::page::field_row(fields)),
+                crate::page::section_body()
+                    .child(div().v_flex().w_full().min_w_0().gap_3().children(fields)),
             ))
             .child(crate::page::section_with_icon(
                 cx,

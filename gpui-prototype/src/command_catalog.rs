@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::{Context, Window};
+use gpui_kit::{Context, ParentElement, Styled, Window};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -146,9 +146,23 @@ pub fn populate_menu(
                     label.push_str(&format!(" · {}", command.surface_label()));
                 }
                 let weak = workspace.clone();
-                menu = menu.item(
+                // Recent entries are file names of arbitrary length; a plain
+                // label would push the popup past its max width, so they get a
+                // shrinkable cell that ends in an ellipsis instead.
+                let base = if name.starts_with("recent/") {
+                    let text = label.clone();
+                    PopupMenuItem::element(move |_, _| {
+                        gpui_kit::div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(text.clone())
+                    })
+                } else {
                     PopupMenuItem::new(label)
-                        .disabled(!command.can_invoke())
+                };
+                menu = menu.item(
+                    base.disabled(!command.can_invoke())
                         .checked(command.active)
                         .on_click(move |_, _, cx| {
                             let _ = weak.update(cx, |view, cx| {

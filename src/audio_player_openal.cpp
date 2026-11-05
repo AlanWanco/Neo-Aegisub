@@ -92,8 +92,6 @@ class OpenALPlayer final : public AudioPlayer, wxTimer {
 	/// Number of buffers which have been fully played since playback was last started
 	ALsizei buffers_played = 0;
 
-	wxStopWatch playback_segment_timer;
-
 	/// Buffer to decode audio into
 	std::vector<char> decode_buffer;
 
@@ -209,7 +207,6 @@ void OpenALPlayer::Play(int64_t start, int64_t count)
 	// And go!
 	alSourcePlay(source);
 	wxTimer::Start(100);
-	playback_segment_timer.Start();
 }
 
 void OpenALPlayer::Stop()
@@ -275,7 +272,6 @@ void OpenALPlayer::Notify()
 
 		// Update
 		buffers_played += newplayed;
-		playback_segment_timer.Start();
 
 		// Fill more buffers
 		FillBuffers(newplayed);
@@ -295,10 +291,16 @@ void OpenALPlayer::SetEndPosition(int64_t pos)
 
 int64_t OpenALPlayer::GetCurrentPosition()
 {
-	// FIXME: this should be based on not duration played but actual sample being heard
-	// (during video playback, cur_frame might get changed to resync)
-	long extra = playback_segment_timer.Time();
-	return buffers_played * decode_buffer.size() / bpf + start_frame + extra * samplerate / 1000;
+    if (!playing) return 0;
+
+    // AL_SAMPLE_OFFSET is relative to the beginning of all queued buffers, including
+    // buffers already processed but not yet unqueued (OpenAL 1.1 spec). buffers_played
+    // counts buffers unqueued since Play(), so the queue head is at
+    // start_frame + buffers_played * frames_per_buffer.
+    ALint offset;
+    alGetSourcei(source, AL_SAMPLE_OFFSET, &offset);
+    const int64_t frames_per_buffer = static_cast<int64_t>(decode_buffer.size()) / bpf;
+    return start_frame + static_cast<int64_t>(buffers_played) * frames_per_buffer + offset;
 }
 }
 
