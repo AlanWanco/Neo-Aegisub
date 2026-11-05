@@ -27,11 +27,9 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
-#include <wx/base64.h>
 #include <wx/bitmap.h>
 #include <wx/dcmemory.h>
 #include <wx/image.h>
-#include <wx/mstream.h>
 #include <wx/pen.h>
 
 namespace {
@@ -107,6 +105,9 @@ struct Audio::Impl {
 		result["autoscroll"] = OPT_GET("Audio/Auto/Scroll")->GetBool();
 		result["snap"] = OPT_GET("Audio/Snap/Enable")->GetBool();
 		result["spectrum"] = OPT_GET("Audio/Spectrum")->GetBool();
+		// How many neighbouring lines the waveform draws; the frontend shows this
+		// as a direct switch next to the title instead of a preferences trip.
+		result["inactive_mode"] = OPT_GET("Audio/Inactive Lines Display Mode")->GetInt();
 		result["medusa"] = OPT_GET("Audio/Medusa Timing Hotkeys")->GetBool();
 		result["karaoke"] = context->karaoke->IsEnabled();
 		json::Array syllables;
@@ -180,12 +181,20 @@ Audio::~Audio() = default;
 
 std::string Audio::Snapshot() { return encode(impl->State()); }
 
-std::string Audio::Render(json::Object const& request) {
+RawReply Audio::Render(json::Object const& request) {
 	auto result = impl->State();
 	result["ok"] = true;
 	auto provider = impl->context->project->AudioProvider();
-	if (!provider) return encode(result);
-	int const width = integer(request, "width", 128, 2048);
+	if (!provider) {
+		result["width"] = static_cast<int64_t>(0);
+		result["height"] = static_cast<int64_t>(0);
+		result["pixel_format"] = std::string("bgra8");
+		result["byte_length"] = static_cast<int64_t>(0);
+		result["view_start"] = 0.0;
+		result["span"] = static_cast<int64_t>(0);
+		return {encode(result), {}};
+	}
+	int const width = integer(request, "width", 16, 2048);
 	int const height = integer(request, "height", 64, 512);
 	int const start = integer(request, "start", 0, std::numeric_limits<int>::max() - 1);
 	int const span = integer(request, "span", 100, 600000);
@@ -194,18 +203,31 @@ std::string Audio::Render(json::Object const& request) {
 	impl->renderer.SetHeight(height);
 	impl->renderer.SetMillisecondsPerPixel(static_cast<double>(span) / width);
 	impl->renderer.SetAmplitudeScale(gain / 100.f);
+	int const first_pixel = static_cast<int>(static_cast<int64_t>(start) * width / span);
 	wxBitmap bitmap(width, height, 24);
 	wxMemoryDC dc(bitmap);
-	impl->renderer.Render(dc, wxPoint(0, 0), static_cast<int>(static_cast<int64_t>(start) * width / span), width, AudioStyle_Normal);
+	impl->renderer.Render(dc, wxPoint(0, 0), first_pixel, width, AudioStyle_Normal);
 	dc.SelectObject(wxNullBitmap);
-	wxMemoryOutputStream stream;
-	if (!bitmap.ConvertToImage().SaveFile(stream, wxBITMAP_TYPE_PNG)) throw std::runtime_error("could not encode audio display");
-	std::vector<unsigned char> bytes(stream.GetSize());
-	stream.CopyTo(bytes.data(), bytes.size());
-	result["image"] = std::string(wxBase64Encode(bytes.data(), bytes.size()).utf8_str());
-	result["view_start"] = static_cast<int>(static_cast<int64_t>(start) * width / span) * static_cast<double>(span) / width;
+	// wxImage rows are top-to-bottom like the bitmap, so the copy keeps orientation.
+	wxImage const image = bitmap.ConvertToImage();
+	if (!image.IsOk() || image.GetWidth() != width || image.GetHeight() != height)
+		throw std::runtime_error("could not read audio display pixels");
+	unsigned char const *rgb = image.GetData();
+	size_t const count = static_cast<size_t>(width) * static_cast<size_t>(height);
+	std::vector<unsigned char> pixels(count * 4);
+	for (size_t i = 0; i < count; ++i) {
+		pixels[i * 4 + 0] = rgb[i * 3 + 2];
+		pixels[i * 4 + 1] = rgb[i * 3 + 1];
+		pixels[i * 4 + 2] = rgb[i * 3 + 0];
+		pixels[i * 4 + 3] = 255;
+	}
+	result["width"] = static_cast<int64_t>(width);
+	result["height"] = static_cast<int64_t>(height);
+	result["pixel_format"] = std::string("bgra8");
+	result["byte_length"] = static_cast<int64_t>(pixels.size());
+	result["view_start"] = first_pixel * static_cast<double>(span) / width;
 	result["span"] = span;
-	return encode(result);
+	return {encode(result), std::move(pixels)};
 }
 
 std::string Audio::Interact(json::Object const& request) {
