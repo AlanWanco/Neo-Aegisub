@@ -46,6 +46,7 @@
 #include "export_framerate.h"
 #include "format.h"
 #include "frame_main.h"
+#include "gpui_bridge.h"
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
@@ -67,11 +68,40 @@
 #include <libaegisub/util.h>
 
 #include <boost/interprocess/streams/bufferstream.hpp>
+#include <cstdio>
 #include <wx/clipbrd.h>
 #include <wx/imagjpeg.h>
+#include <wx/log.h>
 #include <wx/msgdlg.h>
 #include <wx/stackwalk.h>
 #include <wx/utils.h>
+
+#ifdef WITH_GPUI_DEFAULT
+namespace {
+/// wx shows error and warning log lines as a modal dialog when no log window
+/// exists. The wx frame is hidden once the GPUI front end takes over, so that
+/// dialog would freeze the application behind an invisible window; while the
+/// front end is attached the same lines go to stderr instead.
+class FrontendLogTarget final : public wxLogGui {
+protected:
+	void DoLogRecord(wxLogLevel level, wxString const& message, wxLogRecordInfo const& info) override {
+		if (gpui::FrontendAttached()) {
+			std::fprintf(stderr, "wx log: %s\n", static_cast<char const *>(message.utf8_str()));
+			return;
+		}
+		wxLogGui::DoLogRecord(level, message, info);
+	}
+
+	void DoLogTextAtLevel(wxLogLevel level, wxString const& message) override {
+		if (gpui::FrontendAttached()) {
+			std::fprintf(stderr, "wx log: %s\n", static_cast<char const *>(message.utf8_str()));
+			return;
+		}
+		wxLogGui::DoLogTextAtLevel(level, message);
+	}
+};
+}
+#endif
 
 namespace config {
 	agi::Options *opt = nullptr;
@@ -140,6 +170,12 @@ bool AegisubApp::OnInit() {
 	// The logger isn't created on demand on background threads, so force it to
 	// be created now
 	(void)wxLog::GetActiveTarget();
+#ifdef WITH_GPUI_DEFAULT
+	// While the GPUI front end is up the wx frame is hidden, so a log dialog
+	// there would block the main loop with nothing on screen to dismiss it and
+	// take the bridge down with it. Log lines still reach stderr in that case.
+	wxLog::SetActiveTarget(new FrontendLogTarget);
+#endif
 
 	agi::util::InitLocale();
 
