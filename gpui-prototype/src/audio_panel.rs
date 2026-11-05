@@ -1,18 +1,26 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
+use anyhow::{Context as _, Result, bail};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::{
     Icon, StyledExt, Theme,
     button::{Button, ButtonVariants},
+    menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    Bounds, Context, Image, IntoElement, MouseButton, ObjectFit, Pixels, Styled, StyledImage,
+    Bounds, Context, IntoElement, MouseButton, ObjectFit, Pixels, RenderImage, Styled, StyledImage,
     canvas, div, img, prelude::*, px, relative, rgb,
 };
+use image::{Frame, RgbaImage};
 use serde::Deserialize;
 use serde_json::json;
+
+/// The four choices of Audio/Inactive Lines Display Mode, in host order.
+const INACTIVE_LINE_MODES: [&str; 4] = ["不显示", "上一行", "上一行与下一行", "全部"];
+/// The same choices squeezed onto the chip that opens the menu.
+const INACTIVE_LINE_SHORT: [&str; 4] = ["无", "上行", "上下", "全部"];
 
 use crate::{Workspace, format_time};
 
@@ -40,8 +48,6 @@ pub struct AudioState {
     #[serde(default)]
     pub duration: i64,
     #[serde(default)]
-    pub decoded: i64,
-    #[serde(default)]
     pub playing: bool,
     #[serde(default)]
     pub position: i64,
@@ -63,6 +69,10 @@ pub struct AudioState {
     pub snap: bool,
     #[serde(default)]
     pub spectrum: bool,
+    /// How many neighbouring lines the waveform draws around the active one;
+    /// matches the four choices of Audio/Inactive Lines Display Mode.
+    #[serde(default)]
+    pub inactive_mode: i64,
     #[serde(default)]
     pub medusa: bool,
     #[serde(default)]
@@ -113,10 +123,59 @@ impl AudioMarker {
 pub struct AudioImage {
     #[serde(flatten)]
     pub state: AudioState,
-    pub image: Option<String>,
     #[serde(default)]
     pub view_start: f64,
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: String,
+    pub byte_length: usize,
 }
+
+/// Widest and tallest slice the host is asked to render, in pixels.
+pub const TILE_MAX_WIDTH: i64 = 2048;
+pub const TILE_MAX_HEIGHT: i64 = 512;
+
+impl AudioImage {
+    /// Checks the header against the binary contract and returns how many raw
+    /// BGRA8 bytes follow the header line. A missing or inconsistent length is
+    /// an error, never a silent zero.
+    pub fn body_length(&self) -> Result<usize> {
+        if self.pixel_format != "bgra8" {
+            bail!("unsupported audio pixel format {}", self.pixel_format);
+        }
+        if i64::from(self.width) > TILE_MAX_WIDTH || i64::from(self.height) > TILE_MAX_HEIGHT {
+            bail!(
+                "audio image {}x{} exceeds {}x{}",
+                self.width,
+                self.height,
+                TILE_MAX_WIDTH,
+                TILE_MAX_HEIGHT
+            );
+        }
+        let expected = self.width as usize * self.height as usize * 4;
+        if self.byte_length != expected {
+            bail!(
+                "audio image byte length {} does not match {}x{}",
+                self.byte_length,
+                self.width,
+                self.height
+            );
+        }
+        Ok(expected)
+    }
+
+    /// Wraps the raw BGRA8 pixels as a GPUI render image without copying them.
+    /// A zero-sized reply means there is no audio yet and yields `None`.
+    pub fn into_render_image(self, pixels: Vec<u8>) -> Result<Option<Arc<RenderImage>>> {
+        if pixels.is_empty() {
+            return Ok(None);
+        }
+        let image = RgbaImage::from_raw(self.width, self.height, pixels)
+            .context("audio pixels do not match their dimensions")?;
+        Ok(Some(Arc::new(RenderImage::new([Frame::new(image)]))))
+    }
+}
+
 /// A horizontal pan in progress. The ruler above the waveform and the
 /// scrollbar below it move the same view window: `shaft` is zero for the
 /// ruler, whose pixels map straight onto time, and is the thumb travel in
@@ -145,6 +204,10 @@ pub struct TileKey {
     /// than the track would be scaled by its own aspect ratio, so the track
     /// height is part of the identity instead of a fixed constant.
     pub height: i64,
+    /// Raster width in pixels. A slice is rendered at the width it is drawn at,
+    /// so a zoom that changes the on-screen width gets its own bitmap instead of
+    /// a stretched neighbour.
+    pub width: i64,
 }
 
 impl TileKey {
@@ -158,7 +221,7 @@ impl TileKey {
 /// view scale but would leave a seam between neighbours if ignored.
 pub struct AudioTile {
     pub key: TileKey,
-    pub image: Arc<Image>,
+    pub image: Arc<RenderImage>,
     pub start: i64,
 }
 
@@ -183,8 +246,6 @@ pub struct AudioPanel {
     /// Tiles whose render is already in flight, so a burst of mouse moves does
     /// not queue the same slice twice.
     pub tile_inflight: Vec<TileKey>,
-    /// Bumped on every gesture step so only the last one schedules a render.
-    pub render_generation: u64,
     pub bounds: Rc<RefCell<Bounds<Pixels>>>,
     pub gesture: Option<u64>,
     pub dragging: bool,
@@ -196,6 +257,8 @@ pub struct AudioPanel {
     pub drag_origin_x: Pixels,
     pub snap_inverted: bool,
     pub pan_drag: Option<PanDrag>,
+    /// Track size (width, height) the last refresh ran for, so a resize triggers one.
+    pub last_track: (f32, f32),
 }
 
 impl AudioPanel {
@@ -207,7 +270,6 @@ impl AudioPanel {
             gain: 800,
             tiles: Vec::new(),
             tile_inflight: Vec::new(),
-            render_generation: 0,
             bounds: Rc::new(RefCell::new(Bounds::default())),
             gesture: None,
             dragging: false,
@@ -219,6 +281,7 @@ impl AudioPanel {
             drag_origin_x: px(0.),
             snap_inverted: false,
             pan_drag: None,
+            last_track: (0., 0.),
         }
     }
     /// Length of one slice: a quarter of the viewport, snapped to a 1-2-5 step
@@ -238,7 +301,14 @@ impl AudioPanel {
         scale * 10
     }
 
-    pub fn tile_key(&self, index: i64, epoch: u64, revision: u64, height: i64) -> TileKey {
+    pub fn tile_key(
+        &self,
+        index: i64,
+        epoch: u64,
+        revision: u64,
+        height: i64,
+        width: i64,
+    ) -> TileKey {
         TileKey {
             epoch,
             revision,
@@ -247,6 +317,7 @@ impl AudioPanel {
             span: self.tile_span(),
             index,
             height,
+            width,
         }
     }
 
@@ -259,6 +330,7 @@ impl AudioPanel {
         revision: u64,
         duration: i64,
         height: i64,
+        track_width: f32,
     ) -> Vec<TileKey> {
         let span = self.tile_span();
         // The last slice starts before the final sample, not at the end.
@@ -267,12 +339,13 @@ impl AudioPanel {
         let last = ((self.view_start + self.span).div_euclid(span) + 1)
             .min(media_last)
             .max(first);
+        let width = raster_width(track_width, span, self.span);
         (first..=last)
-            .map(|index| self.tile_key(index, epoch, revision, height))
+            .map(|index| self.tile_key(index, epoch, revision, height, width))
             .collect()
     }
 
-    pub fn cached_tile(&self, key: &TileKey) -> Option<&Arc<Image>> {
+    pub fn cached_tile(&self, key: &TileKey) -> Option<&Arc<RenderImage>> {
         self.tiles
             .iter()
             .find(|tile| tile.key == *key)
@@ -286,12 +359,13 @@ impl AudioPanel {
         &mut self,
         key: TileKey,
         start: i64,
-        image: Arc<Image>,
+        image: Arc<RenderImage>,
         cx: &mut Context<Workspace>,
     ) {
         if let Some(slot) = self.tiles.iter_mut().find(|tile| tile.key == key) {
-            slot.image = image;
+            let old = std::mem::replace(&mut slot.image, image);
             slot.start = start;
+            cx.drop_image(old, None);
             return;
         }
         self.tiles.push(AudioTile { key, image, start });
@@ -308,21 +382,22 @@ impl AudioPanel {
                         || cached.mode != key.mode
                         || cached.gain != key.gain
                         || cached.span != key.span
-                        || cached.height != key.height;
+                        || cached.height != key.height
+                        || cached.width != key.width;
                     let distance = (tile.start + cached.span / 2 - center).abs();
                     (stale, distance)
                 })
                 .map(|(index, _)| index);
             let Some(index) = worst else { break };
             let dropped = self.tiles.remove(index);
-            dropped.image.remove_asset(cx);
+            cx.drop_image(dropped.image, None);
         }
     }
 
     /// Drops every cached slice, for when the audio itself is replaced.
     pub fn clear_tiles(&mut self, cx: &mut Context<Workspace>) {
         for tile in self.tiles.drain(..) {
-            tile.image.remove_asset(cx);
+            cx.drop_image(tile.image, None);
         }
         self.tile_inflight.clear();
     }
@@ -469,6 +544,49 @@ impl AudioPanel {
             ),
             "美杜莎模式：把全局时间热键换成音频编辑热键",
         ));
+        // Display range around the active line: it used to exist only as
+        // Audio/Inactive Lines Display Mode in the preferences page, so the
+        // waveform itself offered no control over what it draws around the
+        // line being timed.
+        let inactive = usize::try_from(state.inactive_mode.clamp(0, 3)).unwrap_or(0);
+        controls = controls.child({
+            let weak = cx.weak_entity();
+            Button::new("audio-inactive-lines")
+                .rounded(gpui_kit::px(999.))
+                .small()
+                .px(gpui_kit::px(11.))
+                .py(gpui_kit::px(3.))
+                .disabled(!state.loaded)
+                .tooltip("波形显示当前行前后字幕的范围")
+                .child(format!("范围 {}", INACTIVE_LINE_SHORT[inactive]))
+                .child(
+                    Icon::new(IconName::ChevronDown)
+                        .size(px(14.))
+                        .text_color(Theme::global(cx).muted_foreground),
+                )
+                .dropdown_menu(move |mut menu, _, _| {
+                    for (index, label) in INACTIVE_LINE_MODES.iter().enumerate() {
+                        let weak = weak.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(*label)
+                                .checked(index == inactive)
+                                .on_click(move |_, _, cx| {
+                                    let _ = weak.update(cx, |view, cx| {
+                                        view.invoke(
+                                            json!({
+                                                "op": "preferences",
+                                                "action": "apply",
+                                                "fields": {"Audio/Inactive Lines Display Mode": index.to_string()},
+                                            }),
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                })
+        });
         let bounds = self.bounds.clone();
         // The rendered waveform image is drawn for a dark display, so keep the
         // dark track once audio exists and follow the theme while it is empty.
@@ -534,7 +652,9 @@ impl AudioPanel {
                     || key.mode != mode
                     || key.gain != gain
                     || key.span != tile_span
-                    || (key.height == track_height) != exact
+                    || (key.height == track_height
+                        && key.width == raster_width(width, key.span, view_span))
+                        != exact
                 {
                     continue;
                 }
@@ -693,9 +813,9 @@ impl AudioPanel {
                         (view.audio.span as f64 * 1.25_f64.powf(-f64::from(delta))).round() as i64;
                     view.audio
                         .zoom_at(span, fraction, view.snapshot.audio.duration);
-                    // Wheel zoom fires many times per gesture; request one
-                    // render once it settles instead of one per tick.
-                    view.schedule_audio_render(cx);
+                    // Wheel zoom fires many times per gesture; each tick refreshes
+                    // the bounded set of missing slices, so the queue stays capped.
+                    view.refresh_audio(cx);
                     cx.notify();
                 }),
             )
@@ -1065,7 +1185,7 @@ impl AudioPanel {
                 )
                 .capture_any_mouse_up(cx.listener(|view, _: &gpui_kit::MouseUpEvent, _, cx| {
                     if view.audio.pan_drag.take().is_some() {
-                        view.schedule_audio_render(cx);
+                        view.refresh_audio(cx);
                     }
                 }))
                 .child(
@@ -1136,7 +1256,7 @@ impl AudioPanel {
                             origin_start: start,
                             shaft,
                         });
-                        view.schedule_audio_render(cx);
+                        view.refresh_audio(cx);
                         cx.notify();
                     }),
                 )
@@ -1163,7 +1283,7 @@ impl AudioPanel {
                 )
                 .capture_any_mouse_up(cx.listener(|view, _: &gpui_kit::MouseUpEvent, _, cx| {
                     if view.audio.pan_drag.take().is_some() {
-                        view.schedule_audio_render(cx);
+                        view.refresh_audio(cx);
                     }
                 }))
                 .child(
@@ -1375,9 +1495,16 @@ pub fn track_pixels(height: f32) -> i64 {
     (height.round() as i64).clamp(64, 512)
 }
 
+/// Pixels a slice of `slice_span` ms is rendered at so it lands at its on-screen
+/// width in a `track_width` px track showing `view_span` ms.
+pub fn raster_width(track_width: f32, slice_span: i64, view_span: i64) -> i64 {
+    let pixels = (track_width * slice_span as f32 / view_span.max(1) as f32).round() as i64;
+    pixels.clamp(16, TILE_MAX_WIDTH)
+}
+
 /// Places one waveform bitmap over the time range it was rendered for.
 fn audio_image_layer(
-    image: Arc<Image>,
+    image: Arc<RenderImage>,
     start: i64,
     span: i64,
     view_start: i64,
@@ -1525,7 +1652,7 @@ mod tests {
     fn wanted_tiles_cover_the_view_with_one_spare_each_side() {
         let mut panel = AudioPanel::new();
         panel.span = 12_000;
-        let keys = panel.wanted_tiles(3, 7, 60_000, 200);
+        let keys = panel.wanted_tiles(3, 7, 60_000, 200, 1200.);
         let indices: Vec<i64> = keys.iter().map(|key| key.index).collect();
         assert_eq!(indices, vec![0, 1, 2, 3], "0..10 s, 10..15 s, 15..20 s");
         assert!(keys.iter().all(|key| key.span == 5_000 && key.epoch == 3));
@@ -1534,7 +1661,7 @@ mod tests {
         // already decoded are the ones next to the view, not a new grid.
         panel.view_start = 31_000;
         let indices: Vec<i64> = panel
-            .wanted_tiles(3, 7, 600_000, 200)
+            .wanted_tiles(3, 7, 600_000, 200, 1200.)
             .iter()
             .map(|key| key.index)
             .collect();
@@ -1546,7 +1673,7 @@ mod tests {
         panel.view_start = 18_000;
         panel.span = 2_000;
         let indices: Vec<i64> = panel
-            .wanted_tiles(3, 7, 20_000, 200)
+            .wanted_tiles(3, 7, 20_000, 200, 1200.)
             .iter()
             .map(|key| key.index)
             .collect();
@@ -1559,8 +1686,8 @@ mod tests {
         // shorter track would scale it by its own aspect ratio, which is how
         // the spectrum came to look taller as the track got wider.
         let panel = AudioPanel::new();
-        let short = panel.wanted_tiles(3, 7, 60_000, 64);
-        let tall = panel.wanted_tiles(3, 7, 60_000, 240);
+        let short = panel.wanted_tiles(3, 7, 60_000, 64, 1200.);
+        let tall = panel.wanted_tiles(3, 7, 60_000, 240, 1200.);
         assert_eq!(short.len(), tall.len());
         assert!(short.iter().zip(&tall).all(|(a, b)| a != b));
         assert!(tall.iter().all(|key| key.height == 240));
