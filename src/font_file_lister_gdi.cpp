@@ -220,7 +220,7 @@ std::vector<std::string> GetFontFamilies() {
 		EnumFontFamiliesExW(dc, &font, [](LOGFONTW const *lplf, TEXTMETRICW const *, DWORD, LPARAM param) -> int {
 			auto families = reinterpret_cast<std::set<std::string> *>(param);
 			if (lplf->lfFaceName[0] && lplf->lfFaceName[0] != L'@')
-				families->insert(agi::charset::ConvertU(lplf->lfFaceName));
+				families->insert(agi::charset::ConvertW(std::wstring_view(lplf->lfFaceName)));
 			return 1;
 		}, reinterpret_cast<LPARAM>(&families), 0);
 		ReleaseDC(nullptr, dc);

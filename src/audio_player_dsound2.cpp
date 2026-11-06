@@ -183,8 +183,6 @@ class DirectSoundPlayer2Thread {
 	/// @brief Check for error state and throw exception if one occurred
 	void CheckError();
 
-	HWND parent;
-
 	/// Win32 handle to the thread
 	Win32KernelHandle thread_handle;
 
@@ -311,7 +309,7 @@ void DirectSoundPlayer2Thread::Run()
 	COMObjectRetainer<IDirectSound8> ds(ds_raw);
 
 	// Ensure we can get interesting wave formats (unless we have PRIORITY we can only use a standard 8 bit format)
-	ds->SetCooperativeLevel(parent, DSSCL_PRIORITY);
+	ds->SetCooperativeLevel(GetDesktopWindow(), DSSCL_PRIORITY);
 
 	// Describe the wave format
 	WAVEFORMATEX waveFormat;
@@ -658,8 +656,7 @@ void DirectSoundPlayer2Thread::CheckError()
 }
 
 DirectSoundPlayer2Thread::DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength )
-: parent(parent ? (HWND)parent->GetHandle() : GetDesktopWindow())
-, event_start_playback  (CreateEvent(0, FALSE, FALSE, 0))
+: event_start_playback  (CreateEvent(0, FALSE, FALSE, 0))
 , event_stop_playback   (CreateEvent(0, FALSE, FALSE, 0))
 , event_update_end_time (CreateEvent(0, FALSE, FALSE, 0))
 , event_set_volume      (CreateEvent(0, FALSE, FALSE, 0))
