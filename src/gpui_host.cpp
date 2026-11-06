@@ -181,9 +181,12 @@ public:
 		std::wstring application = program.wstring();
 		std::wstring command_line = L"\"" + application + L"\"";
 		for (auto const& argument : arguments) {
-			command_line += L" \"";
-			command_line += agi::charset::ConvertW(argument);
-			command_line += L'"';
+			auto wide = agi::charset::ConvertW(argument);
+			bool quote = wide.empty() || wide.find_first_of(L" \t\"") != std::wstring::npos;
+			command_line += L' ';
+			if (quote) command_line += L'"';
+			command_line += wide;
+			if (quote) command_line += L'"';
 		}
 		auto log_path = program.parent_path() / "frontend.log";
 		SECURITY_ATTRIBUTES attributes {sizeof attributes, nullptr, TRUE};
