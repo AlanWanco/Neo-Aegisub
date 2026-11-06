@@ -372,7 +372,6 @@ jobs:
           path: |
             build/gpui-desktop-check/*.png
             build/gpui-desktop-check/result.json
-            build/gpui-desktop-check/runtime/log/*
           if-no-files-found: warn
 
       - name: Upload artifacts - win_installer

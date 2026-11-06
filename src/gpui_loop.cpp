@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "gpui_loop.h"
-#include "gpui_trace.h"
 
 #include "gpui_server.h"
 
@@ -76,7 +75,6 @@ void EventLoop::DrainPosted() {
 		tasks.swap(posted);
 	}
 	for (auto &task : tasks) {
-		gpui::TraceHost("task start");
 		try {
 			task();
 		}
@@ -86,7 +84,6 @@ void EventLoop::DrainPosted() {
 		catch (...) {
 			LOG_E("host/loop") << "Task raised an unknown exception";
 		}
-		gpui::TraceHost("task done");
 	}
 }
 
@@ -131,26 +128,19 @@ void EventLoop::Pump(int timeout) {
 void EventLoop::Run() {
 	loop_thread = std::this_thread::get_id();
 	running = true;
-	gpui::TraceHost("loop run");
 	while (running) {
-		gpui::TraceHost("loop iteration");
 		DrainPosted();
-		gpui::TraceHost("posted drained");
 		RunDueTimers();
-		gpui::TraceHost("timers done");
 		if (!running) break;
 
 		int const timeout = HasPosted() ? 0 : TimeUntilNextTimer();
 		if (server) {
-			gpui::TraceHost("step");
 			server->Step(timeout);
-			gpui::TraceHost("step done");
 		}
 		else if (timeout > 0) std::this_thread::sleep_for(std::chrono::milliseconds(timeout));
 		else if (timeout < 0) break;
 	}
 	running = false;
-	gpui::TraceHost("loop finished");
 }
 
 void EventLoop::Stop() {
