@@ -178,19 +178,19 @@ public:
 
 	bool Spawn(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
 #if defined(_WIN32)
-		std::string command_line;
+		std::wstring application = program.wstring();
+		std::wstring command_line = L"\"" + application + L"\"";
 		for (auto const& argument : arguments) {
-			if (!command_line.empty()) command_line += ' ';
-			command_line += '"';
-			command_line += argument;
-			command_line += '"';
+			command_line += L" \"";
+			command_line += agi::charset::ConvertW(argument);
+			command_line += L'"';
 		}
 		auto log_path = program.parent_path() / "frontend.log";
 		SECURITY_ATTRIBUTES attributes {sizeof attributes, nullptr, TRUE};
 		HANDLE log = CreateFileW(log_path.c_str(), FILE_APPEND_DATA,
 			FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, CREATE_ALWAYS,
 			FILE_ATTRIBUTE_NORMAL, nullptr);
-		STARTUPINFOA startup {};
+		STARTUPINFOW startup {};
 		startup.cb = sizeof startup;
 		if (log != INVALID_HANDLE_VALUE) {
 			startup.dwFlags = STARTF_USESTDHANDLES;
@@ -199,8 +199,7 @@ public:
 			startup.hStdError = log;
 		}
 		PROCESS_INFORMATION info {};
-		std::string application = program.string();
-		BOOL started = CreateProcessA(application.c_str(), command_line.data(), nullptr, nullptr,
+		BOOL started = CreateProcessW(application.c_str(), command_line.data(), nullptr, nullptr,
 			log != INVALID_HANDLE_VALUE, 0, nullptr, nullptr, &startup, &info);
 		if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
 		if (!started) return false;
