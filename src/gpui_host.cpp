@@ -166,9 +166,12 @@ public:
 			command_line += wide;
 			if (quote) command_line += L'"';
 		}
+		// CreateProcessW dereferences lpStartupInfo; it is not an optional pointer.
+		STARTUPINFOW startup {};
+		startup.cb = sizeof startup;
 		PROCESS_INFORMATION info {};
 		BOOL started = CreateProcessW(application.c_str(), command_line.data(), nullptr, nullptr,
-			FALSE, 0, nullptr, nullptr, nullptr, &info);
+			FALSE, 0, nullptr, nullptr, &startup, &info);
 		if (!started) return false;
 		process = info.hProcess;
 		CloseHandle(info.hThread);
