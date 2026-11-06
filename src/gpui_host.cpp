@@ -185,16 +185,25 @@ public:
 			command_line += argument;
 			command_line += '"';
 		}
+		auto log_path = program.parent_path() / "frontend.log";
+		SECURITY_ATTRIBUTES attributes {sizeof attributes, nullptr, TRUE};
+		HANDLE log = CreateFileW(log_path.c_str(), FILE_APPEND_DATA,
+			FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, CREATE_ALWAYS,
+			FILE_ATTRIBUTE_NORMAL, nullptr);
 		STARTUPINFOA startup {};
 		startup.cb = sizeof startup;
+		if (log != INVALID_HANDLE_VALUE) {
+			startup.dwFlags = STARTF_USESTDHANDLES;
+			startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+			startup.hStdOutput = log;
+			startup.hStdError = log;
+		}
 		PROCESS_INFORMATION info {};
 		std::string application = program.string();
-		if (!CreateProcessA(application.c_str(), command_line.data(), nullptr, nullptr, FALSE,
-			0, nullptr, nullptr, &startup, &info))
-			return false;
-		process = info.hProcess;
-		CloseHandle(info.hThread);
-		return true;
+		BOOL started = CreateProcessA(application.c_str(), command_line.data(), nullptr, nullptr,
+			log != INVALID_HANDLE_VALUE, 0, nullptr, nullptr, &startup, &info);
+		if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
+		if (!started) return false;
 #else
 		std::vector<std::string> storage;
 		storage.reserve(arguments.size() + 1);
@@ -226,6 +235,15 @@ public:
 		if (result == 0) return true;
 		pid = 0;
 		return false;
+#endif
+	}
+	unsigned long ExitCode() const {
+#if defined(_WIN32)
+		DWORD code = 0;
+		if (process) GetExitCodeProcess(process, &code);
+		return code;
+#else
+		return 0;
 #endif
 	}
 
@@ -359,7 +377,10 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 
 	gpui::Timer watch_frontend;
 	watch_frontend.on_tick = [&] {
-		if (!child.Running()) loop.Stop();
+		if (!child.Running()) {
+			TraceStartup("frontend exited " + std::to_string(child.ExitCode()));
+			loop.Stop();
+		}
 	};
 	watch_frontend.Start(250);
 
