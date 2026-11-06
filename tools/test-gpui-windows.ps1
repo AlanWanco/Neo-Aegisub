@@ -226,6 +226,11 @@ try {
         ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'result.json')
     Write-Host 'Windows GPUI desktop smoke: PASS'
 } finally {
+    $trace = Join-Path $runtime 'aegisub.exe.trace.log'
+    if (Test-Path -LiteralPath $trace) {
+        New-Item -ItemType Directory -Force (Join-Path $runtime 'log') | Out-Null
+        Copy-Item -LiteralPath $trace -Destination (Join-Path $runtime 'log/host-trace.json') -Force
+    }
     if ($frontend) {
         if (-not $frontend.HasExited) {
             try { Save-Screenshot 'final' } catch { Write-Warning "Final screenshot failed: $($_.Exception.Message)" }

@@ -49,6 +49,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(__APPLE__)
@@ -79,8 +80,30 @@ Automation4::AutoloadScriptManager *global_scripts = nullptr;
 
 namespace {
 using namespace std::chrono_literals;
+#if defined(_WIN32)
+/// Temporary startup trace for diagnosing early crashes on Windows. It is
+/// written next to the executable so the desktop test can upload it even when
+/// the host dies before the JSON log writer is ready.
+void TraceStartup(std::string_view message) {
+	wchar_t path[MAX_PATH];
+	DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+	if (!length || length >= MAX_PATH) return;
+	std::wstring file(path, length);
+	file += L".trace.log";
+	HANDLE handle = CreateFileW(file.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (handle == INVALID_HANDLE_VALUE) return;
+	std::string line(message);
+	line += "\r\n";
+	DWORD written = 0;
+	WriteFile(handle, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+	CloseHandle(handle);
+}
+#else
+void TraceStartup(std::string_view) { }
+#endif
 
 void StartupLog(std::string const& message) {
+	TraceStartup(message);
 	LOG_I("startup") << message;
 }
 
@@ -232,6 +255,7 @@ private:
 };
 
 int Run(char const *argv0, std::vector<std::string> const& files) {
+	TraceStartup("Run");
 	// Logging has to exist before anything can log: every Path, Options and
 	// dispatch step reports through it.
 	agi::log::log = new agi::log::LogSink;
@@ -368,18 +392,23 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 }
 
 int HostMain(std::string const& argv0, std::vector<std::string> const& files) {
+	TraceStartup("HostMain");
 	try {
 		return Run(argv0.c_str(), files);
 	}
 	catch (agi::Exception const& err) {
+		TraceStartup(std::string("agi::Exception: ") + err.GetMessage());
 		std::fprintf(stderr, "gpui-host: %s\n", err.GetMessage().c_str());
 	}
 	catch (std::exception const& err) {
+		TraceStartup(std::string("std::exception: ") + err.what());
 		std::fprintf(stderr, "gpui-host: %s\n", err.what());
 	}
 	catch (...) {
+		TraceStartup("unknown exception");
 		std::fprintf(stderr, "gpui-host: unknown error during startup\n");
 	}
+	TraceStartup("HostMain failed");
 	return 1;
 }
 
@@ -395,8 +424,10 @@ int main(int argc, char **argv) {
 // WinMain rather than main. Parse the command line ourselves because the
 // __argc/__argv globals are not populated for a WinMain entry point.
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+	TraceStartup("WinMain");
 	int argc = 0;
 	LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+	TraceStartup("CommandLineToArgvW argc=" + std::to_string(argc));
 	std::string argv0;
 	std::vector<std::string> files;
 	if (argv) {
@@ -406,6 +437,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			files.emplace_back(agi::charset::ConvertW(std::wstring_view(argv[i])));
 		LocalFree(argv);
 	}
+	TraceStartup("argv0=" + argv0);
 	return HostMain(argv0, files);
 }
 #endif
