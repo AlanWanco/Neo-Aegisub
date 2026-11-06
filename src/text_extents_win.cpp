@@ -20,6 +20,7 @@
 #include <libaegisub/charset_conv_win.h>
 
 #include <cmath>
+#include <cwchar>
 #include <string>
 
 namespace agi::text {
@@ -45,7 +46,7 @@ bool MeasureExtents(std::string const& face, double fontsize, bool bold,
 	lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
 	lf.lfQuality = ANTIALIASED_QUALITY;
 	lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
-	wcsncpy(lf.lfFaceName, agi::charset::ConvertW(face).c_str(), 31);
+	wcsncpy_s(lf.lfFaceName, LF_FACESIZE, agi::charset::ConvertW(face).c_str(), _TRUNCATE);
 
 	auto font = CreateFontIndirect(&lf);
 	if (!font) {

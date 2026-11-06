@@ -19,6 +19,9 @@
 
 #include <libaegisub/charset_conv_win.h>
 
+#include <cstring>
+#include <string>
+
 namespace clipboard {
 std::string GetText() {
 	std::string result;

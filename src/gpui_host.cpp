@@ -57,6 +57,8 @@ extern char **environ;
 #elif defined(_WIN32)
 #include <process.h>
 #include <windows.h>
+// windows.h defines GetMessage as GetMessageW, which hides agi::Exception::GetMessage.
+#undef GetMessage
 #else
 #include <spawn.h>
 #include <sys/wait.h>

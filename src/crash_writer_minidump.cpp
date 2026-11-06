@@ -127,7 +127,7 @@ void Initialize(agi::fs::path const& path) {
 	localtime_s(&tm, &t);
 
 	len += wcsftime(crash_dump_path + len, MAX_PATH - len, L"-%Y-%m-%d-%H-%M-%S-", &tm);
-	len += swprintf_s(crash_dump_path + len, MAX_PATH - len, L"%d", GetCurrentProcessId());
+	len += swprintf_s(crash_dump_path + len, MAX_PATH - len, L"%lu", static_cast<unsigned long>(GetCurrentProcessId()));
 	wcscpy_s(crash_dump_path + len, MAX_PATH - len, L".dmp");
 
 	if (!dump_thread)

@@ -24,6 +24,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+// windows.h defines GetMessage as GetMessageW, which hides agi::Exception::GetMessage.
+#undef GetMessage
 #elif defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #endif
