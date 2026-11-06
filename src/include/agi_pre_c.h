@@ -40,9 +40,4 @@
 #include <sys/param.h>
 #endif
 
-#ifdef HAVE_OPENGL_GL_H
-#include <OpenGL/gl.h>
-#else
-#include <GL/gl.h>
-#endif
 

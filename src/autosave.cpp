@@ -45,7 +45,7 @@ int64_t stamp_seconds(std::string const& value) {
 std::string stamp_display(int64_t seconds) {
 	std::time_t stamp = static_cast<std::time_t>(seconds);
 	std::tm local {};
-#ifdef __WINDOWS__
+#ifdef _WIN32
 	if (localtime_s(&local, &stamp)) return {};
 #else
 	if (!localtime_r(&stamp, &local)) return {};
@@ -59,8 +59,9 @@ int64_t modification_seconds(std::filesystem::path const& file) {
 	std::error_code error;
 	auto stamp = std::filesystem::last_write_time(file, error);
 	if (error) return 0;
-	auto since_epoch = std::chrono::file_clock::to_sys(stamp).time_since_epoch();
-	return std::chrono::duration_cast<std::chrono::seconds>(since_epoch).count();
+	auto since_epoch = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+		stamp - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+	return std::chrono::duration_cast<std::chrono::seconds>(since_epoch.time_since_epoch()).count();
 }
 
 void populate(std::map<std::string, AutosaveFile>& files, std::string const& path_option,
