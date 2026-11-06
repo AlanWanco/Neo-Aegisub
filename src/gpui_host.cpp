@@ -382,3 +382,11 @@ int main(int argc, char **argv) {
 	}
 	return 1;
 }
+
+#ifdef _WIN32
+// The executable is linked with the Windows subsystem, so the CRT looks for
+// WinMain rather than main. The host itself does not create a window.
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+	return main(__argc, __argv);
+}
+#endif
