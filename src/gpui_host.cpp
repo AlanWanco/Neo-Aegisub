@@ -256,8 +256,15 @@ private:
 
 int Run(char const *argv0, std::vector<std::string> const& files) {
 	TraceStartup("Run");
-	// Logging has to exist before anything can log: every Path, Options and
-	// dispatch step reports through it.
+	// LogSink creates a serial queue, so the dispatch service has to exist
+	// before the sink. Starting the workers first is safe: they do not log
+	// until something posts a thunk.
+	agi::dispatch::Init([](agi::dispatch::Thunk thunk) {
+		gpui::EventLoop::Current().Post(std::move(thunk));
+	});
+
+	// Logging has to exist before anything can log: every Path and Options
+	// step reports through it.
 	agi::log::log = new agi::log::LogSink;
 #ifdef _DEBUG
 	agi::log::log->Subscribe(std::make_unique<agi::log::EmitSTDOUT>());
@@ -265,11 +272,6 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 
 	StartupLog("Initialise locale");
 	agi::util::InitLocale();
-
-	StartupLog("Initialise dispatch");
-	agi::dispatch::Init([](agi::dispatch::Thunk thunk) {
-		gpui::EventLoop::Current().Post(std::move(thunk));
-	});
 
 	config::path = new agi::Path;
 
