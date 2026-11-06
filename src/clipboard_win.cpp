@@ -28,7 +28,7 @@ std::string GetText() {
 	if (!OpenClipboard(nullptr)) return result;
 	if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
 		if (auto text = static_cast<wchar_t const *>(GlobalLock(data))) {
-			result = agi::charset::ConvertU(text);
+			result = agi::charset::ConvertW(std::wstring_view(text));
 			GlobalUnlock(data);
 		}
 	}

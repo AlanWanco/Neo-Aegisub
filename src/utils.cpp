@@ -37,7 +37,7 @@
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
 
-#ifdef __UNIX__
+#ifndef _WIN32
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
