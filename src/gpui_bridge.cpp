@@ -16,6 +16,8 @@
 #include "gpui_translation.h"
 #include "gpui_timing.h"
 #include "gpui_search.h"
+#include "gpui_trace.h"
+
 #include "gpui_video.h"
 #include "gpui_visual.h"
 #include "gpui_preferences.h"
@@ -275,6 +277,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 	void OnDisconnect(int) override { DetachClient(); }
 
 	void OnRequest(int client, std::string const& request) override {
+		gpui::TraceHost("request received");
 		try {
 			Handle(request, client);
 		}
@@ -290,14 +293,18 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 	}
 
 	void Reply(int client, std::string response) {
+		gpui::TraceHost("reply text");
 		server.Send(client, std::move(response));
+		gpui::TraceHost("reply text sent");
 	}
 
 	/// Raw replies send `head`, a newline, then `body` bytes verbatim. The body is
 	/// moved out of the reply: never copied, escaped, or parsed as JSON.
 	void Reply(int client, gpui::RawReply reply) {
+		gpui::TraceHost("reply raw");
 		server.Send(client, std::move(reply.head),
 		            std::string_view(reinterpret_cast<char const *>(reply.body.data()), reply.body.size()));
+		gpui::TraceHost("reply raw sent");
 	}
 
 	void Stop() {
@@ -325,13 +332,16 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 			return;
 		}
 		std::string const& op = op_it->second;
+		gpui::TraceHost("op=" + op);
 
 		// Automation scripts ask for trust through the front end, so they are
 		// created on the first request: by then a client is connected and the
 		// prompt has a window to land in.
+		gpui::TraceHost("ensure global scripts");
 		if (!config::global_scripts)
 			config::global_scripts = new Automation4::AutoloadScriptManager(
 				OPT_GET("Path/Automation/Autoload")->GetString());
+		gpui::TraceHost("global scripts ready");
 
 		if (op == "spelling") { Reply(client, spelling.Request(object)); return; }
 		if (op == "file_tools") { Reply(client, gpui::FileTools(object)); return; }

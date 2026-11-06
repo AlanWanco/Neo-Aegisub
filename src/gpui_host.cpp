@@ -391,6 +391,11 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 	config::path = nullptr;
 	return 0;
 }
+
+}
+
+namespace gpui {
+void TraceHost(std::string_view message) { TraceStartup(message); }
 }
 
 int HostMain(std::string const& argv0, std::vector<std::string> const& files) {
