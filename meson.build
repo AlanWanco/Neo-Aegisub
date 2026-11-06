@@ -274,6 +274,7 @@ endif
 
 if host_machine.system() == 'windows'
     deps += cc.find_library('advapi32', required: true)
+    deps += cc.find_library('shell32', required: true)
     deps += cc.find_library('dwmapi', required: true)
 endif
 

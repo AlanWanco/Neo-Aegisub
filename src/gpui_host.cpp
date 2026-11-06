@@ -31,6 +31,9 @@
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/exception.h>
+#if defined(_WIN32)
+#include <libaegisub/charset_conv_win.h>
+#endif
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/mru.h>
@@ -56,6 +59,7 @@
 extern char **environ;
 #elif defined(_WIN32)
 #include <process.h>
+#include <shellapi.h>
 #include <windows.h>
 // windows.h defines GetMessage as GetMessageW, which hides agi::Exception::GetMessage.
 #undef GetMessage
@@ -363,13 +367,9 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 }
 }
 
-int main(int argc, char **argv) {
-	std::vector<std::string> files;
-	for (int i = 1; i < argc; ++i)
-		files.emplace_back(argv[i]);
-
+int HostMain(std::string const& argv0, std::vector<std::string> const& files) {
 	try {
-		return Run(argv[0], files);
+		return Run(argv0.c_str(), files);
 	}
 	catch (agi::Exception const& err) {
 		std::fprintf(stderr, "gpui-host: %s\n", err.GetMessage().c_str());
@@ -383,10 +383,29 @@ int main(int argc, char **argv) {
 	return 1;
 }
 
+int main(int argc, char **argv) {
+	std::vector<std::string> files;
+	for (int i = 1; i < argc; ++i)
+		files.emplace_back(argv[i]);
+	return HostMain(argc > 0 ? argv[0] : "", files);
+}
+
 #ifdef _WIN32
 // The executable is linked with the Windows subsystem, so the CRT looks for
-// WinMain rather than main. The host itself does not create a window.
+// WinMain rather than main. Parse the command line ourselves because the
+// __argc/__argv globals are not populated for a WinMain entry point.
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
-	return main(__argc, __argv);
+	int argc = 0;
+	LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+	std::string argv0;
+	std::vector<std::string> files;
+	if (argv) {
+		if (argc > 0)
+			argv0 = agi::charset::ConvertW(std::wstring_view(argv[0]));
+		for (int i = 1; i < argc; ++i)
+			files.emplace_back(agi::charset::ConvertW(std::wstring_view(argv[i])));
+		LocalFree(argv);
+	}
+	return HostMain(argv0, files);
 }
 #endif
