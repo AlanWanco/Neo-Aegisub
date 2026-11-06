@@ -334,8 +334,8 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 	}
 
 	StartupLog("Start bridge");
-	GpuiBridge bridge(context.get());
-	if (!bridge.Start()) {
+	auto bridge = std::make_unique<GpuiBridge>(context.get());
+	if (!bridge->Start()) {
 		std::fprintf(stderr, "gpui-host: could not start the bridge\n");
 		return 1;
 	}
@@ -346,8 +346,8 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 		return 1;
 	}
 
-	auto const endpoint = bridge.Endpoint();
-	auto const token = bridge.Token();
+	auto const endpoint = bridge->Endpoint();
+	auto const token = bridge->Token();
 	ChildProcess child;
 	if (!child.Spawn(frontend, {"--bridge", endpoint, "--token", token})) {
 		std::fprintf(stderr, "gpui-host: could not launch %s\n", frontend.string().c_str());
@@ -355,7 +355,7 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 	}
 
 	auto& loop = gpui::EventLoop::Current();
-	loop.Attach(&bridge.Server());
+	loop.Attach(&bridge->Server());
 
 	gpui::Timer watch_frontend;
 	watch_frontend.on_tick = [&] {
@@ -369,7 +369,10 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 	StartupLog("Loop finished");
 	watch_frontend.Stop();
 	child.Kill();
-	bridge.Stop();
+	bridge->Stop();
+	loop.Attach(nullptr);
+	bridge.reset();
+	TraceStartup("Bridge destroyed");
 
 	// The context owns the document, the controllers and the bridge's client
 	// state, so it has to go before the configuration it reads from.
