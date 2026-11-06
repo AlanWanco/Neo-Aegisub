@@ -8,8 +8,8 @@
 - [x] 宿主彻底移除 wxWidgets：源码不再包含 wx 头文件，Meson 不再查找或链接 wx，`otool -L build-ui-gpui/aegisub` 无 wx 库。
 - [x] macOS arm64 / Rust 1.95 增量构建和桌面联调。
 - [x] macOS 正常关闭 GPUI 前端后宿主及子进程均退出；可再次启动。
-- [ ] Windows、Linux 构建及桌面验证。
-- [ ] Windows 栈溢出需要匹配版本的桌面复测；历史 Windows CI 构建通过不代表运行故障已修复。
+- [x] Windows、Linux 构建通过；Windows MSVC/ARM64 CI 与 GPUI 桌面冒烟通过，Linux 桌面交互仍未验证。
+- [x] Windows 启动崩溃（`0xC0000005` / `0xC0000409`）已按 `STARTUPINFOW` 与宿主生命周期修复，Windows MSVC 桌面断言复测通过。
 
 ## 命令、字幕与文档
 
@@ -229,7 +229,7 @@ macOS 个人词典属于系统状态，隔离 profile 不能隔离学习词。�
 
 macOS 用用户提供的实际 MP4 对比同一时间片，波形和频谱输出在通道顺序归一后与旧 PNG 解码像素逐字节一致。320×100、两秒切片各采样十二次，频谱完整请求耗时中位数由 6.98 ms 降到 2.08 ms，波形由 1.76 ms 到 1.74 ms；这是本机切片请求时间，不代表跨平台主观延迟。真实 GPUI 窗口经临时事件驱动验证十二次滚轮缩放、三十次标尺拖动、波形切换到频谱、单击与右键拖动收尾；缓存达到 48 块后请求仍归零，无生成失败状态。另验证 4 MiB 像素块分段读取与传输中断后宿主继续响应。临时驱动和入口已移除；截图捕获不可用，尚无截图目视验收，Windows 交互流畅度仍待实际运行验证。
 
-2026-11-05 原生视频画布改为 Windows 跨进程内嵌：GPUI 在布局后发送父 HWND 与物理像素区域，宿主将无边框 OpenGL 子窗口挂载到该区域；倍率仅调整画布内容，不再调整父窗口大小。主工作区恢复受限宽度的视频预览与字幕编辑器并排布局，音频和字幕列表保留可用高度。切页、宿主对话框及视频倍率菜单覆盖时隐藏子窗口；父窗口失效后清理原生句柄并恢复视频显示上下文。macOS/Linux 尚无跨进程内嵌实现，明确拒绝挂载请求，不自动弹出独立视频窗。
+2026-11-05 原生视频画布改为 Windows 跨进程内嵌（已撤回；当前代码不存在 `SetParent`/父 HWND 挂载路径，视频统一走 GPUI 纹理）：GPUI 在布局后发送父 HWND 与物理像素区域，宿主将无边框 OpenGL 子窗口挂载到该区域；倍率仅调整画布内容，不再调整父窗口大小。主工作区恢复受限宽度的视频预览与字幕编辑器并排布局，音频和字幕列表保留可用高度。切页、宿主对话框及视频倍率菜单覆盖时隐藏子窗口；父窗口失效后清理原生句柄并恢复视频显示上下文。macOS/Linux 尚无跨进程内嵌实现，明确拒绝挂载请求，不自动弹出独立视频窗。
 
 验证：macOS release 构建、Rust 12 项测试及 Meson 两组测试通过；Windows GNU debug 交叉编译检查通过。Windows release 交叉检查受依赖 `gpui-pre-windows` 在 macOS 不生成 `shaders_bytes.rs` 阻塞。实际宿主加载视频并从第 300 帧播放到第 329 帧，播放状态为真；不支持平台的挂载请求返回明确错误，原生窗口保持隐藏。Windows 的实际画面、菜单遮挡、焦点、DPI 和父窗口关闭行为仍未验证。
 
@@ -249,3 +249,5 @@ macOS 用用户提供的实际 MP4 对比同一时间片，波形和频谱输出
 
 
 2026-11-05 去 wxWidgets 基础层：上一批之后继续清空所有非界面 wx 依赖。文本尺寸估算改为 CoreText／GDI／fontconfig+FreeType，字体家族枚举改为 CoreText／GDI／fontconfig，剪贴板改为 NSPasteboard／CF_UNICODETEXT／`wl-copy`+`xclip`，PNG 编码改用 zlib 自有实现；本地化改为直接解析 `.mo`，热键、TTXT XML、配置文件默认值、崩溃回溯、音频播放器线程、DirectSound/OSS 线程和 macOS 崩溃报告也全部去 wx。`src/audio_player_portaudio.{h,cpp}` 的输出设备列表由 `wxArrayString` 改为 `std::vector<std::string>`。Meson 删除 wx 依赖、PCH 中的 wx 头文件与 `wx_version` 选项；`otool -L build-ui-gpui/aegisub` 已无 wx 库，`src/` 中不再有 wx 头文件引用。验证：宿主与前端 release 构建通过；桥接实测 `video_frame` 的 `display` 返回 1920×1080 BGRA8，`raw`/`subs` 返回同尺寸 PNG（PNG 魔数正确），前端帧复制、坐标复制和缩放/复位命令已接入；命令 `subtitle/close` 在文档干净时直接关闭，有修改时转由前端先保存。Lua 宏 `validate()` 现在允许只返回布尔值（此前命令目录生成会在可选帮助字符串缺失时抛出 `agi::lua::error_tag`，前端显示“unknown bridge error”），目录恢复为 324 条；`video/detach` 现在真正打开独立视频窗口，实测窗口数 6→7。Meson 测试通过（旧的 wx 语言匹配测试和已删除的缩帧辅助测试一并移除）。
+
+2026-11-07 Windows 启动与 CI 收口（`7655c02c0`）：Windows 宿主原先在 `CreateProcessW` 后崩溃（`-1073741819` 访问冲突、`-1073740791` fail-fast），根因是 `lpStartupInfo` 传了空指针；`src/gpui_host.cpp` 现在传入 `STARTUPINFOW startup{}; startup.cb = sizeof startup;`，并保存 `info.hProcess`、关闭 `info.hThread`。同一轮修复还包括：`agi::dispatch::Init` 必须先于 `new agi::log::LogSink`；`GpuiBridge` 必须在 `agi::Context` 之前销毁；命令行首项必须是 `argv[0]`，只对含空白或引号的参数加引号，保证启动脚本正则能解析 `--bridge`/`--token`。诊断代码已由 `51ceb034b` 删除。验证：CI run `42307865018` 八个任务全部成功（Ubuntu Release/ARM64/Debug、macOS arm64 Debug/Release、macOS x86_64、Windows MSVC、Windows ARM64）；Windows MSVC 的 `Exercise Windows GPUI desktop` 通过，`result.json` 中 `actual_windows_desktop`、`visible_amount_field`、`exact_form_shift_ms=1250`、`undo_restores_clean_document`、`independent_history_scroll`、`compact_stacked_cards` 全为真。ARM64 上一轮 `Configure` 失败是 `git clone` ffmpeg 的网络中断，重跑通过，非源码问题。
