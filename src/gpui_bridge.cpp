@@ -272,7 +272,10 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 
 	~Impl() { Stop(); }
 
-	void OnConnect(int) override { AttachClient(); }
+	void OnConnect(int) override {
+		gpui::TraceHost("client connected");
+		AttachClient();
+	}
 
 	void OnDisconnect(int) override { DetachClient(); }
 

@@ -366,29 +366,36 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 	StartupLog("Initialization complete");
 	loop.Run();
 
+	StartupLog("Loop finished");
 	watch_frontend.Stop();
 	child.Kill();
 	bridge.Stop();
 
 	// The context owns the document, the controllers and the bridge's client
 	// state, so it has to go before the configuration it reads from.
+	StartupLog("Reset context");
 	context.reset();
 
+	StartupLog("Clear globals");
 	delete config::global_scripts;
 	config::global_scripts = nullptr;
 	AssExportFilterChain::Clear();
 	hotkey::clear();
 	cmd::clear();
+	StartupLog("Delete configuration");
 	delete config::mru;
 	delete config::opt;
 	crash_writer::Cleanup();
 	// Keep this last: background tasks post their results through the log.
+	StartupLog("Delete log");
 	delete agi::log::log;
 	agi::log::log = nullptr;
 	config::mru = nullptr;
 	config::opt = nullptr;
+	TraceStartup("Delete path");
 	delete config::path;
 	config::path = nullptr;
+	TraceStartup("Host done");
 	return 0;
 }
 
