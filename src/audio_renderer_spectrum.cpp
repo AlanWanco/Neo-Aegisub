@@ -42,6 +42,7 @@
 #include <libaegisub/audio/provider.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 /// Allocates blocks of derived data for the audio spectrum

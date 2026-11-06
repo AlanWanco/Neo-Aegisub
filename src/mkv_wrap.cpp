@@ -55,7 +55,10 @@
 #include <boost/tokenizer.hpp>
 #include <iterator>
 
-
+#ifdef _WIN32
+// windows.h defines GetMessage as GetMessageW, which hides agi::Exception::GetMessage.
+#undef GetMessage
+#endif
 
 struct MkvStdIO final : InputStream {
 	agi::read_file_mapping file;
