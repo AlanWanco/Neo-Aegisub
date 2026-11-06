@@ -31,6 +31,12 @@
 
 #include <string>
 
+#ifdef _WIN32
+// windows.h defines GetMessage as GetMessageW; keep the member name stable even
+// when this header is included after windows.h.
+#undef GetMessage
+#endif
+
 namespace agi {
 	/// @class Exception
 	/// @brief Base class for all exceptions in Aegisub.

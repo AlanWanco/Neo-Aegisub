@@ -38,6 +38,8 @@
 
 #include <boost/algorithm/string/replace.hpp>
 
+#include <cstdarg>
+
 namespace
 {
 #pragma pack(push, 1)
