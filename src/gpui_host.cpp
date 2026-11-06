@@ -206,6 +206,9 @@ public:
 			log != INVALID_HANDLE_VALUE, 0, nullptr, nullptr, &startup, &info);
 		if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
 		if (!started) return false;
+		process = info.hProcess;
+		CloseHandle(info.hThread);
+		return true;
 #else
 		std::vector<std::string> storage;
 		storage.reserve(arguments.size() + 1);
