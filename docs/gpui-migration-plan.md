@@ -259,3 +259,7 @@ macOS 用用户提供的实际 MP4 对比同一时间片，波形和频谱输出
 2026-11-07 libmpv 跨平台运行库与播放验证：Windows x64 / ARM64 安装包和便携包接入固定 LGPL DLL 与许可证；桌面冒烟步骤已覆盖原生 renderer、预览边界与窗口缩放、鼠标输入归属、时钟推进和暂停隐藏，本轮未运行 Windows CI。macOS 改为固定源码构建并直接链接 MoltenVK，解决最小 OpenGL 构建无法初始化内嵌视频输出的问题；无脚本引擎时只允许 `load-scripts` 和 `osc` 返回 option-not-found，其他初始化错误仍上报。arm64 包内运行库实际播放 1920×1080、60 fps H.264 视频：`vo-configured=true`，时钟从 1.416667 秒推进到 5.683333 秒，两个采样点的渲染丢帧与解码丢帧计数均为 0；这只是本机短时测量，不代表所有媒体和平台的显示帧率。实际画面含 ASS 字幕；暂停后 700 ms，编辑预览与时间轴均到第 478 帧。证据位于忽略目录 `build-ui-gpui/mpv-spike/source-vulkan-*.png`。两种架构运行库构建与最低系统版本检查通过；整包 macOS 13 运行及 Windows 新版桌面验收仍待相应环境验证。
 
 2026-11-08 跨平台 CI 首轮（`ff3099b4e`，run `42390176961`）：Ubuntu 三项、macOS arm64 Debug/Release 通过；Windows x64 / ARM64 编译通过，安装包生成因 runner 的 Windows PowerShell 无法调用 `Get-FileHash` 而失败，尚未执行桌面冒烟。`tools/win-installer-setup.ps1` 改用 .NET 流式 SHA-256，保留所有归档、DLL 和许可证固定摘要比对；本机关闭 PowerShell 模块自动加载后，两种架构的真实归档、DLL 与许可证全部匹配固定值，Windows CI 复验待执行。macOS x86_64 下载 FFmpeg 源码时连接被重置，需要重跑该失败项。
+
+2026-11-08 跨平台 CI 复验（`d9d8f383d`，run `42393594702`）：八项构建全部通过；Windows x64 / ARM64 安装包、便携包及包内容检查通过，Windows x64 的 `Exercise Windows GPUI desktop` 通过，覆盖原生 renderer、输入归属、时钟推进与暂停隐藏。本地下载 10132 两种架构便携包，复验双程序、libmpv、许可证、VC 运行库及 ZIP 内容一致性通过。桌面证据仍有 YCbCr 矩阵不匹配提示框，截图不作为无遮挡预览的视觉验收结论。
+
+2026-11-08 停止维护 macOS Intel：移除 x86_64 CI／发布任务、Rosetta 安装和测试步骤，以及专用交叉编译机器文件和 sccache 层；macOS 仅保留 Apple Silicon Debug／Release，Release 原有源码依赖参数与最低系统版本保持不变。`actionlint` 通过，解析后的构建矩阵为七项，已无 Intel macOS 任务；未为本次配置删减另触发 CI。

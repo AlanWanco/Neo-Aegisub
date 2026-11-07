@@ -99,14 +99,24 @@ jobs:
             package_arch: linux-aarch64
             buildtype: release
             args: -Db_pch=false
-          - name: macOS x86_64 Release
+          - name: macOS arm64 Debug
             os: macos-15
-            sccache-key: macos-x86_64-clang
-            cross_args: --cross-file tools/macos-release.ini --cross-file tools/macos-x86_64.ini --cross-file tools/sccache.ini
-            rust_target: x86_64-apple-darwin
+            sccache-key: macos-arm64-clang
+            buildtype: debugoptimized
+            args: >-
+              -Db_pch=false
+              -Dmacos_deployment_target=15.0
+              -Dbuild_osx_bundle=false
+              -Dfftw3=enabled
+              -Dlibpulse=disabled
+              -Dopenal=enabled
+          - name: macOS arm64 Release
+            os: macos-15
+            sccache-key: macos-arm64-clang
+            native_args: --native-file tools/macos-release.ini
             buildtype: release
             # sccache serves clang PCHs that fail mtime validation on a fresh checkout
-            args: &macos_source_args >-
+            args: >-
               -Db_pch=false
               -Ddefault_library=static
               -Dbuild_osx_bundle=true
@@ -134,23 +144,6 @@ jobs:
               -Ddav1d:enable_tools=false
               -Dzlib:tests=disabled
               --force-fallback-for=boost,libass,zlib,freetype2,fribidi,harfbuzz,ffms2,libavformat,libavcodec,libswscale,libavutil,libswresample,dav1d,hunspell,uchardet,icu-uc,icu-i18n,libcurl
-          - name: macOS arm64 Debug
-            os: macos-15
-            sccache-key: macos-arm64-clang
-            buildtype: debugoptimized
-            args: >-
-              -Db_pch=false
-              -Dmacos_deployment_target=15.0
-              -Dbuild_osx_bundle=false
-              -Dfftw3=enabled
-              -Dlibpulse=disabled
-              -Dopenal=enabled
-          - name: macOS arm64 Release
-            os: macos-15
-            sccache-key: macos-arm64-clang
-            native_args: --native-file tools/macos-release.ini
-            buildtype: release
-            args: *macos_source_args
 
     steps:
       - uses: actions/checkout@v7
@@ -205,29 +198,12 @@ jobs:
         run: |
           brew install cmake ninja nasm
 
-      - name: Check Rosetta (macOS cross builds)
-        if: matrix.config.cross_args
-        run: |
-          if ! /usr/bin/arch -x86_64 /usr/bin/true; then
-            sudo softwareupdate --install-rosetta --agree-to-license
-          fi
-          /usr/bin/arch -x86_64 /usr/bin/true
-
       - name: Install test dependencies (macOS)
         if: startsWith(matrix.config.os, 'macos-')
-        env:
-          CROSS_ARGS: ${{ matrix.config.cross_args }}
         run: |
           # LuaJIT is Lua 5.1 to luarocks.
           brew install luajit luarocks
-          if test -n "${CROSS_ARGS}"; then
-            # Busted's native modules are loaded by the Intel test executable.
-            luarocks --lua-dir="$(brew --prefix luajit)" --lua-version=5.1 install busted \
-              CC='/usr/bin/clang -arch x86_64' \
-              LD='/usr/bin/clang -arch x86_64'
-          else
-            luarocks --lua-dir="$(brew --prefix luajit)" --lua-version=5.1 install busted
-          fi
+          luarocks --lua-dir="$(brew --prefix luajit)" --lua-version=5.1 install busted
 
       - name: Install dependencies (Linux)
         if: startsWith(matrix.config.os, 'ubuntu-')
@@ -246,16 +222,11 @@ jobs:
 
       - name: Select GPUI executable
         shell: bash
-        env:
-          RUST_TARGET: ${{ matrix.config.rust_target }}
         run: |
           python - <<'PYTHON'
           import os
           from pathlib import Path
-          target = os.environ.get('RUST_TARGET', '')
           root = Path.cwd() / 'gpui-prototype' / 'target'
-          if target:
-              root /= target
           binary = root / 'release' / ('aegisub-gpui-prototype.exe' if os.name == 'nt' else 'aegisub-gpui-prototype')
           with open(os.environ['GITHUB_ENV'], 'a') as file:
               file.write(f'AEGISUB_GPUI_EXECUTABLE={binary.as_posix()}\n')
@@ -264,24 +235,17 @@ jobs:
       - name: Configure
         run: |
           ${{ matrix.config.devenv }}
-          meson setup build ${{ matrix.config.native_args }} ${{ matrix.config.cross_args }} ${{ matrix.config.args }} -Dbuildtype=${{ matrix.config.buildtype }} -Dgpui_default=true -Dgpui_frontend="${{ env.AEGISUB_GPUI_EXECUTABLE }}" ${{ github.ref_type == 'tag' && '-Dofficial_release=true' || '' }}
+          meson setup build ${{ matrix.config.native_args }} ${{ matrix.config.args }} -Dbuildtype=${{ matrix.config.buildtype }} -Dgpui_default=true -Dgpui_frontend="${{ env.AEGISUB_GPUI_EXECUTABLE }}" ${{ github.ref_type == 'tag' && '-Dofficial_release=true' || '' }}
 
       # The GPUI front-end is a separate binary launched by the headless C++ host
       # through the local bridge, so every artifact must contain both.
       - name: Build GPUI front-end (Rust)
         shell: bash
-        env:
-          RUST_TARGET: ${{ matrix.config.rust_target }}
         run: |
           set -euo pipefail
           cd gpui-prototype
-          args=(--release --locked)
-          if [ -n "${RUST_TARGET}" ]; then
-            rustup target add "${RUST_TARGET}"
-            args+=(--target "${RUST_TARGET}")
-          fi
-          cargo build "${args[@]}"
-          cargo test "${args[@]}"
+          cargo build --release --locked
+          cargo test --release --locked
           python - <<'PYTHON'
           import os, shutil
           from pathlib import Path
@@ -304,15 +268,6 @@ jobs:
           ${{ matrix.config.devenv }}
           meson compile -C build
 
-      - name: Verify Intel cross-build architecture
-        if: matrix.config.cross_args
-        run: |
-          test "$(lipo -archs build/aegisub)" = x86_64
-          test "$(lipo -archs build/aegisub-gpui-prototype)" = x86_64
-          test "$(lipo -archs build/tests/gtest-main)" = x86_64
-          test "$(lipo -archs build/tests/luajit-52)" = x86_64
-          test "$(lipo -archs build/automation/tests/aegisub-lua)" = x86_64
-
       # The automation suite is registered at configure time only if the
       # busted probe succeeds, so make sure it can't silently drop out of CI
       - name: Check automation tests are registered
@@ -324,18 +279,6 @@ jobs:
         run: |
           ${{ matrix.config.devenv }}
           meson test -C build --verbose --suite Aegisub
-
-      - name: Check cross-built tests executed
-        if: matrix.config.cross_args
-        run: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          results = [json.loads(line) for line in Path('build/meson-logs/testlog.json').read_text().splitlines()]
-          if not results or any(result['result'] != 'OK' for result in results):
-              raise SystemExit('Cross-built tests must pass under Rosetta, not be skipped')
-          PY
 
       # Windows artifacts
       - name: Generate Windows installer
@@ -415,11 +358,9 @@ jobs:
       # macOS artifacts
       - name: Build bundled libmpv (macOS)
         if: startsWith(matrix.config.os, 'macos-') && matrix.config.buildtype == 'release'
-        env:
-          LIBMPV_ARCH: ${{ matrix.config.rust_target && 'x86_64' || 'arm64' }}
         run: |
           target=$(meson introspect --buildoptions build | python3 -c 'import json, sys; print(next(o["value"] for o in json.load(sys.stdin) if o["name"] == "macos_deployment_target"))')
-          library=$(python3 tools/macos-build-libmpv.py --work-dir "${RUNNER_TEMP}/aegisub-libmpv" --arch "${LIBMPV_ARCH}" --deployment-target "${target}")
+          library=$(python3 tools/macos-build-libmpv.py --work-dir "${RUNNER_TEMP}/aegisub-libmpv" --arch arm64 --deployment-target "${target}")
           echo "AEGISUB_LIBMPV_LIBRARY=${library}" >> "${GITHUB_ENV}"
 
       - name: Generate macOS installer
@@ -430,7 +371,7 @@ jobs:
           AEGISUB_BUNDLE_SIGNATURE: '-'
         run: |
           meson compile osx-bundle -C build
-          python tools/verify-gpui-package.py "build/Neo Aegisub.app" --arch "${{ matrix.config.rust_target && 'x86_64' || 'arm64' }}"
+          python tools/verify-gpui-package.py "build/Neo Aegisub.app" --arch arm64
 
           # Run osx-build-dmg but retry up to 10 times if it fails since hdiutil can be unreliable
           # See: https://github.com/actions/runner-images/issues/7522
