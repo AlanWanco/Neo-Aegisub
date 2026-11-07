@@ -105,6 +105,21 @@ $LibmpvPins = @{
     arm64 = @{ Url = 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-11-07-55d3feb45c/mpv-dev-lgpl-aarch64-20261107-git-55d3feb45c.7z'; Name = 'mpv-dev-lgpl-aarch64-20261107-git-55d3feb45c.7z'; Sha256 = '6210785d28c4d48e44dc7de083fe69c49411e0bf30a8a65b5bd4b659aadae891'; DllSha256 = 'f7d49de86a0a019ccd8c6a5baf16734ec5158760e9dc618ea10533441266858b'; Machine = 0xAA64 }
 }
 
+function Get-Sha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        try {
+            [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $hasher.Dispose()
+    }
+}
+
 function Get-PeMachine {
     param([Parameter(Mandatory = $true)][string]$Path)
     $data = [IO.File]::ReadAllBytes($Path)
@@ -124,8 +139,8 @@ $libmpvReady = (Test-Path -LiteralPath $LibmpvDll -PathType Leaf) -and
     (Test-Path -LiteralPath $LicenseFile -PathType Leaf) -and
     (Test-Path -LiteralPath (Join-Path $LibmpvDir "PROVENANCE.txt") -PathType Leaf)
 if ($libmpvReady) {
-    $libmpvReady = (Get-FileHash -LiteralPath $LibmpvDll -Algorithm SHA256).Hash.ToLowerInvariant() -eq $LibmpvPin.DllSha256 -and
-        (Get-FileHash -LiteralPath $LicenseFile -Algorithm SHA256).Hash.ToLowerInvariant() -eq $LicenseSha
+    $libmpvReady = (Get-Sha256 $LibmpvDll) -eq $LibmpvPin.DllSha256 -and
+        (Get-Sha256 $LicenseFile) -eq $LicenseSha
 }
 if (!$libmpvReady) {
     New-Item -ItemType Directory -Path $LibmpvDir -Force | Out-Null
@@ -133,7 +148,7 @@ if (!$libmpvReady) {
     $LibmpvStage = Join-Path $LibmpvDir "stage"
     try {
         Invoke-WebRequest $LibmpvPin.Url -OutFile $LibmpvArchive -UseBasicParsing
-        $archiveSha = (Get-FileHash -LiteralPath $LibmpvArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+        $archiveSha = Get-Sha256 $LibmpvArchive
         if ($archiveSha -ne $LibmpvPin.Sha256) {
             throw "libmpv archive SHA256 is $archiveSha, expected $($LibmpvPin.Sha256)"
         }
@@ -149,7 +164,7 @@ if (!$libmpvReady) {
         if ($libmpvMachine -ne $LibmpvPin.Machine) {
             throw "libmpv-2.dll machine type 0x$('{0:X4}' -f $libmpvMachine) does not match $Architecture (0x$('{0:X4}' -f $LibmpvPin.Machine))"
         }
-        $dllSha = (Get-FileHash -LiteralPath $libmpvFound.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $dllSha = Get-Sha256 $libmpvFound.FullName
         if ($dllSha -ne $LibmpvPin.DllSha256) {
             throw "libmpv-2.dll SHA256 is $dllSha, expected $($LibmpvPin.DllSha256)"
         }
@@ -163,7 +178,7 @@ if (!$libmpvReady) {
         )
         # The archive ships no license text, so take mpv's LGPL-2.1 text, pinned by SHA256.
         Invoke-WebRequest 'https://raw.githubusercontent.com/mpv-player/mpv/master/LICENSE.LGPL' -OutFile $LicenseFile -UseBasicParsing
-        $licenseActual = (Get-FileHash -LiteralPath $LicenseFile -Algorithm SHA256).Hash.ToLowerInvariant()
+        $licenseActual = Get-Sha256 $LicenseFile
         if ($licenseActual -ne $LicenseSha) {
             throw "LICENSE.LGPL SHA256 is $licenseActual, expected $LicenseSha"
         }
