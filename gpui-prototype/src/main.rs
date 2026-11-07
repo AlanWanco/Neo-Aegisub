@@ -37,7 +37,11 @@ use timing_panel::{ShiftState, TimingPanel};
 use timing_processor_panel::{ProcessorState, TimingProcessorPanel};
 mod translation_panel;
 use styling_panel::StylingPanel;
+#[cfg(target_os = "macos")]
+mod mpv_surface;
 mod video_settings_panel;
+#[cfg(target_os = "macos")]
+use mpv_surface::MpvSurface;
 mod video_timeline;
 use translation_panel::{TranslationPanel, TranslationState};
 use video_settings_panel::{VideoPage, VideoSettings, VideoSettingsPanel};
@@ -587,6 +591,8 @@ struct Snapshot {
     details_revision: u64,
     #[serde(default)]
     video: bool,
+    #[serde(default)]
+    video_path: String,
     #[serde(default)]
     timecodes: bool,
     #[serde(default)]
@@ -1152,6 +1158,22 @@ impl Bridge {
         let value = self.call(json!({"op": "playback"})).await?;
         serde_json::from_value(value).context("invalid playback snapshot")
     }
+
+    /// Writes the current subtitles to a host-owned temporary ASS file for mpv.
+    /// Returns its path and the document revision it holds.
+    async fn native_subtitles(&self) -> Result<(String, u64)> {
+        let value = self.call(json!({"op": "native_subtitles"})).await?;
+        let path = value
+            .get("path")
+            .and_then(Value::as_str)
+            .context("bridge reply has no subtitle path")?
+            .to_owned();
+        let revision = value
+            .get("revision")
+            .and_then(Value::as_u64)
+            .context("bridge reply has no subtitle revision")?;
+        Ok((path, revision))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -1337,6 +1359,16 @@ struct Workspace {
     /// The picture lives in its own window; the embedded card is hidden until
     /// that window closes again.
     video_popped: bool,
+    /// Experimental libmpv native surface, only on macOS for now.
+    native_video: bool,
+    #[cfg(target_os = "macos")]
+    mpv_surface: Option<MpvSurface>,
+    /// Whether mpv draws the picture now: playing, fitted, with no visual or overscan overlay.
+    #[cfg(target_os = "macos")]
+    native_visible: bool,
+    /// A subtitle file request to the host is in flight.
+    #[cfg(target_os = "macos")]
+    native_subs_inflight: bool,
     properties_line_id: i64,
     _property_events: Vec<Subscription>,
     _command_search_events: Subscription,
@@ -1554,6 +1586,7 @@ impl Workspace {
                 revision: 0,
                 details_revision: 0,
                 video: false,
+                video_path: String::new(),
                 timecodes: false,
                 playing: false,
                 audio: AudioState::default(),
@@ -1627,6 +1660,13 @@ impl Workspace {
             show_audio: true,
             show_video: true,
             video_popped: false,
+            native_video: false,
+            #[cfg(target_os = "macos")]
+            mpv_surface: None,
+            #[cfg(target_os = "macos")]
+            native_visible: false,
+            #[cfg(target_os = "macos")]
+            native_subs_inflight: false,
             properties_line_id: -1,
             _property_events: property_events,
             _command_search_events: command_search_events,
@@ -4689,6 +4729,110 @@ impl Workspace {
     fn video_reset_view(&mut self, cx: &mut Context<Self>) {
         self.video_fit_window(cx);
     }
+    #[cfg(target_os = "macos")]
+    fn sync_native_video(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let was_visible = self.native_visible;
+        self.update_native_video(window, cx);
+        // The host paints the picture again once mpv stops drawing it.
+        if was_visible && !self.native_visible {
+            self.refresh_video_frame(cx);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn update_native_video(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if !self.native_video
+            || !self.snapshot.video
+            || self.snapshot.video_path.is_empty()
+            || self.video_popped
+        {
+            self.mpv_surface = None;
+            self.native_visible = false;
+            return;
+        }
+        let bounds = *self.video_view.bounds.borrow();
+        if f32::from(bounds.size.width) <= 0. || f32::from(bounds.size.height) <= 0. {
+            return;
+        }
+        let path = self.snapshot.video_path.clone();
+        let needs_surface = self
+            .mpv_surface
+            .as_ref()
+            .map_or(true, |surface| surface.path() != path);
+        if needs_surface {
+            self.mpv_surface = None;
+            match MpvSurface::new(window, &path) {
+                Ok(surface) => self.mpv_surface = Some(surface),
+                Err(error) => {
+                    self.native_visible = false;
+                    let status = format!("原生视频不可用：{error}");
+                    if self.status != status {
+                        self.status = status;
+                    }
+                    return;
+                }
+            }
+        }
+        // mpv draws only while the picture is fitted and no overlay sits on it.
+        let fit = self.video_view.zoom == 1. && self.video_view.pan == (0., 0.);
+        let overlay = self.active_panel == Panel::Visual
+            || self.snapshot.video_overscan
+            || self.host_dialog.is_some()
+            || self.color_dialog.is_some();
+        let shown = self.show_video && self.detached.is_none_or(|panel| panel == Panel::Video);
+        self.native_visible = self.snapshot.playing && fit && !overlay && shown;
+        let frame_secs = self
+            .snapshot
+            .fps
+            .filter(|fps| *fps > 0.)
+            .map_or(0., |fps| 1. / fps);
+        let Some(surface) = self.mpv_surface.as_mut() else {
+            return;
+        };
+        surface.place(bounds, self.native_visible);
+        surface.sync(
+            self.native_visible,
+            self.snapshot.video_time,
+            self.snapshot.playback_rate,
+            frame_secs,
+        );
+        let stale = self.native_visible
+            && !self.native_subs_inflight
+            && surface.subtitle_revision() != Some(self.snapshot.revision);
+        if stale {
+            self.request_native_subtitles(cx);
+        }
+    }
+
+    /// Asks the host for the current subtitles as a temporary ASS file and loads
+    /// them into mpv. One request is in flight at a time.
+    #[cfg(target_os = "macos")]
+    fn request_native_subtitles(&mut self, cx: &mut Context<Self>) {
+        self.native_subs_inflight = true;
+        let bridge = self.bridge.clone();
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+            let result = bridge.native_subtitles().await;
+            let _ = weak.update(cx, |view, cx| {
+                view.native_subs_inflight = false;
+                match result {
+                    Ok((path, revision)) => {
+                        if let Some(surface) = view.mpv_surface.as_mut() {
+                            if let Err(error) = surface.load_subtitles(&path, revision) {
+                                view.status = format!("原生字幕不可用：{error}");
+                            }
+                        }
+                    }
+                    Err(error) => view.status = format!("读取字幕失败：{error:#}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn sync_native_video(&mut self, _window: &Window, _cx: &mut Context<Self>) {}
 
     /// Reads the newest frame from the host, starting a fresh retry budget.
     fn refresh_video_frame(&mut self, cx: &mut Context<Self>) {
@@ -4698,6 +4842,10 @@ impl Workspace {
 
     /// One `video_frame` request at a time. With no video the picture is dropped.
     fn fetch_video_frame(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        if self.native_visible {
+            return;
+        }
         if !self.snapshot.video {
             if self.video_view.image.is_some() {
                 self.reset_video_view(cx);
@@ -7651,6 +7799,19 @@ impl Workspace {
             .gap_1()
             .items_center()
             .flex_shrink_0()
+            .when(cfg!(target_os = "macos"), |controls| {
+                controls.child(
+                    Button::new("video-native-mpv")
+                        .small()
+                        .label("libmpv")
+                        .selected(self.native_video)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.native_video = !view.native_video;
+                            view.refresh_video_frame(cx);
+                            cx.notify();
+                        })),
+                )
+            })
             .child(
                 Button::new("video-content-out")
                     .rounded(gpui_kit::px(999.))
@@ -9215,6 +9376,7 @@ async fn invoke_weak(
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_area = self.focus_area(window, cx);
+        self.sync_native_video(window, cx);
         // A track whose measured size changed is requested again at its new
         // raster size. The bounds read here were measured by the previous paint.
         let track = *self.audio.bounds.borrow();

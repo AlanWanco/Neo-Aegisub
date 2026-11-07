@@ -107,6 +107,8 @@ dependencies = [
  "futures-lite",
  "gpui-kit",
  "image",
+ "libloading",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",

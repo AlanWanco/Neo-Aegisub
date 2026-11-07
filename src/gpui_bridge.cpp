@@ -63,6 +63,7 @@
 #include <sstream>
 #include <string_view>
 #include <vector>
+#include <libaegisub/path.h>
 
 namespace {
 
@@ -260,6 +261,8 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 	agi::signal::Connection commit_connection;
 	AsyncVideoProvider *observed_provider = nullptr;
 	std::string token = make_token();
+	/// ASS file last written for mpv's subtitle track; removed when replaced or on Stop.
+	std::string native_subtitle_file;
 
 	explicit Impl(agi::Context *context) : context(context), video_frames(context), audio(context), visual(context), spelling(context) {
 		commit_connection = context->ass->AddCommitListener([this](int type, const AssDialogue *) {
@@ -303,11 +306,34 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		            std::string_view(reinterpret_cast<char const *>(reply.body.data()), reply.body.size()));
 	}
 
+	/// Writes the current script to a temporary ASS file for mpv's subtitle track
+	/// and returns its path with the document revision it holds. The previous file
+	/// is removed first, so at most one exists.
+	std::string NativeSubtitles() {
+		RemoveNativeSubtitles();
+		auto file = config::path->Decode("?temp/native-subtitles-" + std::to_string(reinterpret_cast<std::uintptr_t>(this)) + ".ass");
+		const SubtitleFormat *writer = SubtitleFormat::GetWriter(file);
+		if (!writer)
+			throw agi::InvalidInputException("Unknown file type.");
+		uint64_t const written = revision;
+		writer->ExportFile(context->ass.get(), file, context->project->Timecodes(), "UTF-8");
+		native_subtitle_file = file.string();
+		return "{\"ok\":true,\"path\":" + quote_json(native_subtitle_file) + ",\"revision\":" + std::to_string(written) + "}";
+	}
+
+	/// Deletes the temporary subtitle file. mpv has already read it on sub-add.
+	void RemoveNativeSubtitles() {
+		if (native_subtitle_file.empty()) return;
+		std::remove(native_subtitle_file.c_str());
+		native_subtitle_file.clear();
+	}
+
 	void Stop() {
 		video_frames.Close();
 		server.Close();
 		observed_provider = nullptr;
 		++video_epoch;
+		RemoveNativeSubtitles();
 		port = 0;
 	}
 
@@ -354,6 +380,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		if (op == "video_settings") { Reply(client, gpui::VideoSettings(context, object)); return; }
 		if (op == "video_frame") { Reply(client, video_frames.Frame(object)); return; }
 		if (op == "visual") { Reply(client, visual.Interact(object)); return; }
+		if (op == "native_subtitles") { Reply(client, NativeSubtitles()); return; }
 		if (op == "audio_render") { Reply(client, audio.Render(object)); return; }
 		if (op == "audio_action") { Reply(client, audio.Interact(object)); return; }
 		if (op == "automation_manager") { Reply(client, gpui::AutomationManager(context, object)); return; }
@@ -492,6 +519,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		    << ",\"can_save\":" << (context->subsController->CanSave() ? "true" : "false")
 		    << ",\"revision\":" << revision << ",\"details_revision\":" << details_revision
 		    << ",\"video\":" << (context->project->VideoProvider() ? "true" : "false")
+		    << ",\"video_path\":" << quote_json(current_provider ? context->project->VideoName().string() : std::string())
 		    << ",\"timecodes\":" << (context->project->Timecodes().IsLoaded() ? "true" : "false")
 		    << ",\"playing\":" << (context->videoController->IsPlaying() ? "true" : "false")
 		    << ",\"frame\":" << context->videoController->GetFrameN()
