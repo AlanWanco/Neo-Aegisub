@@ -927,6 +927,8 @@ struct VideoView {
     retries: u8,
     /// Content zoom: 1 fits the whole frame in the picture area.
     zoom: f32,
+    /// Native pixel size of the current frame, used to report source-relative zoom.
+    source_size: Option<(u32, u32)>,
     /// Pan as a fraction of the picture area, so it survives resizing.
     pan: (f32, f32),
     /// Pointer position, pan, and pressed button at the start of a drag.
@@ -946,6 +948,7 @@ impl Default for VideoView {
             inflight: false,
             retries: 0,
             zoom: 1.,
+            source_size: None,
             pan: (0., 0.),
             pan_drag: None,
             pointer: None,
@@ -4216,8 +4219,7 @@ impl Workspace {
                     return;
                 }
                 Some("video/zoom/100") => {
-                    self.video_view.zoom = 1.;
-                    cx.notify();
+                    self.video_zoom_actual(cx);
                     return;
                 }
                 Some("video/reset_pan") => {
@@ -4625,24 +4627,67 @@ impl Workspace {
         self.video_view.frame = -1;
         self.video_view.retries = 0;
         self.video_view.zoom = 1.;
+        self.video_view.source_size = None;
         self.video_view.pan = (0., 0.);
         self.video_view.pan_drag = None;
     }
 
-    /// Zooms the picture by `steps` wheel notches; fully zoomed out recentres it.
+    /// Ratio between the fitted picture and the frame's native pixels.
+    fn video_fit_scale(&self) -> Option<f32> {
+        let (source_width, source_height) = self.video_view.source_size?;
+        let area = *self.video_view.bounds.borrow();
+        let width = f32::from(area.size.width);
+        let height = f32::from(area.size.height);
+        if width <= 0. || height <= 0. {
+            return None;
+        }
+        let scale = (width / source_width as f32).min(height / source_height as f32);
+        (scale > 0. && scale.is_finite()).then_some(scale)
+    }
+
+    /// Zoom shown to the user, relative to the frame's native pixels; the
+    /// internal `zoom` value remains relative to the fitted picture.
+    fn video_zoom_percent(&self) -> f32 {
+        self.video_fit_scale()
+            .map_or(self.video_view.zoom * 100., |scale| {
+                self.video_view.zoom * scale * 100.
+            })
+    }
+
+    /// Zooms the picture by `steps` wheel notches; going back to the fit
+    /// recentres it. The lower bound leaves room for small sources at 100%.
     fn video_zoom_by(&mut self, steps: f32, cx: &mut Context<Self>) {
         let view = &mut self.video_view;
-        view.zoom = (view.zoom * 1.25_f32.powf(steps)).clamp(1., 10.);
-        if view.zoom == 1. {
+        view.zoom = (view.zoom * 1.25_f32.powf(steps)).clamp(0.125, 10.);
+        if view.zoom <= 1. {
             view.pan = (0., 0.);
         }
         cx.notify();
     }
 
-    fn video_reset_view(&mut self, cx: &mut Context<Self>) {
+    fn video_fit_window(&mut self, cx: &mut Context<Self>) {
         self.video_view.zoom = 1.;
         self.video_view.pan = (0., 0.);
         cx.notify();
+    }
+
+    /// Shows a percentage of the frame's native pixels.
+    fn video_zoom_to_percent(&mut self, percent: f32, cx: &mut Context<Self>) {
+        let Some(scale) = self.video_fit_scale() else {
+            return;
+        };
+        self.video_view.zoom = (percent / 100. / scale).clamp(0.125, 10.);
+        self.video_view.pan = (0., 0.);
+        cx.notify();
+    }
+
+    /// Shows one native source pixel per logical screen pixel.
+    fn video_zoom_actual(&mut self, cx: &mut Context<Self>) {
+        self.video_zoom_to_percent(100., cx);
+    }
+
+    fn video_reset_view(&mut self, cx: &mut Context<Self>) {
+        self.video_fit_window(cx);
     }
 
     /// Reads the newest frame from the host, starting a fresh retry budget.
@@ -4714,6 +4759,7 @@ impl Workspace {
             }
             self.video_view.serial = head.serial;
             self.video_view.frame = head.frame;
+            self.video_view.source_size = Some((head.width, head.height));
             cx.notify();
         } else if !head.unchanged {
             // The host dropped its frame, e.g. while a new video loads.
@@ -7597,7 +7643,7 @@ impl Workspace {
         } else {
             "未加载视频".into()
         };
-        let zoom = self.video_view.zoom;
+        let zoom_percent = self.video_zoom_percent();
         // The picture is a GPU texture painted by the workspace; zoom and pan are
         // local to the view, so these buttons only touch local state.
         let controls = div()
@@ -7623,7 +7669,7 @@ impl Workspace {
                     .text_color(p.muted)
                     .w(px(48.))
                     .text_center()
-                    .child(format!("{:.0}%", zoom * 100.)),
+                    .child(format!("{zoom_percent:.0}%")),
             )
             .child(
                 Button::new("video-content-in")
@@ -7648,6 +7694,64 @@ impl Workspace {
                     .tooltip("复位缩放和平移")
                     .ghost()
                     .on_click(cx.listener(|view, _, _, cx| view.video_reset_view(cx))),
+            )
+            .child(
+                Button::new("video-fit-menu")
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(10.))
+                    .py(gpui_kit::px(3.))
+                    .label("适应")
+                    .tooltip("缩放预设")
+                    .ghost()
+                    .dropdown_menu({
+                        let weak = cx.weak_entity();
+                        move |mut menu, _, _| {
+                            for (label, percent) in [
+                                ("适应窗口", 0.),
+                                ("50%", 50.),
+                                ("100%", 100.),
+                                ("200%", 200.),
+                                ("400%", 400.),
+                            ] {
+                                let weak = weak.clone();
+                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                    move |_, _, cx| {
+                                        let _ = weak.update(cx, |view, cx| {
+                                            if percent <= 0. {
+                                                view.video_fit_window(cx);
+                                            } else {
+                                                view.video_zoom_to_percent(percent, cx);
+                                            }
+                                        });
+                                    },
+                                ));
+                            }
+                            menu
+                        }
+                    }),
+            )
+            .child(
+                Button::new("video-fit-window")
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(10.))
+                    .py(gpui_kit::px(3.))
+                    .label("适应窗口")
+                    .tooltip("让整幅画面适应预览区")
+                    .ghost()
+                    .on_click(cx.listener(|view, _, _, cx| view.video_fit_window(cx))),
+            )
+            .child(
+                Button::new("video-actual-size")
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(10.))
+                    .py(gpui_kit::px(3.))
+                    .label("100%")
+                    .tooltip("按视频原始像素显示")
+                    .ghost()
+                    .on_click(cx.listener(|view, _, _, cx| view.video_zoom_actual(cx))),
             )
             .child(div().w(px(1.)).h(px(16.)).mx_1().bg(p.divider))
             .child(
