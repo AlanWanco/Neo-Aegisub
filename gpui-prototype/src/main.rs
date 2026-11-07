@@ -929,8 +929,8 @@ struct VideoView {
     zoom: f32,
     /// Pan as a fraction of the picture area, so it survives resizing.
     pan: (f32, f32),
-    /// Pointer position and pan at the start of a middle-button drag.
-    pan_drag: Option<(f32, f32, (f32, f32))>,
+    /// Pointer position, pan, and pressed button at the start of a drag.
+    pan_drag: Option<(gpui_kit::MouseButton, f32, f32, (f32, f32))>,
     /// Last pointer position inside the picture area, in window pixels.
     pointer: Option<(f32, f32)>,
     /// Painted size of the picture area, read by the pan gesture.
@@ -4724,13 +4724,20 @@ impl Workspace {
             self.video_view.frame = -1;
             cx.notify();
         }
-        // The host decodes asynchronously, so a seek's frame can arrive after
-        // the first answer; ask again shortly instead of waiting for the next
-        // poll. While playing that wait is visible as the picture trailing the
-        // sound, so it shrinks to a little under one frame period.
-        if self.video_view.frame != self.snapshot.frame && self.video_view.retries > 0 {
-            self.video_view.retries -= 1;
-            let playing = self.snapshot.playing || self.snapshot.audio.playing;
+        // While playing, keep asking for the newest frame instead of waiting
+        // for the next playback poll: the poll also carries the document and is
+        // deliberately slower than the video, so letting it gate the picture
+        // turns a fast video into a low-frame-rate one.
+        let playing = self.snapshot.playing || self.snapshot.audio.playing;
+        if playing {
+            // The retry budget is for seeks, not for continuous playback.
+            self.video_view.retries = 25;
+        }
+        if (playing || self.video_view.frame != self.snapshot.frame) && self.video_view.retries > 0
+        {
+            if !playing {
+                self.video_view.retries -= 1;
+            }
             let weak = cx.weak_entity();
             cx.spawn(async move |_, cx| {
                 cx.background_executor()
@@ -4743,8 +4750,8 @@ impl Workspace {
     }
 
     /// The preview picture at the display aspect ratio, capped in width. The
-    /// frame is a GPU texture painted here; the wheel zooms it and the middle
-    /// button pans it, as in the original video display.
+    /// frame is a GPU texture painted here; the wheel zooms it and the left or
+    /// middle button pans it.
     fn video_region(&self, fill: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::current(cx);
         let aspect = if self.snapshot.aspect > 0. {
@@ -4776,9 +4783,24 @@ impl Workspace {
                 }),
             )
             .on_mouse_down(
+                gpui_kit::MouseButton::Left,
+                cx.listener(|view, event: &gpui_kit::MouseDownEvent, _, _| {
+                    if view.video_view.zoom <= 1. {
+                        return;
+                    }
+                    view.video_view.pan_drag = Some((
+                        gpui_kit::MouseButton::Left,
+                        f32::from(event.position.x),
+                        f32::from(event.position.y),
+                        view.video_view.pan,
+                    ));
+                }),
+            )
+            .on_mouse_down(
                 gpui_kit::MouseButton::Middle,
                 cx.listener(|view, event: &gpui_kit::MouseDownEvent, _, _| {
                     view.video_view.pan_drag = Some((
+                        gpui_kit::MouseButton::Middle,
                         f32::from(event.position.x),
                         f32::from(event.position.y),
                         view.video_view.pan,
@@ -4789,10 +4811,10 @@ impl Workspace {
                 cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
                     view.video_view.pointer =
                         Some((f32::from(event.position.x), f32::from(event.position.y)));
-                    let Some((x, y, origin)) = view.video_view.pan_drag else {
+                    let Some((button, x, y, origin)) = view.video_view.pan_drag else {
                         return;
                     };
-                    if event.pressed_button != Some(gpui_kit::MouseButton::Middle) {
+                    if event.pressed_button != Some(button) {
                         view.video_view.pan_drag = None;
                         return;
                     }
@@ -4807,7 +4829,15 @@ impl Workspace {
                 }),
             )
             .on_mouse_up(
+                gpui_kit::MouseButton::Left,
+                cx.listener(|view, _, _, _| view.video_view.pan_drag = None),
+            )
+            .on_mouse_up(
                 gpui_kit::MouseButton::Middle,
+                cx.listener(|view, _, _, _| view.video_view.pan_drag = None),
+            )
+            .on_mouse_up_out(
+                gpui_kit::MouseButton::Left,
                 cx.listener(|view, _, _, _| view.video_view.pan_drag = None),
             )
             .on_mouse_up_out(
@@ -9591,11 +9621,12 @@ impl Render for Workspace {
                         .text_xs()
                         .text_color(muted)
                         .child(if self.snapshot.video {
-                            format!(
-                                "视频帧 {} / {}",
-                                self.snapshot.frame + 1,
-                                self.snapshot.frame_count
-                            )
+                            let frame = if self.video_view.frame >= 0 {
+                                self.video_view.frame
+                            } else {
+                                self.snapshot.frame
+                            };
+                            format!("视频帧 {} / {}", frame + 1, self.snapshot.frame_count)
                         } else {
                             "无视频".into()
                         })
