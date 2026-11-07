@@ -3,6 +3,7 @@
 
 import argparse
 import struct
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -71,6 +72,54 @@ def architecture(path: Path) -> str:
     raise ValueError(f"Unsupported executable format: {path}")
 
 
+MACHO_MAGICS = (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+# Host-only locations must never be load paths in a relocated bundle.
+HOST_PATH_PREFIXES = ("/opt/homebrew/", "/usr/local/", "/Users/", "/private/", "/tmp/", "/var/")
+
+
+def is_macho(path: Path) -> bool:
+    if not path.is_file() or path.is_symlink():
+        return False
+    with path.open("rb") as file:
+        return file.read(4) in MACHO_MAGICS
+
+
+def macos_dependencies(binary: Path) -> list[str]:
+    output = subprocess.run(
+        ["otool", "-L", str(binary)], check=True, capture_output=True, text=True
+    ).stdout
+    return [
+        line.strip().split(" (compatibility", 1)[0]
+        for line in output.splitlines()[1:]
+        if line.strip()
+    ]
+
+
+def verify_macos_app(app: Path, arch: str) -> None:
+    contents = app / "Contents"
+    frameworks = contents / "Frameworks"
+    for required in (
+        frameworks / "libmpv.2.dylib",
+        frameworks / "libMoltenVK.dylib",
+        contents / "MacOS" / "aegisub",
+        contents / "MacOS" / "aegisub-gpui-prototype",
+    ):
+        if not required.is_file():
+            raise SystemExit(f"macOS app missing {required.relative_to(app)}")
+    notices = contents / "Resources" / "licenses" / "libmpv"
+    if not notices.is_dir() or not any(notices.iterdir()):
+        raise SystemExit(f"macOS app missing libmpv notices: {notices.relative_to(app)}")
+    for binary in sorted(path for path in contents.rglob("*") if is_macho(path)):
+        found = architecture(binary)
+        if found != arch:
+            raise SystemExit(f"{binary}: expected {arch}, found {found}")
+        for dependency in macos_dependencies(binary):
+            if dependency.startswith(HOST_PATH_PREFIXES):
+                raise SystemExit(f"{binary}: depends on host path {dependency}")
+    print(f"Verified macOS app: {arch}")
+
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
@@ -78,6 +127,9 @@ def main() -> None:
     parser.add_argument("--portable-zip", type=Path)
     args = parser.parse_args()
     root = args.directory
+    if (root / "Contents" / "Info.plist").is_file():
+        verify_macos_app(root, args.arch)
+        return
     extension = ".exe" if (root / "aegisub.exe").is_file() else ""
     binaries = [
         root / (name + extension) for name in ("aegisub", "aegisub-gpui-prototype")
@@ -100,6 +152,17 @@ def main() -> None:
             # document glyph in the taskbar and window switcher.
             if not pe_has_icon(binary):
                 raise SystemExit(f"{binary}: missing embedded icon resource")
+    if extension == ".exe":
+        libmpv = root / "libmpv-2.dll"
+        if not libmpv.is_file():
+            raise SystemExit(f"GPUI package missing libmpv: {libmpv}")
+        libmpv_arch = architecture(libmpv)
+        if libmpv_arch != args.arch:
+            raise SystemExit(f"{libmpv}: expected {args.arch}, found {libmpv_arch}")
+        for name in ("licenses/libmpv/PROVENANCE.txt", "licenses/libmpv/LICENSE.LGPL"):
+            if not (root / name).is_file():
+                raise SystemExit(f"Package missing libmpv notice: {name}")
+        print(f"Verified libmpv-2.dll: {libmpv_arch}")
     if args.portable_zip:
         with zipfile.ZipFile(args.portable_zip) as archive:
             names = set(archive.namelist())
@@ -109,6 +172,11 @@ def main() -> None:
                     raise SystemExit(
                         f"Portable archive has missing or different executable: {entry}"
                     )
+            for entry in (f"{root.name}/libmpv-2.dll", f"{root.name}/licenses/libmpv/PROVENANCE.txt", f"{root.name}/licenses/libmpv/LICENSE.LGPL"):
+                if entry not in names:
+                    raise SystemExit(f"Portable archive missing libmpv file: {entry}")
+            if archive.read(f"{root.name}/libmpv-2.dll") != (root / "libmpv-2.dll").read_bytes():
+                raise SystemExit("Portable archive has missing or different libmpv-2.dll")
             for runtime in ("vcruntime140.dll", "msvcp140.dll"):
                 if f"{root.name}/{runtime}" not in names:
                     raise SystemExit(f"Portable archive missing runtime: {runtime}")

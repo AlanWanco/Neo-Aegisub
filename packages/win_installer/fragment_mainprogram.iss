@@ -26,6 +26,8 @@ Name: "checkforupdates"; Description: "{cm:CheckForUpdates}"; GroupDescription: 
 DestDir: {app}; Source: "{#BUILD_ROOT}\aegisub.exe"; Flags: ignoreversion; Components: main
 DestDir: {app}; Source: "{#BUILD_ROOT}\aegisub-gpui-prototype.exe"; Flags: ignoreversion; Components: main
 DestDir: {app}; Source: "{#INSTALLER_DIR}\license.txt"; Flags: ignoreversion; Components: main
+DestDir: {app}; Source: "{#DEPS_DIR}\libmpv\{#ARCH}\libmpv-2.dll"; Flags: ignoreversion; Components: main
+DestDir: {app}\licenses\libmpv; Source: "{#DEPS_DIR}\libmpv\{#ARCH}\*"; Excludes: "libmpv-2.dll"; Flags: ignoreversion; Components: main
 
 [Icons]
 Name: {commonprograms}\Neo Aegisub; Filename: {app}\aegisub.exe; WorkingDir: {app}; IconIndex: 0; Tasks: startmenuicon; Comment: Create and edit subtitle files

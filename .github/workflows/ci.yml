@@ -203,7 +203,7 @@ jobs:
       - name: Install build tools (macOS source dependencies)
         if: startsWith(matrix.config.os, 'macos-') && matrix.config.buildtype == 'release'
         run: |
-          brew install ninja nasm
+          brew install cmake ninja nasm
 
       - name: Check Rosetta (macOS cross builds)
         if: matrix.config.cross_args
@@ -413,6 +413,15 @@ jobs:
           if-no-files-found: error
 
       # macOS artifacts
+      - name: Build bundled libmpv (macOS)
+        if: startsWith(matrix.config.os, 'macos-') && matrix.config.buildtype == 'release'
+        env:
+          LIBMPV_ARCH: ${{ matrix.config.rust_target && 'x86_64' || 'arm64' }}
+        run: |
+          target=$(meson introspect --buildoptions build | python3 -c 'import json, sys; print(next(o["value"] for o in json.load(sys.stdin) if o["name"] == "macos_deployment_target"))')
+          library=$(python3 tools/macos-build-libmpv.py --work-dir "${RUNNER_TEMP}/aegisub-libmpv" --arch "${LIBMPV_ARCH}" --deployment-target "${target}")
+          echo "AEGISUB_LIBMPV_LIBRARY=${library}" >> "${GITHUB_ENV}"
+
       - name: Generate macOS installer
         if: startsWith(matrix.config.os, 'macos-') && matrix.config.buildtype == 'release'
         env:
@@ -421,7 +430,7 @@ jobs:
           AEGISUB_BUNDLE_SIGNATURE: '-'
         run: |
           meson compile osx-bundle -C build
-          python tools/verify-gpui-package.py "build/Neo Aegisub.app/Contents/MacOS" --arch "${{ matrix.config.rust_target && 'x86_64' || 'arm64' }}"
+          python tools/verify-gpui-package.py "build/Neo Aegisub.app" --arch "${{ matrix.config.rust_target && 'x86_64' || 'arm64' }}"
 
           # Run osx-build-dmg but retry up to 10 times if it fails since hdiutil can be unreliable
           # See: https://github.com/actions/runner-images/issues/7522

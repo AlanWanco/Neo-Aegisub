@@ -20,6 +20,7 @@ gpui_kit::assets::icon_assets!(
         Move,
         ZoomIn,
         ZoomOut,
+        Fullscreen,
         Bold,
         Italic,
         Underline,

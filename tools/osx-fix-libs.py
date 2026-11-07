@@ -1,171 +1,132 @@
 #!/usr/bin/env python3
+"""Copy non-system Mach-O dependencies into an app's Frameworks directory."""
 
-import re
-import sys
-import os
+import argparse
+from pathlib import Path
 import shutil
-import stat
 import subprocess
 
-is_bad_lib = re.compile(r'(/usr/local|/opt)').match
-is_sys_lib = re.compile(r'(/usr|/System)').match
-otool_libname_extract = re.compile(r'\s+([/@].*?)[(\s:]').search
-goodlist = []
-badlist = []
-badlist_orig = []
-link_map = {}
+
+def output(*args):
+    return subprocess.check_output(args, text=True)
 
 
-def otool(cmdline):
-    with subprocess.Popen(['otool'] + cmdline, stdout=subprocess.PIPE,
-                          encoding='utf-8') as p:
-        return p.stdout.readlines()
+def system_library(name):
+    return name.startswith(("/usr/lib/", "/System/Library/"))
 
 
-def get_rpath(lib):
-    info = otool(['-l', lib])
-    commands = []
-    command = []
-    for line in info:
-        line = line.strip()
-        if line.startswith("Load command "):
-            commands.append(command)
-            command = []
-        else:
-            command.append(line)
-    commands.append(command)
-
-    # yuck
-    return [line.split()[1] for command in commands if "cmd LC_RPATH" in command for line in command if line.startswith("path")]
+def dependencies(binary):
+    # otool's version suffix is the delimiter; install names may contain spaces.
+    return [line.strip().split(" (compatibility version", 1)[0]
+            for line in output("otool", "-L", str(binary)).splitlines()[1:]]
 
 
-def collectlibs(lib, masterlist, targetdir):
-    global goodlist, link_map
-    liblist = otool(['-L', lib])
-    locallist = []
+def rpaths(binary, executable_dir):
+    lines = output("otool", "-l", str(binary)).splitlines()
+    paths = []
+    for index, line in enumerate(lines):
+        if line.strip() == "cmd LC_RPATH":
+            value = lines[index + 2].strip().removeprefix("path ").split(" (offset", 1)[0]
+            paths.append((value, Path(value.replace("@loader_path", str(binary.parent))
+                                      .replace("@executable_path", str(executable_dir)))))
+    return paths
 
-    for l in liblist:
-        l = otool_libname_extract(l)
-        if not l:
+
+def resolve(name, binary, executable_dir, search_paths):
+    expanded = name.replace("@loader_path", str(binary.parent)).replace(
+        "@executable_path", str(executable_dir))
+    candidates = ([directory / name.removeprefix("@rpath/") for directory in search_paths]
+                  if name.startswith("@rpath/") else [Path(expanded)])
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise RuntimeError(f"Cannot resolve {name} required by {binary}")
+
+
+def copy_notices(source, destination):
+    # Homebrew packages retain their licenses, source formula and SPDX SBOM.
+    for root in source.parents:
+        source_notices = root / "share" / "licenses" / "libmpv"
+        if source_notices.is_dir():
+            shutil.copytree(source_notices, destination, dirs_exist_ok=True)
+            return
+        if not (root / ".brew").is_dir():
             continue
-
-        l = l.group(1)
-        l_orig = l
-
-        if l.startswith("@rpath/"):
-            rpath = get_rpath(lib)
-
-            if not rpath:
-                print(f"{lib} uses @rpath but has no rpath set!")
-                exit(-1)
-
-            # all cases of libs using rpath so far just had a single directory in rpath...
-            # so let's just hope it stays that way and worry about the other cases when we get to them
-            if len(rpath) >= 2:
-                print(f"Warning: {lib} uses @rpath with more than one entry in rpath. Guessing one entry...")
-
-            l = os.path.join(rpath[0], l[len("@rpath/"):])
-
-        if l.startswith("@loader_path/"):
-            l = os.path.join(os.path.dirname(lib), l[len("@loader_path/"):])
-
-        if is_bad_lib(l):
-            if l not in badlist:
-                badlist.append(l)
-            if l_orig not in badlist_orig:
-                badlist_orig.append(l_orig)
-        if ((not is_sys_lib(l)) or is_bad_lib(l)) and l not in masterlist:
-            locallist.append(l)
-            print("found %s:" % l)
-
-            check = l
-            link_list = []
-            while check:
-                basename = os.path.basename(check)
-                target = os.path.join(targetdir, basename)
-
-                if os.path.islink(target):
-                    # If a library was a symlink to a file with the same name in another directory,
-                    # this could otherwise cause a FileNotFoundError
-                    os.remove(target)
-
-                if os.path.isfile(check) and not os.path.islink(check):
-                    try:
-                        shutil.copy(check, target)
-                    except PermissionError:
-                        print("    FILE %s ... skipped" % check)
-                        break
-                    print("    FILE %s ... copied to target" % check)
-                    if link_list:
-                        for link in link_list:
-                            link_map[link] = basename
-                    break
-
-                if os.path.islink(check):
-                    link_dst = os.readlink(check)
-                    try:
-                        os.symlink(link_dst, target)
-                    except FileExistsError:
-                        print("    LINK %s ... existed" % check)
-                        break
-                    print("    LINK %s ... copied to target" % check)
-                    link_list.append(basename)
-                    check = os.path.join(os.path.dirname(check), link_dst)
-        elif l not in goodlist and l not in masterlist:
-            goodlist.append(l)
-    masterlist.extend(locallist)
-
-    for l in locallist:
-        collectlibs(l, masterlist, targetdir)
+        target = destination / f"{root.parent.name}-{root.name}"
+        target.mkdir(parents=True, exist_ok=True)
+        for item in root.iterdir():
+            if item.is_file() and (item.name.upper().startswith(
+                    ("LICENSE", "COPYING", "COPYRIGHT", "NOTICE"))
+                    or item.name == "sbom.spdx.json"):
+                shutil.copy2(item, target / item.name)
+        for formula in (root / ".brew").glob("*.rb"):
+            shutil.copy2(formula, target / formula.name)
+        return
 
 
-if __name__ == '__main__':
-    binname = sys.argv[1]
-    targetdir = os.path.dirname(binname)
-    print("Searching for libraries in", binname, "...")
-    libs = [binname]
-    collectlibs(binname, libs, targetdir)
+def bundle(executables, libraries):
+    executable_dir = executables[0].resolve().parent
+    contents = executable_dir.parent
+    frameworks = contents / "Frameworks"
+    frameworks.mkdir(parents=True, exist_ok=True)
+    notices = contents / "Resources" / "licenses" / "libmpv"
+    expected_arches = set(output("lipo", "-archs", str(executables[0])).split())
+    copied = {}
+    names = {}
+    visited = set()
 
-    print()
-    print("System libraries used...")
-    goodlist.sort()
-    for l in goodlist:
-        print(l)
+    def collect(source, target, inherited_paths):
+        source = source.resolve()
+        if source in visited:
+            return
+        visited.add(source)
+        arches = set(output("lipo", "-archs", str(source)).split())
+        if not expected_arches.issubset(arches):
+            raise RuntimeError(f"Wrong architecture {arches}: {source}; expected {expected_arches}")
+        source_rpaths = rpaths(source, executable_dir)
+        paths = [expanded for _, expanded in source_rpaths] + inherited_paths
+        ids = output("otool", "-D", str(source)).splitlines()[1:]
+        changes = []
+        for name in dependencies(source):
+            if name in ids or system_library(name):
+                continue
+            dependency = resolve(name, source, executable_dir, paths)
+            destination = copy_library(dependency, Path(name).name, paths)
+            replacement = (f"@loader_path/{destination.name}" if target.parent == frameworks
+                           else f"@loader_path/../Frameworks/{destination.name}")
+            changes.extend(["-change", name, replacement])
+        for original in dict.fromkeys(original for original, _ in source_rpaths):
+            changes.extend(["-delete_rpath", original])
+        if target.parent == frameworks:
+            changes.extend(["-id", f"@rpath/{target.name}"])
+        if changes:
+            target.chmod(target.stat().st_mode | 0o200)
+            subprocess.run(["install_name_tool", *changes, str(target)], check=True)
 
-    print()
-    print("Fixing library install names...")
-    in_tool_cmdline = ['install_name_tool']
-    for lib in badlist_orig:
-        libbase = os.path.basename(lib)
-        if libbase in link_map:
-            print("%s -> @executable_path/%s (REMAPPED)" % (lib, libbase))
-            libbase = link_map[libbase]
-        else:
-            print("%s -> @executable_path/%s" % (lib, libbase))
-        in_tool_cmdline = in_tool_cmdline + ['-change', lib,
-                                             '@executable_path/' + libbase]
-    for lib in libs:
-        libbase = os.path.basename(lib)
+    def copy_library(source, name, inherited_paths):
+        source = source.resolve()
+        if source in copied:
+            return copied[source]
+        if name in names and names[name] != source:
+            raise RuntimeError(f"Different libraries share bundled name {name}: {source}, {names[name]}")
+        names[name] = source
+        target = frameworks / name
+        copied[source] = target
+        shutil.copy2(source, target)
+        copy_notices(source, notices)
+        collect(source, target, inherited_paths)
+        print(f"Bundled {name}")
+        return target
 
-        if libbase in link_map:
-            libbase = link_map[libbase]
+    for executable in executables:
+        collect(executable, executable, [])
+    for library in libraries:
+        copy_library(library, library.name, [])
 
-        targetlib = targetdir + '/' + libbase
-        orig_permission = os.stat(targetlib).st_mode
-        if not(orig_permission & stat.S_IWUSR):
-            os.chmod(targetlib, orig_permission | stat.S_IWUSR)
-        subprocess.run(in_tool_cmdline + ['-id', '@executable_path/' + libbase,
-                                          targetlib])
-        if not(orig_permission & stat.S_IWUSR):
-            os.chmod(targetlib, orig_permission)
 
-    if badlist:
-        print()
-        print("WARNING: The following libraries have blacklisted paths:")
-        for lib in sorted(badlist):
-            print(lib)
-        print(
-            "These paths normally have files from a package manager, which means that end result may not work if copied to another machine.")
-
-    print()
-    print("All done!")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("executables", type=Path, nargs="+")
+    parser.add_argument("--library", type=Path, action="append", default=[])
+    arguments = parser.parse_args()
+    bundle(arguments.executables, arguments.library)

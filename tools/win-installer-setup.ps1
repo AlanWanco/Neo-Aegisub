@@ -97,6 +97,86 @@ if ((Get-CachedDepCtrlVersion $DepCtrlDir) -ne $DepCtrlVersion) {
 # 	Remove-Item $avsArchive
 # }
 
+# libmpv: LGPL build of mpv (zhongfly/mpv-winbuild, derived from shinchiro/mpv-winbuild-cmake).
+# Aegisub loads libmpv-2.dll at run time, so it ships beside the executables. Pins are
+# GitHub release asset digests (live API, 2026-11-07); the archive SHA256 is re-verified on download.
+$LibmpvPins = @{
+    x64   = @{ Url = 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-11-07-55d3feb45c/mpv-dev-lgpl-x86_64-20261107-git-55d3feb45c.7z'; Name = 'mpv-dev-lgpl-x86_64-20261107-git-55d3feb45c.7z'; Sha256 = '17bff1d2e90ad06a9d98ce0fae738feb64feaf10ddd804870e0144111a9715df'; DllSha256 = '6d9a3a97b7efa71476d2bc4717944a6d8ae6f6b769149796af08fb055d7b665a'; Machine = 0x8664 }
+    arm64 = @{ Url = 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-11-07-55d3feb45c/mpv-dev-lgpl-aarch64-20261107-git-55d3feb45c.7z'; Name = 'mpv-dev-lgpl-aarch64-20261107-git-55d3feb45c.7z'; Sha256 = '6210785d28c4d48e44dc7de083fe69c49411e0bf30a8a65b5bd4b659aadae891'; DllSha256 = 'f7d49de86a0a019ccd8c6a5baf16734ec5158760e9dc618ea10533441266858b'; Machine = 0xAA64 }
+}
+
+function Get-PeMachine {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $data = [IO.File]::ReadAllBytes($Path)
+    $peOffset = [BitConverter]::ToInt32($data, 0x3C)
+    if (-not ($data[$peOffset] -eq 0x50 -and $data[$peOffset + 1] -eq 0x45 -and $data[$peOffset + 2] -eq 0 -and $data[$peOffset + 3] -eq 0)) {
+        throw "Invalid PE header: $Path"
+    }
+    [BitConverter]::ToUInt16($data, $peOffset + 4)
+}
+
+$LibmpvDir = Join-Path $DepsDir "libmpv\$Architecture"
+$LibmpvDll = Join-Path $LibmpvDir "libmpv-2.dll"
+$LibmpvPin = $LibmpvPins[$Architecture]
+$LicenseSha = '72b672113d642cbb8ef5dcc76938db801983c56e50b1400ab930f1a64d6dc8d9'
+$LicenseFile = Join-Path $LibmpvDir "LICENSE.LGPL"
+$libmpvReady = (Test-Path -LiteralPath $LibmpvDll -PathType Leaf) -and
+    (Test-Path -LiteralPath $LicenseFile -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $LibmpvDir "PROVENANCE.txt") -PathType Leaf)
+if ($libmpvReady) {
+    $libmpvReady = (Get-FileHash -LiteralPath $LibmpvDll -Algorithm SHA256).Hash.ToLowerInvariant() -eq $LibmpvPin.DllSha256 -and
+        (Get-FileHash -LiteralPath $LicenseFile -Algorithm SHA256).Hash.ToLowerInvariant() -eq $LicenseSha
+}
+if (!$libmpvReady) {
+    New-Item -ItemType Directory -Path $LibmpvDir -Force | Out-Null
+    $LibmpvArchive = Join-Path $LibmpvDir $LibmpvPin.Name
+    $LibmpvStage = Join-Path $LibmpvDir "stage"
+    try {
+        Invoke-WebRequest $LibmpvPin.Url -OutFile $LibmpvArchive -UseBasicParsing
+        $archiveSha = (Get-FileHash -LiteralPath $LibmpvArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($archiveSha -ne $LibmpvPin.Sha256) {
+            throw "libmpv archive SHA256 is $archiveSha, expected $($LibmpvPin.Sha256)"
+        }
+        7z x $LibmpvArchive "-o$LibmpvStage" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to extract libmpv (7z exited with code $LASTEXITCODE)"
+        }
+        $libmpvFound = Get-ChildItem -LiteralPath $LibmpvStage -Recurse -Filter "libmpv-2.dll" -File | Select-Object -First 1
+        if (!$libmpvFound) {
+            throw "libmpv archive does not contain libmpv-2.dll"
+        }
+        $libmpvMachine = Get-PeMachine $libmpvFound.FullName
+        if ($libmpvMachine -ne $LibmpvPin.Machine) {
+            throw "libmpv-2.dll machine type 0x$('{0:X4}' -f $libmpvMachine) does not match $Architecture (0x$('{0:X4}' -f $LibmpvPin.Machine))"
+        }
+        $dllSha = (Get-FileHash -LiteralPath $libmpvFound.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($dllSha -ne $LibmpvPin.DllSha256) {
+            throw "libmpv-2.dll SHA256 is $dllSha, expected $($LibmpvPin.DllSha256)"
+        }
+        Set-Content -LiteralPath (Join-Path $LibmpvDir "PROVENANCE.txt") -Value @(
+            "libmpv ($Architecture)"
+            "Source: $($LibmpvPin.Url)"
+            "Archive SHA256: $archiveSha"
+            "libmpv-2.dll SHA256: $dllSha"
+            "Upstream: https://github.com/zhongfly/mpv-winbuild (LGPL build, tag 2026-11-07-55d3feb45c), based on https://github.com/shinchiro/mpv-winbuild-cmake"
+            "License: LGPL-2.1 text in LICENSE.LGPL (https://raw.githubusercontent.com/mpv-player/mpv/master/LICENSE.LGPL, SHA256 72b672113d642cbb8ef5dcc76938db801983c56e50b1400ab930f1a64d6dc8d9)"
+        )
+        # The archive ships no license text, so take mpv's LGPL-2.1 text, pinned by SHA256.
+        Invoke-WebRequest 'https://raw.githubusercontent.com/mpv-player/mpv/master/LICENSE.LGPL' -OutFile $LicenseFile -UseBasicParsing
+        $licenseActual = (Get-FileHash -LiteralPath $LicenseFile -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($licenseActual -ne $LicenseSha) {
+            throw "LICENSE.LGPL SHA256 is $licenseActual, expected $LicenseSha"
+        }
+        Copy-Item -LiteralPath $libmpvFound.FullName -Destination $LibmpvDll
+    } finally {
+        Remove-Item -LiteralPath $LibmpvStage -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $LibmpvArchive -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "libmpv ($Architecture) staged at $LibmpvDll"
+} else {
+    Write-Host "libmpv ($Architecture) already cached at $LibmpvDll"
+}
+
 # VSFilter
 $VSFilterDir = Join-Path $DepsDir "VSFilter"
 if ($Architecture -eq 'x64' -and !(Test-Path $VSFilterDir)) {

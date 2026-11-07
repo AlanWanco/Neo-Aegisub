@@ -17,6 +17,31 @@ public static class GpuiDesktop {
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, int data, UIntPtr extra);
+    public delegate bool EnumWindowProc(IntPtr hwnd, IntPtr param);
+    [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumWindowProc callback, IntPtr param);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
+    public struct Point { public int X, Y; }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int count);
+    public static IntPtr FindVideoChild(IntPtr parent) {
+        IntPtr result = IntPtr.Zero;
+        EnumChildWindows(parent, (hwnd, _) => {
+            var name = new System.Text.StringBuilder(256);
+            GetClassName(hwnd, name, name.Capacity);
+            if (name.ToString() != "AegisubMpvVideo") return true;
+            result = hwnd;
+            return false;
+        }, IntPtr.Zero);
+        return result;
+    }
+    public static bool HasVisibleRenderer(IntPtr parent) {
+        bool found = false;
+        EnumChildWindows(parent, (hwnd, _) => {
+            found = IsWindowVisible(hwnd);
+            return !found;
+        }, IntPtr.Zero);
+        return found;
+    }
     public struct Rect { public int Left, Top, Right, Bottom; }
 }
 '@
@@ -28,7 +53,10 @@ Copy-Item -LiteralPath $PackageDirectory -Destination $runtime -Recurse
 # The package ships no settings file; the app creates one on first start. Seed
 # only the keys this smoke run depends on, so no first-start prompt or update check appears.
 $configPath = Join-Path $runtime 'config.json'
-$config = @{ App = @{ 'First Start' = $false; Language = 'en_US'; Theme = 2; Auto = @{ 'Check For Updates' = $false } } }
+$config = @{
+    App = @{ 'First Start' = $false; Language = 'en_US'; Theme = 2; Auto = @{ 'Check For Updates' = $false } }
+    Video = @{ 'PlayRes Mismatch' = 0; 'LayoutRes Mismatch' = 0; 'YCbCr Matrix Mismatch' = 0 }
+}
 $config | ConvertTo-Json -Depth 20 | Set-Content $configPath -Encoding utf8NoBOM
 $history = @(0..49 | ForEach-Object {
     @{ filename = "Layout regression long subtitle filename concert 1920x1080 x265 FLAC record $_.ass";
@@ -161,6 +189,78 @@ try {
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, [Math]::Min(1024, $screen.Width), [Math]::Min(720, $screen.Height), 0x0040)
     [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
     Start-Sleep -Milliseconds 750
+    # Exercise the shipped libmpv DLL through the actual visible workspace.
+    # Y4M avoids a separate encoder dependency on the Windows runner.
+    $videoPath = Join-Path $runtime 'native-video-smoke.y4m'
+    @'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+w, h = 320, 180
+with path.open('wb') as out:
+    out.write(f'YUV4MPEG2 W{w} H{h} F60:1 Ip A1:1 C420jpeg\n'.encode())
+    for frame in range(1200):
+        y = bytes(40 + ((x + frame * 3) % 180) for x in range(w)) * h
+        out.write(b'FRAME\n' + y + bytes([96]) * (w*h//4) + bytes([192]) * (w*h//4))
+'@ | python - $videoPath
+    if ($LASTEXITCODE -ne 0) { throw 'Could not generate native video fixture' }
+    $null = Invoke-Bridge @{ op = 'open'; kind = 'video'; path = $videoPath }
+    Press-Control 'libmpv'
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
+    $videoChild = [IntPtr]::Zero
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        $videoChild = [GpuiDesktop]::FindVideoChild($script:windowHandle)
+        if ($videoChild -ne [IntPtr]::Zero -and [GpuiDesktop]::IsWindowVisible($videoChild) -and
+            [GpuiDesktop]::HasVisibleRenderer($videoChild)) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if ($videoChild -eq [IntPtr]::Zero -or -not [GpuiDesktop]::IsWindowVisible($videoChild) -or
+        -not [GpuiDesktop]::HasVisibleRenderer($videoChild)) {
+        throw 'Native libmpv preview did not become visible'
+    }
+    $before = Invoke-Bridge @{ op = 'playback' }
+    Start-Sleep -Milliseconds 200
+    Save-Screenshot 'native-video-playing'
+    $after = Invoke-Bridge @{ op = 'playback' }
+    if ($after.video_time -le $before.video_time) { throw 'Video clock did not advance during native playback' }
+    $videoBounds = [GpuiDesktop+Rect]::new()
+    $mainBounds = [GpuiDesktop+Rect]::new()
+    [void][GpuiDesktop]::GetWindowRect($videoChild, [ref]$videoBounds)
+    [void][GpuiDesktop]::GetWindowRect($script:windowHandle, [ref]$mainBounds)
+    if ($videoBounds.Right -le $videoBounds.Left -or $videoBounds.Bottom -le $videoBounds.Top -or
+        $videoBounds.Left -lt $mainBounds.Left -or $videoBounds.Top -lt $mainBounds.Top -or
+        $videoBounds.Right -gt $mainBounds.Right -or $videoBounds.Bottom -gt $mainBounds.Bottom) {
+        throw 'Native video child lies outside the workspace'
+    }
+    $videoCenter = [GpuiDesktop+Point]::new()
+    $videoCenter.X = [int](($videoBounds.Left + $videoBounds.Right) / 2)
+    $videoCenter.Y = [int](($videoBounds.Top + $videoBounds.Bottom) / 2)
+    if ([GpuiDesktop]::WindowFromPoint($videoCenter) -ne $script:windowHandle) {
+        throw 'Native video steals mouse input from the GPUI workspace'
+    }
+    $originalWidth = $mainBounds.Right - $mainBounds.Left
+    $originalHeight = $mainBounds.Bottom - $mainBounds.Top
+    $resizedWidth = [Math]::Min($screen.Width, $originalWidth + 160)
+    if ($resizedWidth -gt $originalWidth) {
+        [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, 0, 0, $resizedWidth, $originalHeight, 0x0006)
+        Start-Sleep -Milliseconds 500
+        $resizedVideo = [GpuiDesktop+Rect]::new()
+        [void][GpuiDesktop]::GetWindowRect($videoChild, [ref]$resizedVideo)
+        if ($resizedVideo.Right - $resizedVideo.Left -eq $videoBounds.Right - $videoBounds.Left -and
+            $resizedVideo.Bottom - $resizedVideo.Top -eq $videoBounds.Bottom - $videoBounds.Top) {
+            throw 'Native video child did not follow workspace resize'
+        }
+        Save-Screenshot 'native-video-resized'
+        [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, 0, 0, $originalWidth, $originalHeight, 0x0006)
+        Start-Sleep -Milliseconds 300
+    }
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if (-not [GpuiDesktop]::IsWindowVisible($videoChild)) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if ([GpuiDesktop]::IsWindowVisible($videoChild)) { throw 'Pause left native video above the editing preview' }
+    Save-Screenshot 'native-video-paused'
+    Press-Control 'libmpv'
     Press-Control '时间平移'
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'
     $input = Find-Control '平移时长' -Kind Edit

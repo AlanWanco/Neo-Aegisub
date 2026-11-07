@@ -111,7 +111,12 @@ done
 
 echo
 echo "---- Fixing libraries ----"
-python3 "${SRC_DIR}/tools/osx-fix-libs.py" "${PKG_DIR}/Contents/MacOS/aegisub"
+# libmpv is opened dynamically, so it is not reachable from the host's load commands.
+MPV_LIBRARY="${AEGISUB_LIBMPV_LIBRARY:-$(pkg-config --variable=libdir mpv)/libmpv.2.dylib}"
+python3 "${SRC_DIR}/tools/osx-fix-libs.py" \
+  "${PKG_DIR}/Contents/MacOS/aegisub" \
+  "${PKG_DIR}/Contents/MacOS/aegisub-gpui-prototype" \
+  --library "${MPV_LIBRARY}"
 
 echo
 echo "---- Verifying deployment target ----"

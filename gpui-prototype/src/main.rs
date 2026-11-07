@@ -37,10 +37,10 @@ use timing_panel::{ShiftState, TimingPanel};
 use timing_processor_panel::{ProcessorState, TimingProcessorPanel};
 mod translation_panel;
 use styling_panel::StylingPanel;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod mpv_surface;
 mod video_settings_panel;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use mpv_surface::MpvSurface;
 mod video_timeline;
 use translation_panel::{TranslationPanel, TranslationState};
@@ -1359,15 +1359,15 @@ struct Workspace {
     /// The picture lives in its own window; the embedded card is hidden until
     /// that window closes again.
     video_popped: bool,
-    /// Experimental libmpv native surface, only on macOS for now.
+    /// Experimental libmpv native surface on macOS and Windows.
     native_video: bool,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     mpv_surface: Option<MpvSurface>,
     /// Whether mpv draws the picture now: playing, fitted, with no visual or overscan overlay.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_visible: bool,
     /// A subtitle file request to the host is in flight.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_subs_inflight: bool,
     properties_line_id: i64,
     _property_events: Vec<Subscription>,
@@ -1661,11 +1661,11 @@ impl Workspace {
             show_video: true,
             video_popped: false,
             native_video: false,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             mpv_surface: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_visible: false,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_subs_inflight: false,
             properties_line_id: -1,
             _property_events: property_events,
@@ -4729,7 +4729,7 @@ impl Workspace {
     fn video_reset_view(&mut self, cx: &mut Context<Self>) {
         self.video_fit_window(cx);
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn sync_native_video(&mut self, window: &Window, cx: &mut Context<Self>) {
         let was_visible = self.native_visible;
         self.update_native_video(window, cx);
@@ -4739,7 +4739,7 @@ impl Workspace {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn update_native_video(&mut self, window: &Window, cx: &mut Context<Self>) {
         if !self.native_video
             || !self.snapshot.video
@@ -4764,6 +4764,7 @@ impl Workspace {
             match MpvSurface::new(window, &path) {
                 Ok(surface) => self.mpv_surface = Some(surface),
                 Err(error) => {
+                    self.native_video = false;
                     self.native_visible = false;
                     let status = format!("原生视频不可用：{error}");
                     if self.status != status {
@@ -4806,7 +4807,7 @@ impl Workspace {
 
     /// Asks the host for the current subtitles as a temporary ASS file and loads
     /// them into mpv. One request is in flight at a time.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn request_native_subtitles(&mut self, cx: &mut Context<Self>) {
         self.native_subs_inflight = true;
         let bridge = self.bridge.clone();
@@ -4831,7 +4832,7 @@ impl Workspace {
         .detach();
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn sync_native_video(&mut self, _window: &Window, _cx: &mut Context<Self>) {}
 
     /// Reads the newest frame from the host, starting a fresh retry budget.
@@ -4842,7 +4843,7 @@ impl Workspace {
 
     /// One `video_frame` request at a time. With no video the picture is dropped.
     fn fetch_video_frame(&mut self, cx: &mut Context<Self>) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if self.native_visible {
             return;
         }
@@ -7799,19 +7800,22 @@ impl Workspace {
             .gap_1()
             .items_center()
             .flex_shrink_0()
-            .when(cfg!(target_os = "macos"), |controls| {
-                controls.child(
-                    Button::new("video-native-mpv")
-                        .small()
-                        .label("libmpv")
-                        .selected(self.native_video)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.native_video = !view.native_video;
-                            view.refresh_video_frame(cx);
-                            cx.notify();
-                        })),
-                )
-            })
+            .when(
+                cfg!(any(target_os = "macos", target_os = "windows")),
+                |controls| {
+                    controls.child(
+                        Button::new("video-native-mpv")
+                            .small()
+                            .label("libmpv")
+                            .selected(self.native_video)
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.native_video = !view.native_video;
+                                view.refresh_video_frame(cx);
+                                cx.notify();
+                            })),
+                    )
+                },
+            )
             .child(
                 Button::new("video-content-out")
                     .rounded(gpui_kit::px(999.))
@@ -7864,7 +7868,7 @@ impl Workspace {
                     .py(gpui_kit::px(3.))
                     .label("适应")
                     .tooltip("缩放预设")
-                    .ghost()
+                    .outline()
                     .dropdown_menu({
                         let weak = cx.weak_entity();
                         move |mut menu, _, _| {
@@ -7898,8 +7902,9 @@ impl Workspace {
                     .small()
                     .px(gpui_kit::px(10.))
                     .py(gpui_kit::px(3.))
-                    .label("适应窗口")
-                    .tooltip("让整幅画面适应预览区")
+                    .child(Icon::new(IconName::Fullscreen).size(px(15.)))
+                    .accessibility_label("适应窗口")
+                    .tooltip("适应窗口：让整幅画面适应预览区")
                     .ghost()
                     .on_click(cx.listener(|view, _, _, cx| view.video_fit_window(cx))),
             )

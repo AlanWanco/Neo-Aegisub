@@ -60,6 +60,13 @@ if ($LASTEXITCODE -ne 0) { throw "meson install failed (exit $LASTEXITCODE)" }
 Write-Step 'Copying executable'
 Copy-ToDirectory $InstallerDir\bin\aegisub.exe  $PortableOutputDir
 Copy-ToDirectory $InstallerDir\bin\aegisub-gpui-prototype.exe $PortableOutputDir
+# libmpv-2.dll is loaded beside the executables; its LGPL license texts and provenance ship alongside it.
+$LibmpvSource = Join-Path $InstallerDepsDir "libmpv\$Architecture"
+if (!(Test-Path -LiteralPath (Join-Path $LibmpvSource 'libmpv-2.dll') -PathType Leaf)) { throw "libmpv-2.dll missing from $LibmpvSource; run win-installer setup first" }
+Copy-ToDirectory (Join-Path $LibmpvSource 'libmpv-2.dll') $PortableOutputDir
+$LibmpvLicenseDir = Join-Path $PortableOutputDir 'licenses\libmpv'
+New-Item -ItemType Directory -Path $LibmpvLicenseDir -Force | Out-Null
+Get-ChildItem -LiteralPath $LibmpvSource -File | Where-Object { $_.Name -ne 'libmpv-2.dll' } | Copy-Item -Destination $LibmpvLicenseDir -Force
 
 # Playback diagnostics: the launcher turns the env-gated frame traces on.
 Write-Step 'Copying trace launcher'
