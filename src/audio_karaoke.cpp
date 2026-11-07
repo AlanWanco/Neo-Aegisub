@@ -30,6 +30,16 @@
 #include <libaegisub/ass/karaoke.h>
 #include <libaegisub/log.h>
 
+namespace {
+/// A dialogue controller only knows the active line after Revert(), and the
+/// controller is normally created before the first selection signal arrives.
+std::unique_ptr<AudioTimingController> MakeDialogueController(agi::Context *c) {
+	auto controller = CreateDialogueTimingController(c);
+	controller->Revert();
+	return controller;
+}
+}
+
 AudioKaraoke::AudioKaraoke(agi::Context *c)
 : c(c)
 , file_changed(c->ass->AddCommitListener(&AudioKaraoke::OnFileChanged, this))
@@ -53,13 +63,16 @@ void AudioKaraoke::OnFileChanged(int type, const AssDialogue *changed) {
 }
 
 void AudioKaraoke::OnAudioOpened(agi::AudioProvider *provider) {
-	if (provider) {
-		if (enabled) SetEnabled(false);
-	}
-	else {
+	if (!provider) {
 		enabled = false;
 		c->audioController->SetTimingController(nullptr);
+		return;
 	}
+	// Opening audio is the first chance to create a timing controller. With
+	// karaoke off, SetEnabled(false) would return early, leaving the audio
+	// display with no active line and a 0-0 primary range.
+	if (enabled) SetEnabled(false);
+	else c->audioController->SetTimingController(MakeDialogueController(c));
 }
 
 void AudioKaraoke::SetEnabled(bool en) {
@@ -80,7 +93,7 @@ void AudioKaraoke::SetEnabled(bool en) {
 	}
 	else {
 		CancelSplit();
-		c->audioController->SetTimingController(CreateDialogueTimingController(c));
+		c->audioController->SetTimingController(MakeDialogueController(c));
 	}
 }
 

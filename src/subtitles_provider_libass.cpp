@@ -196,7 +196,10 @@ void LibassSubtitlesProvider::DrawSubtitles(VideoFrame &frame,double time) {
 			ret[0] = (k * b + ck * frame[0]) / 255;
 			ret[1] = (k * g + ck * frame[1]) / 255;
 			ret[2] = (k * r + ck * frame[2]) / 255;
-			ret[3] = 0;
+			// The display path uploads BGRA8 straight to the GPU; libass only
+			// owns the colour channels, so keep the video's opacity. Zeroing
+			// this made every subtitle rectangle transparent (a black box).
+			ret[3] = frame[3];
 			return ret;
 		});
 	}
