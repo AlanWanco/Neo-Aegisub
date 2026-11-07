@@ -224,6 +224,11 @@ RawReply VideoFrames::Frame(json::Object const& request) {
         size_t const source = frame->flipped ? height - 1 - y : y;
         std::memcpy(pixels.data() + y * row, frame->data.data() + source * static_cast<size_t>(frame->pitch), row);
     }
+    // A video preview is opaque. Subtitle compositing may leave alpha zero
+    // inside a line's bounding box; the front end would show the card's inset
+    // colour through that rectangle. raw/subs keep their alpha for overlays.
+    for (size_t offset = 3; offset < pixels.size(); offset += 4)
+        pixels[offset] = 255;
     result["width"] = static_cast<int64_t>(width);
     result["height"] = static_cast<int64_t>(height);
     result["byte_length"] = static_cast<int64_t>(pixels.size());
