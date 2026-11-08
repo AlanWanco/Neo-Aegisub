@@ -587,7 +587,7 @@ impl AudioPanel {
         ));
         controls = controls.child(
             Button::new("audio-hotkeys")
-                .child(Icon::new(IconName::Asterisk).size(px(15.)))
+                .child(Icon::new(IconName::Keyboard).size(px(15.)))
                 .rounded(px(999.))
                 .small()
                 .px(px(9.))
@@ -767,10 +767,13 @@ impl AudioPanel {
             }
             let left = ((range.start - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
             let right = ((range.end - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
+            // The bands sit behind the green waveform, so their alpha has to
+            // read against the brightest part of the image: anything under ~18%
+            // disappears into the peaks, leaving only the edge borders visible.
             let fill = if range.selected {
-                gpui_kit::rgba(0x65b8ff18)
+                gpui_kit::rgba(0x65b8ff3d)
             } else {
-                gpui_kit::rgba(0xe5c78b18)
+                gpui_kit::rgba(0xe5c78b3d)
             };
             let mut band = div()
                 .absolute()
@@ -825,7 +828,7 @@ impl AudioPanel {
                     .bottom_0()
                     .left(px(width * left))
                     .w(px(width * (right - left)))
-                    .bg(gpui_kit::rgba(0x65b8ff26))
+                    .bg(gpui_kit::rgba(0x65b8ff3d))
                     .border_l_2()
                     .border_color(start_color)
                     .child(

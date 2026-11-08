@@ -314,15 +314,25 @@ with path.open('wb') as out:
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 800, 600, 0x0040)
     Start-Sleep -Milliseconds 350
-    # The compact window stacks both cards: the parameter field stays visible and
-    # the history card keeps its own scroll area underneath.
+    # The two cards share one row: the form and the history list each keep their
+    # own scroll area beside each other instead of stacking into one tall column.
+    $amountRect = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
     if ((Find-Control '平移时长' -Kind Edit).Current.IsOffscreen) { throw 'Compact layout hides the amount field' }
-    Save-Screenshot 'timing-compact-parameters'
-    if ((Find-Control '清空…').Current.IsOffscreen) { throw 'Compact layout hides the history card' }
-    Save-Screenshot 'timing-compact-history'
+    $clearRect = (Find-Control '清空…').Current.BoundingRectangle
+    if ($clearRect.Left -le $amountRect.Right) { throw 'History card is not beside the parameter form' }
+    Save-Screenshot 'timing-two-columns'
+    # Below the wrap threshold the history drops under the form rather than
+    # squeezing both columns past the width their segmented rows need.
+    [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 560, 600, 0x0040)
+    Start-Sleep -Milliseconds 350
+    $wrappedAmount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
+    $wrappedClear = (Find-Control '清空…').Current.BoundingRectangle
+    if ($wrappedClear.Top -le $wrappedAmount.Top) { throw 'Narrow window did not stack the history under the form' }
+    Save-Screenshot 'timing-wrapped'
     Assert-Clean $base
     @{ actual_windows_desktop = $true; visible_amount_field = $true; exact_form_shift_ms = 1250;
-       undo_restores_clean_document = $true; independent_history_scroll = $true; compact_stacked_cards = $true } |
+       undo_restores_clean_document = $true; independent_history_scroll = $true; two_column_cards = $true;
+       narrow_window_stacks_cards = $true } |
         ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'result.json')
     Write-Host 'Windows GPUI desktop smoke: PASS'
 } finally {

@@ -39,6 +39,9 @@ gpui_kit::assets::icon_assets!(
         Eraser,
         Delete,
         TextCursorInput,
+        // Used by the audio toolbar's hotkey button; gpui-kit bundles only a
+        // 101-icon default set, so every other icon has to be listed here.
+        Keyboard,
     ]
 );
 

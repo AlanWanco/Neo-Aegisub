@@ -218,7 +218,10 @@ impl TimingPanel {
         let mut form = div()
             .id("shift-parameters-scroll")
             .v_flex()
+            .flex_1()
+            .min_h_0()
             .min_w_0()
+            .overflow_y_scrollbar()
             .p_4()
             .gap_3()
             .child(units)
@@ -490,18 +493,22 @@ impl TimingPanel {
                     .child("点击记录填入参数，再点击应用；使用当前字幕选择。"),
             )
             .child(history);
-        // Parameters on top, history underneath: the form keeps its natural
-        // height up to a share of the page and scrolls inside, the history
-        // list takes whatever is left.
+        // Parameters beside the history, not above it: stacked they forced the
+        // tool window to 500 px wide and 1200 px tall, and the history mostly
+        // sat below the fold. Both cards share the height and scroll inside,
+        // so the wrapping row has to stretch them instead of sizing them to
+        // their content.
         div()
             .id("timing-panel")
             .flex_1()
             .min_h_0()
             .min_w_0()
             .p_3()
-            .v_flex()
+            .h_flex()
+            .items_stretch()
+            .flex_wrap()
             .gap_3()
-            .child(parameters.flex_none())
-            .child(history.flex_1())
+            .child(parameters.flex_1().min_w(px(320.)))
+            .child(history.flex_1().min_w(px(300.)))
     }
 }
