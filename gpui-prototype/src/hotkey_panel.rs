@@ -36,6 +36,7 @@ pub struct HotkeyPanel {
     pub confirm_reset: bool,
     pub error: Option<String>,
     pub pending: Option<(String, String, String)>,
+    pub pending_search: Option<String>,
     _events: Vec<Subscription>,
 }
 
@@ -71,11 +72,16 @@ impl HotkeyPanel {
             confirm_reset: false,
             error: None,
             pending: None,
+            pending_search: None,
             _events: events,
         }
     }
 
     pub fn sync(&mut self, window: &mut Window, cx: &mut App) {
+        if let Some(query) = self.pending_search.take() {
+            self.search
+                .update(cx, |state, cx| state.set_value(query, window, cx));
+        }
         if let Some((context, key, command)) = self.pending.take() {
             self.context
                 .update(cx, |state, cx| state.set_value(context, window, cx));

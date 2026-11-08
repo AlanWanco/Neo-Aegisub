@@ -51,8 +51,8 @@ def pe_has_icon(path: Path) -> bool:
             name = struct.unpack_from("<I", data, position)[0]
             if name & 0x80000000:
                 continue
-            # RT_ICON (3) and RT_GROUP_ICON (14) both prove an icon exists.
-            if name in (3, 14):
+            # Windows loads the group directory, not an individual icon image.
+            if name == 14:
                 return True
         return False
     return False
@@ -148,10 +148,9 @@ def main() -> None:
                 raise SystemExit(
                     f"{binary}: expected GUI subsystem (2), found {subsystem}"
                 )
-            # Without an embedded resource section Windows shows a generic
-            # document glyph in the taskbar and window switcher.
-            if not pe_has_icon(binary):
-                raise SystemExit(f"{binary}: missing embedded icon resource")
+        # Both the host file/shortcut and the frontend window need an icon group.
+        if binary.suffix == ".exe" and not pe_has_icon(binary):
+            raise SystemExit(f"{binary}: missing embedded icon group resource")
     if extension == ".exe":
         libmpv = root / "libmpv-2.dll"
         if not libmpv.is_file():

@@ -423,16 +423,24 @@ aegisub_c_pch = ['src/include/agi_pre_c.h']
 
 link_args = []
 link_depends = []
+host_resources = []
 if host_machine.system() == 'windows'
     manifest_file = configure_file(copy: true, input: 'src/res/aegisub.exe.manifest', output: 'aegisub.exe.manifest')
     link_args += ['/MANIFEST:EMBED', '/MANIFESTINPUT:@0@'.format(manifest_file)]
     link_depends += manifest_file
+    # Build-root copies keep the relative ICON path in aegisub.rc valid for rc.exe and windres.
+    host_rc = configure_file(copy: true, input: 'src/res/aegisub.rc', output: 'aegisub.rc')
+    host_icon = configure_file(copy: true, input: 'src/bitmaps/windows/icon.ico', output: 'aegisub.ico')
+    host_resources = import('windows').compile_resources(host_rc,
+                                                        depend_files: host_icon,
+                                                        depends: version_h,
+                                                        include_directories: version_inc)
 endif
 
 
 # Aegisub is the headless host: the whole engine as a service, with no
 # wxWidgets user interface. The GPUI front end draws everything.
-gpui_host = executable('aegisub', gpui_host_src + files('src/gpui_host.cpp'), version_h, libresrc_headers, aegisub_order_dep,
+gpui_host = executable('aegisub', gpui_host_src + files('src/gpui_host.cpp') + host_resources, version_h, libresrc_headers, aegisub_order_dep,
                        c_args: aegisub_defines,
                        cpp_args: aegisub_defines,
                        link_with: [libresrc, libaegisub],

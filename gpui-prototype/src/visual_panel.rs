@@ -60,6 +60,30 @@ const VISUAL_TOOLS: [(&str, &str); 7] = [
     ("vector_clip", "矢量裁剪"),
 ];
 
+/// Maps a `video/tool/*` command name to the tool and subtool the overlay uses,
+/// so a tool picked by shortcut or command is adopted before the next request.
+pub fn command_tool(name: &str) -> Option<(&'static str, Option<usize>)> {
+    const VCLIP_MODES: [&str; 8] = [
+        "drag",
+        "line",
+        "bicubic",
+        "convert",
+        "insert",
+        "remove",
+        "freehand",
+        "freehand_smooth",
+    ];
+    let tool = name.strip_prefix("video/tool/")?;
+    if let Some(mode) = tool.strip_prefix("vclip/") {
+        let index = VCLIP_MODES
+            .iter()
+            .position(|candidate| *candidate == mode)?;
+        return Some(("vector_clip", Some(index)));
+    }
+    let (mode, _) = VISUAL_TOOLS.iter().find(|(mode, _)| *mode == tool)?;
+    Some((*mode, None))
+}
+
 /// Overlay for the visual typesetting tools. The native tools draw through
 /// `src/visual_render.cpp`, which records primitives instead of rasterising
 /// them, so the frontend paints the recorded triangles and paths itself.
@@ -212,10 +236,20 @@ impl VisualPanel {
                             // The host canvas changed size or position: the
                             // recorded primitives are in the old pixels.
                             let weak = weak.clone();
+                            // Tool changes also rebuild the host tool. Seed its
+                            // pointer from the window even if the mouse is still.
+                            let position = window.mouse_position();
+                            let pointer = picture.contains(&position).then_some(position);
                             cx.defer(move |cx| {
                                 let _ = weak.update(cx, |view, cx| {
                                     view.visual.drawn = None;
-                                    view.queue_visual(json!({"action":"draw"}), cx);
+                                    let request = if let Some(position) = pointer {
+                                        let (x, y) = view.visual.local(position);
+                                        json!({"action":"move", "x":x, "y":y})
+                                    } else {
+                                        json!({"action":"draw"})
+                                    };
+                                    view.queue_visual(request, cx);
                                 });
                             });
                         }

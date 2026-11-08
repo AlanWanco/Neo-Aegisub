@@ -1208,7 +1208,7 @@ impl Panel {
             Self::Video => "视频",
             Self::Translation => "翻译助手",
             Self::Styles => "样式管理",
-            Self::Styling => "配样式",
+            Self::Styling => "匹配样式",
             Self::Timing => "时间平移",
             Self::Processor => "时间后处理",
             Self::Resample => "重采样",
@@ -4077,6 +4077,12 @@ impl Workspace {
     fn invoke(&mut self, mut payload: Value, cx: &mut Context<Self>) {
         let direct = payload["direct"].as_bool().unwrap_or(false);
         if payload["op"] == "command" && !direct {
+            if let Some((tool, subtool)) = payload["name"]
+                .as_str()
+                .and_then(visual_panel::command_tool)
+            {
+                self.follow_visual_command(tool, subtool, cx);
+            }
             match payload["name"].as_str() {
                 // These two belong to the front end: the host would answer them
                 // by opening its own wx window or frame.
@@ -4570,6 +4576,28 @@ impl Workspace {
         self.visual.drawn = None;
         self.visual.dragging = false;
         cx.notify();
+    }
+
+    /// A `video/tool/*` command switches the host tool without this panel
+    /// hearing about it, and the next request would switch it straight back.
+    /// On the visual page the tool is reselected as a toolbar click would be;
+    /// elsewhere it is only remembered for the next visit.
+    fn follow_visual_command(
+        &mut self,
+        tool: &'static str,
+        subtool: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_panel == Panel::Visual {
+            self.select_visual_tool(tool, subtool, cx);
+            return;
+        }
+        self.visual.tool = tool;
+        if let Some(subtool) = subtool {
+            self.visual.subtool = subtool;
+        }
+        self.visual.commands.clear();
+        self.visual.drawn = None;
     }
 
     /// Sends one interaction to the visual tool. Requests are serialised: the
@@ -7532,6 +7560,11 @@ impl Workspace {
             self.queue_visual(json!({"action":"cancel"}), cx);
         }
         self.active_panel = panel;
+        if panel == Panel::Visual {
+            // The overlay still holds the picture from the last visit, and
+            // nothing else asks for a new one unless the layout moved.
+            self.queue_visual(json!({"action":"draw"}), cx);
+        }
         if panel == Panel::Commands {
             self.refresh_catalog(cx);
         }
@@ -10297,24 +10330,24 @@ fn panel_window_size(panel: Panel) -> gpui_kit::Size<gpui_kit::Pixels> {
     let (width, height) = match panel {
         Panel::Subtitles => (1420., 920.),
         Panel::Styles => (1100., 720.),
-        Panel::Styling => (820., 520.),
-        Panel::Project => (900., 620.),
+        Panel::Styling => (640., 520.),
+        Panel::Project => (720., 620.),
         Panel::Visual => (1100., 780.),
         // 16:9 plus the header and transport rows, so the picture opens at its
         // natural shape instead of a cramped letterbox.
         Panel::Video => (980., 640.),
-        Panel::Translation => (900., 600.),
-        Panel::Timing => (860., 660.),
+        Panel::Translation => (700., 600.),
+        Panel::Timing => (700., 660.),
         Panel::Processor => (900., 600.),
-        Panel::Resample => (880., 620.),
+        Panel::Resample => (680., 620.),
         Panel::Search => (560., 640.),
-        Panel::Paste => (820., 620.),
-        Panel::VideoSettings => (820., 620.),
+        Panel::Paste => (620., 620.),
+        Panel::VideoSettings => (680., 620.),
         Panel::Attachments => (900., 600.),
         Panel::Preferences => (1000., 780.),
         Panel::Hotkeys => (980., 780.),
         Panel::Files => (980., 700.),
-        Panel::Spelling => (760., 440.),
+        Panel::Spelling => (600., 440.),
         Panel::Automation => (900., 600.),
         Panel::Commands => (900., 720.),
     };

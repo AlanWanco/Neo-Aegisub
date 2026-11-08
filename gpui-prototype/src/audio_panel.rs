@@ -462,6 +462,38 @@ impl AudioPanel {
             .gap_2()
             .items_center()
             .flex_shrink_0();
+        let transport = div()
+            .h_flex()
+            .gap_1()
+            .flex_shrink_0()
+            .child(
+                Button::new("audio-play-line")
+                    .child(Icon::new(IconName::Play).size(px(15.)))
+                    .rounded(px(999.))
+                    .small()
+                    .px(px(9.))
+                    .py(px(3.))
+                    .accessibility_label("播放当前条音频")
+                    .tooltip("播放当前条音频")
+                    .disabled(!state.loaded)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.invoke(json!({"op":"command", "name":"audio/play/line"}), cx);
+                    })),
+            )
+            .child(
+                Button::new("audio-pause")
+                    .child(Icon::new(IconName::Pause).size(px(15.)))
+                    .rounded(px(999.))
+                    .small()
+                    .px(px(9.))
+                    .py(px(3.))
+                    .accessibility_label("暂停音频播放")
+                    .tooltip("暂停播放；播放按钮从当前条起点重播")
+                    .disabled(!state.playing)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.invoke(json!({"op":"command", "name":"audio/stop"}), cx);
+                    })),
+            );
         let mode_seg = crate::page::segmented(
             cx,
             [
@@ -553,6 +585,22 @@ impl AudioPanel {
             ),
             "美杜莎模式：把全局时间热键换成音频编辑热键",
         ));
+        controls = controls.child(
+            Button::new("audio-hotkeys")
+                .child(Icon::new(IconName::Asterisk).size(px(15.)))
+                .rounded(px(999.))
+                .small()
+                .px(px(9.))
+                .py(px(3.))
+                .accessibility_label("音频快捷键设置")
+                .tooltip("打开快捷键设置并筛选音频相关绑定")
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.open_tool(crate::Panel::Hotkeys, cx, |view, cx| {
+                        view.hotkeys.pending_search = Some("audio".into());
+                        cx.notify();
+                    });
+                })),
+        );
         // Display range around the active line: it used to exist only as
         // Audio/Inactive Lines Display Mode in the preferences page, so the
         // waveform itself offered no control over what it draws around the
@@ -1513,7 +1561,7 @@ impl AudioPanel {
                     .items_center()
                     .gap_1()
                     .flex_shrink_0()
-                    .child(mode_seg)
+                    .child(div().h_flex().gap_1().child(transport).child(mode_seg))
                     .child(compact_viewport)
                     .child(sound),
             )

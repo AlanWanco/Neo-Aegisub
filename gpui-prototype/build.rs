@@ -46,8 +46,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../src/bitmaps/windows/icon.ico");
     let mut resource = winresource::WindowsResource::new();
     resource.set_icon("../src/bitmaps/windows/icon.ico");
-    resource.set("FileDescription", "Aegisub");
-    resource.set("ProductName", "Aegisub");
+    resource.set("FileDescription", "Neo Aegisub subtitle editor");
+    resource.set("ProductName", "Neo Aegisub");
     resource.set("OriginalFilename", "aegisub-gpui-prototype.exe");
     if let Some(rc) = windows_sdk_resource_compiler() {
         if let Some(directory) = rc.parent().and_then(|path| path.to_str()) {
