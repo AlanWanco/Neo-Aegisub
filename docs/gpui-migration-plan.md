@@ -263,3 +263,5 @@ macOS 用用户提供的实际 MP4 对比同一时间片，波形和频谱输出
 2026-11-08 跨平台 CI 复验（`d9d8f383d`，run `42393594702`）：八项构建全部通过；Windows x64 / ARM64 安装包、便携包及包内容检查通过，Windows x64 的 `Exercise Windows GPUI desktop` 通过，覆盖原生 renderer、输入归属、时钟推进与暂停隐藏。本地下载 10132 两种架构便携包，复验双程序、libmpv、许可证、VC 运行库及 ZIP 内容一致性通过。桌面证据仍有 YCbCr 矩阵不匹配提示框，截图不作为无遮挡预览的视觉验收结论。
 
 2026-11-08 停止维护 macOS Intel：移除 x86_64 CI／发布任务、Rosetta 安装和测试步骤，以及专用交叉编译机器文件和 sccache 层；macOS 仅保留 Apple Silicon Debug／Release，Release 原有源码依赖参数与最低系统版本保持不变。`actionlint` 通过，解析后的构建矩阵为七项，已无 Intel macOS 任务；未为本次配置删减另触发 CI。
+
+2026-11-08 恢复音频相邻字幕范围：`src/gpui_audio.cpp` 从既有 `AudioTimingController::GetRenderingStyles` 导出当前及非当前字幕区间，GPUI 为可见区间绘制填色和起止边界；范围设置与偏好表单统一使用“不显示 / 前一条 / 前一条与后一条 / 全部”，沿用原有选项索引。宿主与前端 release 构建、Rust 格式检查通过；真实宿主加载五条字幕逐项核对四种模式的区间，首尾字幕不产生不存在的相邻范围，当前句保持 3500–4500 ms。实际 GPUI 窗口已确认波形、频谱上的相邻范围及下拉菜单文案，证据保存在忽略目录 `build-ui-gpui/waveform-range-smoke/`；未触发 CI，Windows 视觉验收仍待相应环境。

@@ -100,7 +100,7 @@ agi::hotkey::Hotkey::HotkeyMap load_hotkey_map(std::string const& path) {
 std::vector<std::string> choices(std::string const& name) {
 	if (name == "App/Theme") return {"跟随系统", "浅色", "深色"};
 	if (name == "App/Auto/Load Linked Files") return {"从不", "总是", "询问"};
-	if (name == "Audio/Inactive Lines Display Mode") return {"不显示", "上一行", "上一行与下一行", "全部"};
+	if (name == "Audio/Inactive Lines Display Mode") return {"不显示", "前一条", "前一条与后一条", "全部"};
 	if (name == "Audio/Display/Waveform Style") return {"最大值", "最大值与平均值"};
 	if (name == "Video/Scroll Action" || name == "Video/Ctrl Scroll Action" || name == "Video/Shift Scroll Action") return {"调整视频框", "反向调整视频框", "缩放画面", "反向缩放画面", "平移画面", "交换 X/Y 平移", "不操作"};
 	if (name == "Video/Default Zoom") {

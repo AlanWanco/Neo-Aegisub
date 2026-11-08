@@ -8,6 +8,7 @@
 #include "ass_dialogue.h"
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
+#include "audio_rendering_style.h"
 #include "audio_renderer_waveform.h"
 #include "audio_timing.h"
 #include "include/aegisub/context.h"
@@ -47,6 +48,20 @@ bool flag(json::Object const& object, const char *key) {
 	auto value = object.find(key);
 	return value != object.end() && static_cast<json::Boolean const&>(value->second);
 }
+
+class StyleRanges final : public AudioRenderingStyleRanges {
+public:
+	json::Array ranges;
+
+	void AddRange(int start, int end, AudioRenderingStyle style) override {
+		if (style != AudioStyle_Inactive && style != AudioStyle_Selected) return;
+		json::Object range;
+		range["start"] = start;
+		range["end"] = end;
+		range["selected"] = style == AudioStyle_Selected;
+		ranges.emplace_back(std::move(range));
+	}
+};
 }
 
 namespace gpui {
@@ -122,7 +137,9 @@ struct Audio::Impl {
 		}
 		result["syllables"] = std::move(syllables);
 		json::Array markers;
+		StyleRanges ranges;
 		if (auto timing = context->audioController->GetTimingController()) {
+			timing->GetRenderingStyles(ranges);
 			AudioMarkerVector positions;
 			timing->GetMarkers(timing->GetIdealVisibleTimeRange(), positions);
 			// Every provider draws with its own pen, and the seconds ticks are
@@ -143,6 +160,7 @@ struct Audio::Impl {
 			}
 		}
 		result["markers"] = std::move(markers);
+		result["ranges"] = std::move(ranges.ranges);
 		TimeRange range = context->audioController->GetPrimaryPlaybackRange();
 		result["start"] = range.begin();
 		result["end"] = range.end();

@@ -18,9 +18,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 /// The four choices of Audio/Inactive Lines Display Mode, in host order.
-const INACTIVE_LINE_MODES: [&str; 4] = ["不显示", "上一行", "上一行与下一行", "全部"];
+const INACTIVE_LINE_MODES: [&str; 4] = ["不显示", "前一条", "前一条与后一条", "全部"];
 /// The same choices squeezed onto the chip that opens the menu.
-const INACTIVE_LINE_SHORT: [&str; 4] = ["无", "上行", "上下", "全部"];
+const INACTIVE_LINE_SHORT: [&str; 4] = ["无", "前一条", "前后", "全部"];
 
 use crate::{Workspace, format_time};
 
@@ -83,6 +83,15 @@ pub struct AudioState {
     pub syllables: Vec<Syllable>,
     #[serde(default)]
     pub markers: Vec<AudioMarker>,
+    #[serde(default)]
+    pub ranges: Vec<AudioRange>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AudioRange {
+    pub start: i64,
+    pub end: i64,
+    pub selected: bool,
 }
 
 /// One vertical line on the audio display. The host sends the pen each marker
@@ -557,7 +566,7 @@ impl AudioPanel {
                 .px(gpui_kit::px(11.))
                 .py(gpui_kit::px(3.))
                 .disabled(!state.loaded)
-                .tooltip("波形显示当前行前后字幕的范围")
+                .tooltip("在波形上显示当前字幕前一条、后一条或全部字幕的范围")
                 .child(format!("范围 {}", INACTIVE_LINE_SHORT[inactive]))
                 .child(
                     Icon::new(IconName::ChevronDown)
@@ -704,6 +713,33 @@ impl AudioPanel {
             "Colour/Audio Display/Line Boundary Inactive Line",
             gpui_kit::rgba(0xe5c78bff).into(),
         );
+        for range in &state.ranges {
+            if range.end <= self.view_start || range.start >= self.view_start + self.span {
+                continue;
+            }
+            let left = ((range.start - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
+            let right = ((range.end - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
+            let fill = if range.selected {
+                gpui_kit::rgba(0x65b8ff18)
+            } else {
+                gpui_kit::rgba(0xe5c78b18)
+            };
+            let mut band = div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(width * left))
+                .w(px(width * (right - left)))
+                .bg(fill)
+                .border_color(inactive_line);
+            if range.start >= self.view_start {
+                band = band.border_l_1();
+            }
+            if range.end <= self.view_start + self.span {
+                band = band.border_r_1();
+            }
+            graph = graph.child(band);
+        }
         for marker in &state.markers {
             if marker.time < self.view_start || marker.time > self.view_start + self.span {
                 continue;
