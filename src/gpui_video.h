@@ -28,11 +28,12 @@ public:
     VideoFrames(VideoFrames const&) = delete;
     VideoFrames& operator=(VideoFrames const&) = delete;
 
-    /// Answers {"op":"video_frame", "since":N?}. The head reports `serial`, `frame`
-    /// (-1 when none), `width`, `height`, `pixel_format` ("bgra8") and `byte_length`.
-    /// The body is the newest frame, tightly packed, top row first. When `since`
-    /// equals the current `serial`, or no frame exists, the body is empty and
-    /// `unchanged` says whether the caller's copy is current.
+    /// Answers {"op":"video_frame", "since":N?, "variant":"display"?, "format":"bgra8"?}.
+    /// Display replies default to tightly packed BGRA8, top row first; `format:"png"`
+    /// encodes the displayed frame on demand. The raw/subs variants always return PNG.
+    /// The head reports `serial`, `frame` (-1 when none), `width`, `height`,
+    /// `pixel_format` and `byte_length`. Only BGRA8 previews use `since` to return
+    /// an empty body with `unchanged:true`; no frame also returns an empty body.
     RawReply Frame(json::Object const& request);
 
     /// Stops listening for frames and drops the held one. Safe to repeat.

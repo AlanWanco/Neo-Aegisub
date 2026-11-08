@@ -306,15 +306,13 @@ int Run(char const *argv0, std::vector<std::string> const& files) {
 
 	auto context = std::make_unique<agi::Context>();
 
-	StartupLog("Open command line files");
-	if (!files.empty()) {
-		std::vector<agi::fs::path> paths;
-		for (auto const& file : files) paths.emplace_back(file);
-		context->project->LoadList(paths);
-	}
-
 	StartupLog("Start bridge");
-	auto bridge = std::make_unique<GpuiBridge>(context.get());
+	auto bridge = std::make_unique<GpuiBridge>(context.get(), [&] {
+		if (files.empty()) return;
+		StartupLog("Open command line files");
+		std::vector<agi::fs::path> paths(files.begin(), files.end());
+		context->project->LoadList(paths);
+	});
 	if (!bridge->Start()) {
 		std::fprintf(stderr, "gpui-host: could not start the bridge\n");
 		return 1;

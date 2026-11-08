@@ -62,6 +62,7 @@
 #include <random>
 #include <sstream>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include <libaegisub/path.h>
 
@@ -249,6 +250,7 @@ bool gpui::ProgressCancelled() {
 
 struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 	agi::Context *context;
+	std::function<void()> on_frontend_ready;
 	gpui::VideoFrames video_frames;
 	gpui::Audio audio;
 	gpui::Visual visual;
@@ -264,7 +266,8 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 	/// ASS file last written for mpv's subtitle track; removed when replaced or on Stop.
 	std::string native_subtitle_file;
 
-	explicit Impl(agi::Context *context) : context(context), video_frames(context), audio(context), visual(context), spelling(context) {
+	Impl(agi::Context *context, std::function<void()> on_frontend_ready)
+	: context(context), on_frontend_ready(std::move(on_frontend_ready)), video_frames(context), audio(context), visual(context), spelling(context) {
 		commit_connection = context->ass->AddCommitListener([this](int type, const AssDialogue *) {
 			++revision;
 			if (type == AssFile::COMMIT_NEW || (type & (AssFile::COMMIT_STYLES | AssFile::COMMIT_SCRIPTINFO)))
@@ -354,6 +357,12 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 			return;
 		}
 		std::string const& op = op_it->second;
+
+		// Loading can pump nested requests for choices; consume the callback first.
+		if (on_frontend_ready) {
+			auto ready = std::exchange(on_frontend_ready, {});
+			ready();
+		}
 
 		// Automation scripts ask for trust through the front end, so they are
 		// created on the first request: by then a client is connected and the
@@ -860,7 +869,10 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 			if (!is_json_string(path_it->second))
 				return R"({"ok":false,"error":"save path must be a string"})";
 			std::string const& path = path_it->second;
-			if (agi::fs::FileExists(agi::fs::path(path))) {
+			// The front end passes overwrite only after the native Save dialog confirmed replacement.
+			bool overwrite = false;
+			if (auto item = object.find("overwrite"); item != object.end()) overwrite = static_cast<json::Boolean const&>(item->second);
+			if (!overwrite && agi::fs::FileExists(agi::fs::path(path))) {
 				// A modal prompt inside the bridge handler would block the front
 				// end that is waiting for this response.
 				gpui::PushNotice(_("Confirm Save As"),
@@ -972,7 +984,8 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 	}
 };
 
-GpuiBridge::GpuiBridge(agi::Context *context) : impl(std::make_unique<Impl>(context)) { }
+GpuiBridge::GpuiBridge(agi::Context *context, std::function<void()> on_frontend_ready)
+: impl(std::make_unique<Impl>(context, std::move(on_frontend_ready))) { }
 GpuiBridge::~GpuiBridge() = default;
 
 bool GpuiBridge::Start() {

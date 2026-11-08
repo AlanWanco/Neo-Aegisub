@@ -963,7 +963,7 @@ impl Default for VideoView {
     }
 }
 
-/// Header of a `video_frame` reply. The pixels follow as `width * height * 4`
+/// Header of a raw preview `video_frame` reply. The pixels follow as `width * height * 4`
 /// raw BGRA8 bytes, top row first; an empty body means no new frame.
 #[derive(Deserialize)]
 struct VideoFrameHead {
@@ -2037,7 +2037,7 @@ impl Workspace {
             {
                 let _ = weak.update(cx, |view, cx| {
                     view.invoke(
-                        json!({"op":"save_as", "path":file.path().to_string_lossy()}),
+                        json!({"op":"save_as", "path":file.path().to_string_lossy(), "overwrite":true}),
                         cx,
                     )
                 });
@@ -2244,12 +2244,12 @@ impl Workspace {
         cx.spawn(async move |_, cx| {
             let result = bridge
                 .raw_call(
-                    json!({"op": "video_frame", "since": -1, "variant": variant}),
+                    json!({"op": "video_frame", "since": -1, "variant": variant, "format": "png"}),
                     MAX_VIDEO_FRAME_BYTES,
                 )
                 .await;
             match result {
-                Ok((_, bytes)) if !bytes.is_empty() => {
+                Ok((header, bytes)) if !bytes.is_empty() && header["pixel_format"] == "png" => {
                     let image = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, bytes);
                     let _ = weak.update(cx, |view, cx| {
                         cx.write_to_clipboard(gpui_kit::ClipboardItem {

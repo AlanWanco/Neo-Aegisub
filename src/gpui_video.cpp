@@ -173,6 +173,12 @@ RawReply VideoFrames::Frame(json::Object const& request) {
     if (auto it = request.find("variant"); it != request.end())
         variant = static_cast<json::String const&>(it->second);
 
+    std::string format = "bgra8";
+    if (auto it = request.find("format"); it != request.end())
+        format = static_cast<json::String const&>(it->second);
+    if (format != "bgra8" && format != "png")
+        throw std::runtime_error("unknown video frame format");
+
     if (variant != "display") {
         if (!impl->context->project->VideoProvider())
             throw std::runtime_error("no video is open");
@@ -203,11 +209,11 @@ RawReply VideoFrames::Frame(json::Object const& request) {
 
     json::Object result;
     result["ok"] = true;
-    result["pixel_format"] = std::string("bgra8");
+    result["pixel_format"] = format;
     result["serial"] = impl->serial;
     result["frame"] = static_cast<int64_t>(impl->latest_number);
     auto const& frame = impl->latest;
-    if (!frame || since == impl->serial) {
+    if (!frame || (format == "bgra8" && since == impl->serial)) {
         result["width"] = static_cast<int64_t>(0);
         result["height"] = static_cast<int64_t>(0);
         result["byte_length"] = static_cast<int64_t>(0);
@@ -219,6 +225,18 @@ RawReply VideoFrames::Frame(json::Object const& request) {
     size_t const row = width * 4;
     if (frame->pitch < 0 || static_cast<size_t>(frame->pitch) < row || frame->data.size() < static_cast<size_t>(frame->pitch) * height)
         throw std::runtime_error("video frame has an unexpected pixel layout");
+    if (format == "png") {
+        // Copy needs the displayed frame as an image. Only this request pays for
+        // PNG encoding; the preview stream stays raw BGRA.
+        RasterImage raster = GetRgbImage(*frame);
+        std::vector<unsigned char> png = EncodePng(raster.width, raster.height, raster.data.data(), false);
+        result["width"] = static_cast<int64_t>(width);
+        result["height"] = static_cast<int64_t>(height);
+        result["byte_length"] = static_cast<int64_t>(png.size());
+        result["unchanged"] = false;
+        return {Encode(result), std::move(png)};
+    }
+
     std::vector<unsigned char> pixels(row * height);
     for (size_t y = 0; y < height; ++y) {
         size_t const source = frame->flipped ? height - 1 - y : y;

@@ -60,7 +60,8 @@ class GpuiBridge {
 	std::unique_ptr<Impl> impl;
 
 public:
-	explicit GpuiBridge(agi::Context *context);
+	/// Runs startup work once on the first authenticated frontend request.
+	GpuiBridge(agi::Context *context, std::function<void()> on_frontend_ready);
 	~GpuiBridge();
 	GpuiBridge(const GpuiBridge&) = delete;
 	GpuiBridge& operator=(const GpuiBridge&) = delete;
