@@ -19,11 +19,14 @@ public static class GpuiDesktop {
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, int data, UIntPtr extra);
     public delegate bool EnumWindowProc(IntPtr hwnd, IntPtr param);
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumWindowProc callback, IntPtr param);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowProc callback, IntPtr param);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
     public struct Point { public int X, Y; }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int count);
-    public static IntPtr FindVideoChild(IntPtr parent) {
+    public static IntPtr FindVideoWindow(IntPtr parent, int processId) {
         IntPtr result = IntPtr.Zero;
         EnumChildWindows(parent, (hwnd, _) => {
             var name = new System.Text.StringBuilder(256);
@@ -32,7 +35,27 @@ public static class GpuiDesktop {
             result = hwnd;
             return false;
         }, IntPtr.Zero);
+        if (result != IntPtr.Zero) return result;
+        // The mpv window is an owned popup of no child window, so it only shows
+        // up among the frontend process' top-level windows.
+        EnumWindows((hwnd, _) => {
+            uint owner;
+            GetWindowThreadProcessId(hwnd, out owner);
+            if (owner != (uint)processId) return true;
+            var name = new System.Text.StringBuilder(256);
+            GetClassName(hwnd, name, name.Capacity);
+            if (name.ToString() != "AegisubMpvVideo") return true;
+            result = hwnd;
+            return false;
+        }, IntPtr.Zero);
         return result;
+    }
+    public static long HitTest(IntPtr hwnd) {
+        Rect rect;
+        GetWindowRect(hwnd, out rect);
+        int x = (rect.Left + rect.Right) / 2;
+        int y = (rect.Top + rect.Bottom) / 2;
+        return SendMessage(hwnd, 0x0084, IntPtr.Zero, (IntPtr)(((y & 0xFFFF) << 16) | (x & 0xFFFF))).ToInt64();
     }
     public static bool HasVisibleRenderer(IntPtr parent) {
         bool found = false;
@@ -206,30 +229,29 @@ with path.open('wb') as out:
     $null = Invoke-Bridge @{ op = 'open'; kind = 'video'; path = $videoPath }
     Press-Control 'libmpv'
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
-    $videoChild = [IntPtr]::Zero
+    $videoWindow = [IntPtr]::Zero
     for ($attempt = 0; $attempt -lt 50; $attempt++) {
-        $videoChild = [GpuiDesktop]::FindVideoChild($script:windowHandle)
-        if ($videoChild -ne [IntPtr]::Zero -and [GpuiDesktop]::IsWindowVisible($videoChild) -and
-            [GpuiDesktop]::HasVisibleRenderer($videoChild)) { break }
+        $videoWindow = [GpuiDesktop]::FindVideoWindow($script:windowHandle, $frontend.Id)
+        if ($videoWindow -ne [IntPtr]::Zero -and [GpuiDesktop]::IsWindowVisible($videoWindow) -and
+            [GpuiDesktop]::HasVisibleRenderer($videoWindow)) { break }
         Start-Sleep -Milliseconds 100
     }
-    if ($videoChild -eq [IntPtr]::Zero -or -not [GpuiDesktop]::IsWindowVisible($videoChild) -or
-        -not [GpuiDesktop]::HasVisibleRenderer($videoChild)) {
+    if ($videoWindow -eq [IntPtr]::Zero -or -not [GpuiDesktop]::IsWindowVisible($videoWindow) -or
+        -not [GpuiDesktop]::HasVisibleRenderer($videoWindow)) {
         throw 'Native libmpv preview did not become visible'
     }
     $before = Invoke-Bridge @{ op = 'playback' }
     Start-Sleep -Milliseconds 200
-    Save-Screenshot 'native-video-playing'
     $after = Invoke-Bridge @{ op = 'playback' }
     if ($after.video_time -le $before.video_time) { throw 'Video clock did not advance during native playback' }
     $videoBounds = [GpuiDesktop+Rect]::new()
     $mainBounds = [GpuiDesktop+Rect]::new()
-    [void][GpuiDesktop]::GetWindowRect($videoChild, [ref]$videoBounds)
+    [void][GpuiDesktop]::GetWindowRect($videoWindow, [ref]$videoBounds)
     [void][GpuiDesktop]::GetWindowRect($script:windowHandle, [ref]$mainBounds)
     if ($videoBounds.Right -le $videoBounds.Left -or $videoBounds.Bottom -le $videoBounds.Top -or
         $videoBounds.Left -lt $mainBounds.Left -or $videoBounds.Top -lt $mainBounds.Top -or
         $videoBounds.Right -gt $mainBounds.Right -or $videoBounds.Bottom -gt $mainBounds.Bottom) {
-        throw 'Native video child lies outside the workspace'
+        throw 'Native video window lies outside the workspace'
     }
     $videoCenter = [GpuiDesktop+Point]::new()
     $videoCenter.X = [int](($videoBounds.Left + $videoBounds.Right) / 2)
@@ -237,28 +259,72 @@ with path.open('wb') as out:
     if ([GpuiDesktop]::WindowFromPoint($videoCenter) -ne $script:windowHandle) {
         throw 'Native video steals mouse input from the GPUI workspace'
     }
+    # A disabled or layered child window would swallow clicks even when hit
+    # testing skips it, so ask the window itself what it answers.
+    if ([GpuiDesktop]::HitTest($videoWindow) -ne -1) {
+        throw 'Native video does not report HTTRANSPARENT to hit testing'
+    }
+    # Two frames a fraction of a second apart must differ. mpv keeps decoding
+    # while DWM stops compositing its presents, so the clock check above cannot
+    # see a frozen picture; only the pixels can.
+    function Save-VideoFrame {
+        $frameBounds = [GpuiDesktop+Rect]::new()
+        [void][GpuiDesktop]::GetWindowRect($videoWindow, [ref]$frameBounds)
+        $image = [Drawing.Bitmap]::new($frameBounds.Right - $frameBounds.Left, $frameBounds.Bottom - $frameBounds.Top)
+        $graphics = [Drawing.Graphics]::FromImage($image)
+        try { $graphics.CopyFromScreen($frameBounds.Left, $frameBounds.Top, 0, 0, $image.Size) }
+        finally { $graphics.Dispose() }
+        return $image
+    }
+    $firstFrame = Save-VideoFrame
+    Start-Sleep -Milliseconds 300
+    $secondFrame = Save-VideoFrame
+    $changed = 0
+    $shades = @{}
+    try {
+        for ($y = 0; $y -lt $firstFrame.Height; $y += 6) {
+            for ($x = 0; $x -lt $firstFrame.Width; $x += 6) {
+                $earlier = $firstFrame.GetPixel($x, $y).ToArgb()
+                $later = $secondFrame.GetPixel($x, $y).ToArgb()
+                if ($earlier -ne $later) { $changed++ }
+                $shades[$later] = $true
+            }
+        }
+    } finally { $firstFrame.Dispose(); $secondFrame.Dispose() }
+    if ($shades.Count -lt 3) { throw 'Native video preview is a flat surface, not the picture' }
+    if ($changed -lt 18) { throw 'Native video preview froze: two frames are identical' }
+    Save-Screenshot 'native-video-playing'
     $originalWidth = $mainBounds.Right - $mainBounds.Left
     $originalHeight = $mainBounds.Bottom - $mainBounds.Top
-    $resizedWidth = [Math]::Min($screen.Width, $originalWidth + 160)
-    if ($resizedWidth -gt $originalWidth) {
-        [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, 0, 0, $resizedWidth, $originalHeight, 0x0006)
+    # Growing the window hands the extra width to the editor column, so the
+    # video area only moves when the window shrinks.
+    $shrunkWidth = [Math]::Max(640, $originalWidth - 240)
+    if ($shrunkWidth -lt $originalWidth) {
+        [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, 0, 0, $shrunkWidth, $originalHeight, 0x0006)
         Start-Sleep -Milliseconds 500
         $resizedVideo = [GpuiDesktop+Rect]::new()
-        [void][GpuiDesktop]::GetWindowRect($videoChild, [ref]$resizedVideo)
+        $resizedMain = [GpuiDesktop+Rect]::new()
+        [void][GpuiDesktop]::GetWindowRect($videoWindow, [ref]$resizedVideo)
+        [void][GpuiDesktop]::GetWindowRect($script:windowHandle, [ref]$resizedMain)
         if ($resizedVideo.Right - $resizedVideo.Left -eq $videoBounds.Right - $videoBounds.Left -and
-            $resizedVideo.Bottom - $resizedVideo.Top -eq $videoBounds.Bottom - $videoBounds.Top) {
-            throw 'Native video child did not follow workspace resize'
+            $resizedVideo.Bottom - $resizedVideo.Top -eq $videoBounds.Bottom - $videoBounds.Top -and
+            $resizedVideo.Left -eq $videoBounds.Left -and $resizedVideo.Top -eq $videoBounds.Top) {
+            throw 'Native video window did not follow workspace resize'
+        }
+        if ($resizedVideo.Left -lt $resizedMain.Left -or $resizedVideo.Top -lt $resizedMain.Top -or
+            $resizedVideo.Right -gt $resizedMain.Right -or $resizedVideo.Bottom -gt $resizedMain.Bottom) {
+            throw 'Native video window left the resized workspace'
         }
         Save-Screenshot 'native-video-resized'
         [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, 0, 0, $originalWidth, $originalHeight, 0x0006)
         Start-Sleep -Milliseconds 300
     }
-    $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        if (-not [GpuiDesktop]::IsWindowVisible($videoChild)) { break }
+        if (-not [GpuiDesktop]::IsWindowVisible($videoWindow)) { break }
         Start-Sleep -Milliseconds 100
     }
-    if ([GpuiDesktop]::IsWindowVisible($videoChild)) { throw 'Pause left native video above the editing preview' }
+    if ([GpuiDesktop]::IsWindowVisible($videoWindow)) { throw 'Pause left native video above the editing preview' }
     Save-Screenshot 'native-video-paused'
     Press-Control 'libmpv'
     Press-Control '时间平移'
@@ -330,7 +396,8 @@ with path.open('wb') as out:
     if ($wrappedClear.Top -le $wrappedAmount.Top) { throw 'Narrow window did not stack the history under the form' }
     Save-Screenshot 'timing-wrapped'
     Assert-Clean $base
-    @{ actual_windows_desktop = $true; visible_amount_field = $true; exact_form_shift_ms = 1250;
+    @{ actual_windows_desktop = $true; native_video_frames_differ = $true; native_video_click_through = $true;
+       visible_amount_field = $true; exact_form_shift_ms = 1250;
        undo_restores_clean_document = $true; independent_history_scroll = $true; two_column_cards = $true;
        narrow_window_stacks_cards = $true } |
         ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'result.json')

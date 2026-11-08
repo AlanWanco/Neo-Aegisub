@@ -14,12 +14,16 @@
 //! the window it creates can be found among `NSApp windows`. Its creation is
 //! asynchronous, so `place` retries the lookup on each render until it appears.
 //!
-//! Windows: a container child HWND (class `AegisubMpvVideo`) is created under
-//! GPUI's HWND before mpv starts, and mpv is given it with the `wid` option, so
-//! mpv renders into the container. WS_DISABLED keeps input on GPUI: Windows
-//! excludes disabled child windows (and their descendants) from mouse targeting.
-//! The container is placed in physical pixels (logical bounds times the window
-//! DPI over 96) and hidden with `ShowWindow` when paused or editing.
+//! Windows: a container HWND (class `AegisubMpvVideo`) is created as an owned
+//! popup of GPUI's HWND before mpv starts, and mpv is given it with the `wid`
+//! option, so mpv renders into the container. A child window cannot be used:
+//! DWM stops compositing mpv's flip-model presents inside GPUI's
+//! DirectComposition window and the picture freezes. The container is layered
+//! with an explicit alpha and `WS_EX_TRANSPARENT`, and it answers
+//! `HTTRANSPARENT` to `WM_NCHITTEST`, so hit testing and clicks stay on GPUI.
+//! The container is placed in screen pixels (client origin plus logical bounds
+//! times the window DPI over 96, clipped to the client area) and hidden with
+//! `ShowWindow` when paused or editing.
 //!
 //! Threads: after initialization the GPUI main thread never waits on mpv.
 //! Commands go through `mpv_command_async`, and `time-pos` is read by a reader
@@ -61,6 +65,9 @@ type MpvHandle = c_void;
 #[repr(C)]
 struct MpvEvent {
     event_id: c_int,
+    error: c_int,
+    reply_userdata: u64,
+    data: *const c_void,
 }
 
 type FnCreate = unsafe extern "C" fn() -> *mut MpvHandle;
@@ -238,24 +245,24 @@ fn spawn_reader(api: Arc<MpvApi>, mpv: usize, shared: Arc<Shared>) -> JoinHandle
         let handle = mpv as *mut MpvHandle;
         while !shared.stop.load(Ordering::Acquire) {
             let event = unsafe { (api.wait_event)(handle, POSITION_POLL.as_secs_f64()) };
-            // The event pointer is only valid until the next `mpv_wait_event`.
-            if !event.is_null() {
-                match unsafe { (*event).event_id } {
-                    MPV_EVENT_SHUTDOWN => break,
-                    MPV_EVENT_FILE_LOADED => {
-                        let mut pending = shared
-                            .pending_subs
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner);
-                        let generation = shared.load_generation.load(Ordering::Acquire);
-                        shared
-                            .loaded_generation
-                            .store(generation, Ordering::Release);
-                        if let Some(path) = pending.take() {
-                            let _ = queue_subtitles(&api, handle, &path);
-                        }
-                    }
-                    _ => {}
+            let event_id = if event.is_null() {
+                -1
+            } else {
+                // The event pointer is only valid until the next `mpv_wait_event`.
+                unsafe { (*event).event_id }
+            };
+            if event_id == MPV_EVENT_SHUTDOWN {
+                break;
+            }
+            if event_id == MPV_EVENT_FILE_LOADED {
+                let mut pending = shared
+                    .pending_subs
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let generation = shared.load_generation.load(Ordering::Acquire);
+                shared.loaded_generation.store(generation, Ordering::Release);
+                if let Some(path) = pending.take() {
+                    let _ = queue_subtitles(&api, handle, &path);
                 }
             }
             let mut value = 0f64;
@@ -334,7 +341,7 @@ impl MpvSurface {
     }
 
     fn configure(&self) -> Result<()> {
-        let mut options: Vec<(&str, String)> = [
+        let mut options: Vec<(String, String)> = [
             ("config", "no"),
             ("load-scripts", "no"),
             ("terminal", "no"),
@@ -350,22 +357,28 @@ impl MpvSurface {
             ("force-window", "yes"),
         ]
         .into_iter()
-        .map(|(name, value)| (name, value.to_owned()))
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
         .collect();
-        options.extend(self.video.options());
+        options.extend(
+            self.video
+                .options()
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value)),
+        );
         for (name, value) in &options {
-            let c_name = CString::new(*name)?;
+            let c_name = CString::new(name.as_str())?;
             let c_value = CString::new(value.as_str())?;
             let status = unsafe {
                 (self.api.set_option_string)(self.mpv, c_name.as_ptr(), c_value.as_ptr())
             };
             // Without script engines these features are absent, as are their options.
-            if status == MPV_ERROR_OPTION_NOT_FOUND && matches!(*name, "load-scripts" | "osc") {
+            if status == MPV_ERROR_OPTION_NOT_FOUND {
                 continue;
             }
             check(status, &format!("mpv option {name}={value}"))?;
         }
-        check(unsafe { (self.api.initialize)(self.mpv) }, "mpv_initialize")
+        check(unsafe { (self.api.initialize)(self.mpv) }, "mpv_initialize")?;
+        Ok(())
     }
 
     /// Queues a command without waiting for mpv.
@@ -476,9 +489,8 @@ impl MpvSurface {
             }
             return;
         }
-        let drifted = self
-            .position()
-            .map_or(true, |position| (position - target).abs() > PLAY_TOLERANCE);
+        let position = self.position();
+        let drifted = position.map_or(true, |position| (position - target).abs() > PLAY_TOLERANCE);
         let retry = self
             .seek_at
             .map_or(true, |at| now.duration_since(at) >= SEEK_RETRY);
@@ -806,9 +818,19 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    //! A child HWND under GPUI's window that mpv renders into through `wid`.
-    //! The container has WS_DISABLED, so its descendants render without taking
-    //! keyboard or mouse input away from GPUI.
+    //! An owned popup HWND that mpv renders into through `wid`, kept over the
+    //! video area of GPUI's window.
+    //!
+    //! A `WS_CHILD` container cannot be used: mpv presents through a DXGI
+    //! flip-model swapchain, and DWM stops compositing those presents once the
+    //! window sits inside GPUI's `WS_EX_NOREDIRECTIONBITMAP` (DirectComposition)
+    //! window, so the picture freezes on the first frames while mpv keeps
+    //! decoding at full rate. An owned popup presents on its own surface, which
+    //! is also how the AppKit backend shows video (a separate NSWindow). Being
+    //! owned keeps it above the workspace, in front of it after activation and
+    //! hidden with it. The popup is layered and transparent with an explicit
+    //! alpha, and it answers `HTTRANSPARENT` to `WM_NCHITTEST`, so every click
+    //! on the video area keeps going to GPUI.
 
     use anyhow::{Result, anyhow};
     use gpui_kit::{Bounds, Pixels, Window};
@@ -820,15 +842,21 @@ mod platform {
     type Hwnd = *mut c_void;
     type WndProc = unsafe extern "system" fn(Hwnd, u32, usize, isize) -> isize;
 
-    const WS_CHILD: u32 = 0x4000_0000;
-    const WS_DISABLED: u32 = 0x0800_0000;
     const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
     const WS_CLIPCHILDREN: u32 = 0x0200_0000;
+    const WS_POPUP: u32 = 0x8000_0000;
+    const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    const WS_EX_LAYERED: u32 = 0x0008_0000;
+    const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+    const LWA_ALPHA: u32 = 0x0000_0002;
     const SWP_NOZORDER: u32 = 0x0004;
     const SWP_NOACTIVATE: u32 = 0x0010;
     const SW_HIDE: i32 = 0;
     const SW_SHOWNOACTIVATE: i32 = 4;
     const WM_CLOSE: u32 = 0x0010;
+    const WM_NCHITTEST: u32 = 0x0084;
+    const HTTRANSPARENT: isize = -1;
     const DEFAULT_DPI: u32 = 96;
     const INITIAL_SIZE: i32 = 640;
 
@@ -875,12 +903,29 @@ mod platform {
             flags: u32,
         ) -> i32;
         fn GetDpiForWindow(hwnd: Hwnd) -> u32;
+        fn ClientToScreen(hwnd: Hwnd, point: *mut Point) -> i32;
+        fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn PostMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> i32;
+        fn SetLayeredWindowAttributes(hwnd: Hwnd, colour: u32, alpha: u8, flags: u32) -> i32;
     }
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+    }
+
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    #[repr(C)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
     }
 
     fn wide(text: &str) -> Vec<u16> {
@@ -896,10 +941,24 @@ mod platform {
         unsafe { GetModuleHandleW(ptr::null()) }
     }
 
+    /// The container never takes the mouse: hit testing has to go to GPUI
+    /// underneath it, which also receives the clicks.
+    unsafe extern "system" fn container_proc(
+        hwnd: Hwnd,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        if message == WM_NCHITTEST {
+            return HTTRANSPARENT;
+        }
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+
     fn register_class() -> std::result::Result<(), String> {
         let class = WndClassW {
             style: 0,
-            wnd_proc: Some(DefWindowProcW),
+            wnd_proc: Some(container_proc),
             cls_extra: 0,
             wnd_extra: 0,
             instance: module_instance(),
@@ -935,12 +994,14 @@ mod platform {
         )
     }
 
-    /// The container HWND that mpv renders into, child of GPUI's window.
+    /// The popup HWND that mpv renders into, owned by GPUI's window.
     pub struct Video {
         parent: Hwnd,
         hwnd: Hwnd,
         visible: bool,
-        frame: Option<(i32, i32, i32, i32)>,
+        /// Screen rectangle of the last placement and the parent's client
+        /// origin, which moves without changing `bounds`.
+        placed: Option<((i32, i32), (i32, i32, i32, i32))>,
     }
 
     impl Video {
@@ -949,13 +1010,16 @@ mod platform {
             static REGISTERED: LazyLock<std::result::Result<(), String>> =
                 LazyLock::new(register_class);
             REGISTERED.clone().map_err(|error| anyhow!("{error}"))?;
+            let ex_style =
+                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT;
+            let style = WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
             // Created hidden; `place` shows it once the video is playing.
             let hwnd = unsafe {
                 CreateWindowExW(
-                    0,
+                    ex_style,
                     class_name().as_ptr(),
                     ptr::null(),
-                    WS_CHILD | WS_DISABLED | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                    style,
                     0,
                     0,
                     INITIAL_SIZE,
@@ -969,11 +1033,14 @@ mod platform {
             if hwnd.is_null() {
                 return Err(anyhow!("CreateWindowExW failed for the mpv video window"));
             }
+            // A layered window is only click-through once it has an explicit
+            // alpha; without one hit-testing treats it as opaque.
+            unsafe { SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) };
             Ok(Self {
                 parent,
                 hwnd,
                 visible: false,
-                frame: None,
+                placed: None,
             })
         }
 
@@ -982,28 +1049,43 @@ mod platform {
             vec![("wid", (self.hwnd as usize).to_string())]
         }
 
-        /// Places the container over `bounds` in physical pixels (logical bounds
-        /// times the parent's DPI over 96) and shows or hides it.
+        /// Places the popup over `bounds` and shows or hides it.
+        ///
+        /// `bounds` are logical pixels of the keyboard focus window; a popup is
+        /// positioned in screen pixels, so the bounds are scaled by the parent's
+        /// DPI and offset by its client origin. The result is clipped to the
+        /// client area, which a child window would have done by itself.
         pub fn place(&mut self, bounds: Bounds<Pixels>, visible: bool) {
             let dpi = unsafe { GetDpiForWindow(self.parent) };
             let dpi = if dpi == 0 { DEFAULT_DPI } else { dpi };
             let scale = f64::from(dpi) / f64::from(DEFAULT_DPI);
-            let frame = physical_frame(bounds, scale);
-            if self.frame != Some(frame) {
-                let (x, y, width, height) = frame;
+            let (x, y, width, height) = physical_frame(bounds, scale);
+            let mut origin = Point { x: 0, y: 0 };
+            unsafe { ClientToScreen(self.parent, &mut origin) };
+            let mut client = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+            unsafe { GetClientRect(self.parent, &mut client) };
+            let left = (origin.x + x).max(origin.x);
+            let top = (origin.y + y).max(origin.y);
+            let right = (origin.x + x + width).min(origin.x + client.right);
+            let bottom = (origin.y + y + height).min(origin.y + client.bottom);
+            let frame = (left, top, (right - left).max(0), (bottom - top).max(0));
+            let placed = ((origin.x, origin.y), frame);
+            let fits = frame.2 > 0 && frame.3 > 0;
+            if fits && self.placed != Some(placed) {
                 unsafe {
                     SetWindowPos(
                         self.hwnd,
                         ptr::null_mut(),
-                        x,
-                        y,
-                        width,
-                        height,
+                        frame.0,
+                        frame.1,
+                        frame.2,
+                        frame.3,
                         SWP_NOZORDER | SWP_NOACTIVATE,
                     )
                 };
-                self.frame = Some(frame);
+                self.placed = Some(placed);
             }
+            let visible = visible && fits;
             if self.visible != visible {
                 let cmd = if visible { SW_SHOWNOACTIVATE } else { SW_HIDE };
                 unsafe { ShowWindow(self.hwnd, cmd) };
