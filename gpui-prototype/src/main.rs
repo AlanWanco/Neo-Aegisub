@@ -1246,7 +1246,7 @@ impl Panel {
             Self::Attachments => IconName::Paperclip,
             Self::Files => IconName::FolderOpen,
             Self::Preferences => IconName::Settings,
-            Self::Hotkeys => IconName::Asterisk,
+            Self::Hotkeys => IconName::Keyboard,
             Self::Commands => IconName::Menu,
         }
     }
