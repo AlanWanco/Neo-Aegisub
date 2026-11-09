@@ -1223,8 +1223,16 @@ impl AudioPanel {
         // pure view panning here: they move `view_start` and never the cursor.
         let (ruler, scrollbar) = if state.loaded {
             let p = Theme::global(cx);
+            let palette = crate::workspace_theme::Palette::new(p.is_dark());
             let duration = state.duration.max(1);
-            let ink = gpui_kit::rgba(0xc6d0dcff);
+            // The ruler is chrome that pans the view, so it follows the UI
+            // theme. The graph below it stays dark either way: the rendered
+            // waveform image is drawn for a dark display by every scheme.
+            let (ruler_bg, ink): (gpui_kit::Hsla, gpui_kit::Hsla) = if p.is_dark() {
+                (graph_bg, gpui_kit::rgba(0xc6d0dcff).into())
+            } else {
+                (palette.inset, palette.muted)
+            };
             let step = ruler_step(self.span, width);
             let mut ruler = div()
                 .id("audio-ruler")
@@ -1233,7 +1241,7 @@ impl AudioPanel {
                 .h(px(20.))
                 .flex_shrink_0()
                 .overflow_hidden()
-                .bg(graph_bg)
+                .bg(ruler_bg)
                 .rounded_t(gpui_kit::px(crate::workspace_theme::RADIUS_MD))
                 .cursor_pointer()
                 .on_any_mouse_down(cx.listener(
