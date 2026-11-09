@@ -51,6 +51,8 @@ const MPV_FORMAT_DOUBLE: c_int = 5;
 const MPV_ERROR_OPTION_NOT_FOUND: c_int = -5;
 const MPV_EVENT_SHUTDOWN: c_int = 1;
 const MPV_EVENT_FILE_LOADED: c_int = 8;
+/// mpv has displayed the first frame after a seek or an unpause.
+const MPV_EVENT_PLAYBACK_RESTART: c_int = 21;
 /// How often the reader thread refreshes the cached `time-pos`.
 const POSITION_POLL: Duration = Duration::from_millis(10);
 /// Drift from the host clock that triggers a seek while playing, in seconds.
@@ -186,6 +188,10 @@ struct Shared {
     loaded_generation: AtomicU64,
     /// Subtitle file waiting for the current file's FILE_LOADED.
     pending_subs: Mutex<Option<String>>,
+    /// Incremented for every PLAYBACK_RESTART: the frame mpv was asked to show
+    /// is on screen. Nothing else proves that, since `time-pos` moves to the
+    /// target before the picture does.
+    restarts: AtomicU64,
     stop: AtomicBool,
 }
 
@@ -196,6 +202,7 @@ impl Shared {
             load_generation: AtomicU64::new(0),
             loaded_generation: AtomicU64::new(0),
             pending_subs: Mutex::new(None),
+            restarts: AtomicU64::new(0),
             stop: AtomicBool::new(false),
         }
     }
@@ -254,6 +261,9 @@ fn spawn_reader(api: Arc<MpvApi>, mpv: usize, shared: Arc<Shared>) -> JoinHandle
             if event_id == MPV_EVENT_SHUTDOWN {
                 break;
             }
+            if event_id == MPV_EVENT_PLAYBACK_RESTART {
+                shared.restarts.fetch_add(1, Ordering::Release);
+            }
             if event_id == MPV_EVENT_FILE_LOADED {
                 let mut pending = shared
                     .pending_subs
@@ -297,14 +307,19 @@ pub struct MpvSurface {
     playing: bool,
     rate: f64,
     seek_at: Option<Instant>,
+    /// `Shared::restarts` before the seek or unpause whose first frame the
+    /// window still waits for; `None` when nothing is awaited.
+    restart_mark: Option<u64>,
     subtitle_revision: Option<u64>,
+    /// Letterbox colour, as `0xRRGGBB`, matching the card the window covers.
+    background: u32,
 }
 
 impl MpvSurface {
     /// Starts mpv with its native window and loads `path`. The window is
     /// created before mpv initializes (Windows hands it to mpv as `wid`); on
     /// macOS it is attached by `place` once mpv has created it.
-    pub fn new(window: &Window, path: &str) -> Result<Self> {
+    pub fn new(window: &Window, path: &str, background: u32) -> Result<Self> {
         let api = mpv_api()?;
         let mpv = unsafe { (api.create)() };
         if mpv.is_null() {
@@ -328,7 +343,9 @@ impl MpvSurface {
             playing: false,
             rate: 1.,
             seek_at: None,
+            restart_mark: None,
             subtitle_revision: None,
+            background,
         };
         surface.configure()?;
         surface.reader = Some(spawn_reader(
@@ -359,6 +376,10 @@ impl MpvSurface {
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value.to_owned()))
         .collect();
+        options.push((
+            "background-color".to_owned(),
+            format!("#{:06x}", self.background),
+        ));
         options.extend(
             self.video
                 .options()
@@ -409,6 +430,55 @@ impl MpvSurface {
         self.seek_at = Some(now);
     }
 
+    /// Slack when comparing `time-pos` with a time on the host clock.
+    fn settle_tolerance(frame_secs: f64) -> f64 {
+        frame_secs.max(0.05)
+    }
+
+    /// Asks `settled` to wait for a restart caused by the command queued next.
+    fn await_restart(&mut self) {
+        self.restart_mark
+            .get_or_insert(self.shared.restarts.load(Ordering::Acquire));
+    }
+
+    /// True when mpv has painted the first frame after its last seek or
+    /// unpause, at `time_ms`. `time-pos` reaches the target while mpv is still
+    /// decoding towards it, so the clock alone cannot tell whether the picture
+    /// is the requested one; the restart event can, and waiting for it keeps a
+    /// resumed window from showing an older frame for a moment.
+    pub fn settled(&mut self, time_ms: i64, frame_secs: f64) -> bool {
+        let tolerance = Self::settle_tolerance(frame_secs);
+        let reached = self
+            .position()
+            .is_some_and(|position| (position - time_ms as f64 / 1000.).abs() <= tolerance);
+        if !reached {
+            return false;
+        }
+        match self.restart_mark {
+            Some(mark) if self.shared.restarts.load(Ordering::Acquire) <= mark => false,
+            Some(_) => {
+                self.restart_mark = None;
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// Recolours the letterbox under the picture, which mpv paints itself: the
+    /// window covers the card, so a black border would not match a light theme.
+    pub fn set_background(&mut self, background: u32) {
+        if background == self.background {
+            return;
+        }
+        let value = format!("#{background:06x}");
+        if self
+            .command(&["set", "background-color", value.as_str()])
+            .is_ok()
+        {
+            self.background = background;
+        }
+    }
+
     pub fn path(&self) -> &str {
         &self.path
     }
@@ -435,6 +505,7 @@ impl MpvSurface {
         self.command(&["loadfile", path, "replace"])?;
         self.path = path.to_owned();
         self.seek_at = None;
+        self.restart_mark = None;
         self.subtitle_revision = None;
         Ok(())
     }
@@ -482,8 +553,18 @@ impl MpvSurface {
         let target = time_ms as f64 / 1000. + frame_secs * 0.5;
         let now = Instant::now();
         if !self.playing {
-            // Seek before unpausing so playback never starts from a stale position.
-            self.seek(target, now);
+            // A plain resume starts from the frame mpv is already on: seeking
+            // there would repaint from the preceding keyframe and show an
+            // older picture for a moment. Only a position the host has moved
+            // away from needs the seek, which then lands before the unpause.
+            let position = self.position();
+            let moved = position.map_or(true, |position| {
+                (position - target).abs() > Self::settle_tolerance(frame_secs)
+            });
+            if moved {
+                self.seek(target, now);
+            }
+            self.await_restart();
             if self.set_pause(false).is_ok() {
                 self.playing = true;
             }
@@ -984,14 +1065,17 @@ mod platform {
     }
 
     /// Converts logical bounds to physical client pixels of the parent window.
+    /// Both edges are rounded, not the origin and the size: GPUI paints the
+    /// picture at fractional device pixels, so rounding each of those would
+    /// move the right and bottom edges by up to a pixel and the window would
+    /// visibly change size when it takes over from the GPUI picture.
     fn physical_frame(bounds: Bounds<Pixels>, scale: f64) -> (i32, i32, i32, i32) {
-        let scaled = |value: Pixels| (f64::from(f32::from(value)) * scale).round() as i32;
-        (
-            scaled(bounds.origin.x),
-            scaled(bounds.origin.y),
-            scaled(bounds.size.width).max(1),
-            scaled(bounds.size.height).max(1),
-        )
+        let scaled = |value: Pixels| f64::from(f32::from(value)) * scale;
+        let left = scaled(bounds.origin.x).round() as i32;
+        let top = scaled(bounds.origin.y).round() as i32;
+        let right = scaled(bounds.origin.x + bounds.size.width).round() as i32;
+        let bottom = scaled(bounds.origin.y + bounds.size.height).round() as i32;
+        (left, top, (right - left).max(1), (bottom - top).max(1))
     }
 
     /// The popup HWND that mpv renders into, owned by GPUI's window.
@@ -1055,6 +1139,12 @@ mod platform {
         /// positioned in screen pixels, so the bounds are scaled by the parent's
         /// DPI and offset by its client origin. The result is clipped to the
         /// client area, which a child window would have done by itself.
+        ///
+        /// The frame is then shrunk by one device pixel per edge, the amount by
+        /// which GPUI paints the preview picture inside its element: the host
+        /// frame and mpv must cover the same rectangle, otherwise the picture
+        /// jumps by two pixels every time playback hands it from one renderer
+        /// to the other.
         pub fn place(&mut self, bounds: Bounds<Pixels>, visible: bool) {
             let dpi = unsafe { GetDpiForWindow(self.parent) };
             let dpi = if dpi == 0 { DEFAULT_DPI } else { dpi };
@@ -1064,10 +1154,10 @@ mod platform {
             unsafe { ClientToScreen(self.parent, &mut origin) };
             let mut client = Rect { left: 0, top: 0, right: 0, bottom: 0 };
             unsafe { GetClientRect(self.parent, &mut client) };
-            let left = (origin.x + x).max(origin.x);
-            let top = (origin.y + y).max(origin.y);
-            let right = (origin.x + x + width).min(origin.x + client.right);
-            let bottom = (origin.y + y + height).min(origin.y + client.bottom);
+            let left = (origin.x + x).max(origin.x) + 1;
+            let top = (origin.y + y).max(origin.y) + 1;
+            let right = (origin.x + x + width).min(origin.x + client.right) - 1;
+            let bottom = (origin.y + y + height).min(origin.y + client.bottom) - 1;
             let frame = (left, top, (right - left).max(0), (bottom - top).max(0));
             let placed = ((origin.x, origin.y), frame);
             let fits = frame.2 > 0 && frame.3 > 0;

@@ -78,6 +78,10 @@ pub struct Palette {
     pub divider: Hsla,
     pub text: Hsla,
     pub muted: Hsla,
+    /// Solid fill for narrow handles and scrollbar thumbs. `muted` doubles as
+    /// text on dark cards, which leaves it far too heavy to sit on the light
+    /// theme's white panels as a shape.
+    pub grip: Hsla,
     pub accent: Hsla,
     pub selected: Hsla,
     pub selected_text: Hsla,
@@ -98,6 +102,7 @@ impl Palette {
             divider: color(0x2b303c, 0xe6eaf1),
             text: color(0xe9ecf4, 0x252c3c),
             muted: color(0xa1aabd, 0x626e83),
+            grip: color(0xa1aabd, 0xc2cbd9),
             accent: color(0xa7b4ff, 0x425cb3),
             selected: color(0x303c5b, 0xe5eaff),
             selected_text: color(0xe2e8ff, 0x293e83),

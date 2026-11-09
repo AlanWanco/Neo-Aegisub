@@ -326,6 +326,124 @@ with path.open('wb') as out:
     }
     if ([GpuiDesktop]::IsWindowVisible($videoWindow)) { throw 'Pause left native video above the editing preview' }
     Save-Screenshot 'native-video-paused'
+
+    # Pausing hands the picture back to the workspace, whose cached frame is the
+    # one from before playback started. A flat colour per second names the frame
+    # by hue, so a card still holding that first frame cannot pass unnoticed.
+    $colourPath = Join-Path $runtime 'native-video-colour.y4m'
+    @'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+w, h, fps = 320, 180, 60
+colours = [(235,128,128),(81,90,240),(145,54,34),(41,240,110),
+           (210,16,146),(107,202,222),(170,166,16),(128,128,128)]
+with path.open('wb') as out:
+    out.write(f'YUV4MPEG2 W{w} H{h} F{fps}:1 Ip A1:1 C420jpeg\n'.encode())
+    for frame in range(fps * 16):
+        y, u, v = colours[(frame // fps) % len(colours)]
+        out.write(b'FRAME\n')
+        out.write(bytes([y]) * (w*h) + bytes([u]) * (w*h//4) + bytes([v]) * (w*h//4))
+'@ | python - $colourPath
+    if ($LASTEXITCODE -ne 0) { throw 'Could not generate the colour video fixture' }
+
+    # One capture of the video window: its averaged colour plus the share of
+    # pixels that read as green or red. The picture is letterboxed inside the
+    # window and the workspace card paints its own frame over the same rect, so
+    # a mean is too diluted to name the frame; the share is not.
+    function Measure-VideoFrame {
+        $image = Save-VideoFrame
+        try {
+            $sumR = 0; $sumG = 0; $sumB = 0; $count = 0; $green = 0; $red = 0
+            for ($y = 0; $y -lt $image.Height; $y += 4) {
+                for ($x = 0; $x -lt $image.Width; $x += 4) {
+                    $pixel = $image.GetPixel($x, $y)
+                    $r = $pixel.R; $g = $pixel.G; $b = $pixel.B
+                    $sumR += $r; $sumG += $g; $sumB += $b; $count++
+                    if ($g -ge 90 -and ($g - $r) -ge 40 -and ($g - $b) -ge 40) { $green++ }
+                    if ($r -ge 90 -and ($r - $g) -ge 60 -and ($r - $b) -ge 60) { $red++ }
+                }
+            }
+            if ($count -eq 0) { $count = 1 }
+            return [pscustomobject]@{
+                Mean = @([int]($sumR / $count), [int]($sumG / $count), [int]($sumB / $count))
+                Green = $green / $count
+                Red = $red / $count
+            }
+        } finally { $image.Dispose() }
+    }
+    function Format-Colour($Colour) { return ('{0},{1},{2}' -f $Colour[0], $Colour[1], $Colour[2]) }
+    function Wait-VideoHidden {
+        for ($attempt = 0; $attempt -lt 40; $attempt++) {
+            if (-not [GpuiDesktop]::IsWindowVisible($videoWindow)) { return }
+            Start-Sleep -Milliseconds 50
+        }
+        throw 'Native video window stayed up after a pause'
+    }
+    # Captures the window as fast as the screen allows, with the instant each
+    # capture started and the window's visibility at that instant.
+    function Watch-VideoFrames([int]$Count) {
+        $frames = @()
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        for ($index = 0; $index -lt $Count; $index++) {
+            $sample = Measure-VideoFrame
+            $frames += ,@($sample.Mean, [int]$watch.ElapsedMilliseconds, [GpuiDesktop]::IsWindowVisible($videoWindow), $sample.Green, $sample.Red)
+        }
+        return ,$frames
+    }
+
+    $null = Invoke-Bridge @{ op = 'open'; kind = 'video'; path = $colourPath }
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
+    # A new file rebuilds the surface, so the window found above is gone.
+    $videoWindow = [IntPtr]::Zero
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        $videoWindow = [GpuiDesktop]::FindVideoWindow($script:windowHandle, $frontend.Id)
+        if ($videoWindow -ne [IntPtr]::Zero -and [GpuiDesktop]::IsWindowVisible($videoWindow)) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if ($videoWindow -eq [IntPtr]::Zero) { throw 'Colour video: native preview did not appear' }
+    $state = $null
+    for ($attempt = 0; $attempt -lt 120; $attempt++) {
+        $state = Invoke-Bridge @{ op = 'playback' }
+        if ($state.video_time -ge 2400) { break }
+        Start-Sleep -Milliseconds 60
+    }
+    if (-not $state -or $state.video_time -lt 2400) { throw 'Colour video did not reach its second second' }
+    $pauseSample = Measure-VideoFrame
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
+    Wait-VideoHidden
+    $cardSample = Measure-VideoFrame
+    $cardColour = $cardSample.Mean
+    if ($cardColour[0] -ge 180 -and $cardColour[1] -ge 180 -and $cardColour[2] -ge 180) {
+        throw "Pause uncovered the frame from the start of playback: card $(Format-Colour $cardColour)"
+    }
+    if ($cardSample.Green -lt 0.02) {
+        throw "Paused card $(Format-Colour $cardColour) is not the pause frame $(Format-Colour $pauseSample.Mean): green share $($cardSample.Green)"
+    }
+    # Resuming from the paused position needs no seek, so the window comes back
+    # at the same picture instead of the frame it was left on.
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
+    $resumeFrames = Watch-VideoFrames 48
+    $firstVisible = $resumeFrames | Where-Object { $_[2] } | Select-Object -First 1
+    if (-not $firstVisible) { throw 'Resume never showed the native video window' }
+    if ($firstVisible[1] -gt 800) { throw "Resume showed the picture only after $($firstVisible[1]) ms" }
+    if ($firstVisible[3] -lt 0.02) {
+        throw "Resume revealed $(Format-Colour $firstVisible[0]) instead of the paused picture: green share $($firstVisible[3])"
+    }
+    # A seek made while paused leaves mpv behind the workspace: the window must
+    # stay hidden until its own seek lands, so the pre-seek frame never shows.
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
+    Wait-VideoHidden
+    $null = Invoke-Bridge @{ op = 'seek'; frame = 540 }
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
+    $seekFrames = Watch-VideoFrames 48
+    $firstSeekVisible = $seekFrames | Where-Object { $_[2] } | Select-Object -First 1
+    if (-not $firstSeekVisible) { throw 'Resume after a paused seek never showed the native video window' }
+    if ($firstSeekVisible[1] -gt 800) { throw "Resume after a paused seek took $($firstSeekVisible[1]) ms" }
+    if ($firstSeekVisible[4] -lt 0.02) {
+        throw "Resume after a paused seek showed $(Format-Colour $firstSeekVisible[0]) instead of the seeked frame: red share $($firstSeekVisible[4])"
+    }
+    $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
+    Wait-VideoHidden
     Press-Control 'libmpv'
     Press-Control '时间平移'
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'

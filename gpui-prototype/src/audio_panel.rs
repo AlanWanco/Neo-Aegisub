@@ -1410,7 +1410,7 @@ impl AudioPanel {
                     .left(relative(thumb_left))
                     .w(relative(thumb_width))
                     .rounded(px(4.))
-                    .bg(p.muted_foreground),
+                    .bg(crate::workspace_theme::Palette::new(p.is_dark()).grip),
             );
             (ruler.into_any_element(), scrollbar.into_any_element())
         } else {
