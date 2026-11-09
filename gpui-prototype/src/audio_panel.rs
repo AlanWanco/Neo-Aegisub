@@ -1221,7 +1221,7 @@ impl AudioPanel {
         // The wx audio display lets you drag its ruler to scroll sideways and
         // gives you a scrollbar whose thumb is the visible window. Both are
         // pure view panning here: they move `view_start` and never the cursor.
-        let (ruler, scrollbar) = if state.loaded {
+        let (ruler, hints, scrollbar) = if state.loaded {
             let p = Theme::global(cx);
             let palette = crate::workspace_theme::Palette::new(p.is_dark());
             let duration = state.duration.max(1);
@@ -1391,24 +1391,46 @@ impl AudioPanel {
                         .rounded(px(3.))
                         .bg(ink.opacity(0.16)),
                 );
+            // The line hints used to ride inside the scrollbar lane, where the
+            // thumb covered them and the strip read as one control. They get a
+            // band of their own above it: the active line in its boundary
+            // colour, and the lines either side of it in the same light yellow
+            // the waveform paints around the active one.
+            let (previous, next) = neighbour_ranges(
+                &state.ranges,
+                (state.start, state.end),
+                (self.view_start, self.view_start + self.span),
+            );
+            let mut hints = div()
+                .relative()
+                .w_full()
+                .h(px(10.))
+                .flex_shrink_0()
+                .overflow_hidden();
+            let neighbour = appearance
+                .color(
+                    "Colour/Audio Display/Line Boundary Inactive Line",
+                    gpui_kit::rgba(0xe5c78bff).into(),
+                )
+                .opacity(0.75);
+            for (start, end) in [previous, next].into_iter().flatten() {
+                hints = hints.child(hint_pill(
+                    start.max(0) as f32 / duration as f32,
+                    end.max(0) as f32 / duration as f32,
+                    neighbour,
+                ));
+            }
             if state.end > state.start {
-                let from = state.start.max(0) as f32 / duration as f32;
-                let to = state.end.max(0) as f32 / duration as f32;
-                scrollbar = scrollbar.child(
-                    div()
-                        .absolute()
-                        .top(px(5.))
-                        .h(px(6.))
-                        .left(relative(from.clamp(0., 1.)))
-                        .w(relative((to - from).clamp(0., 1.).max(0.002)))
-                        .rounded(px(3.))
-                        .bg(appearance
-                            .color(
-                                "Colour/Audio Display/Line boundary Start",
-                                rgb(0x7ec2ff).into(),
-                            )
-                            .opacity(0.45)),
-                );
+                hints = hints.child(hint_pill(
+                    state.start.max(0) as f32 / duration as f32,
+                    state.end.max(0) as f32 / duration as f32,
+                    appearance
+                        .color(
+                            "Colour/Audio Display/Line boundary Start",
+                            rgb(0x7ec2ff).into(),
+                        )
+                        .opacity(0.45),
+                ));
             }
             scrollbar = scrollbar.child(
                 div()
@@ -1420,9 +1442,17 @@ impl AudioPanel {
                     .rounded(px(4.))
                     .bg(crate::workspace_theme::Palette::new(p.is_dark()).grip),
             );
-            (ruler.into_any_element(), scrollbar.into_any_element())
+            (
+                ruler.into_any_element(),
+                hints.into_any_element(),
+                scrollbar.into_any_element(),
+            )
         } else {
-            (div().into_any_element(), div().into_any_element())
+            (
+                div().into_any_element(),
+                div().into_any_element(),
+                div().into_any_element(),
+            )
         };
         let palette = crate::workspace_theme::Palette::new(Theme::global(cx).is_dark());
         let mut panel = div()
@@ -1452,8 +1482,9 @@ impl AudioPanel {
             .p_3()
             .child(title_row.when(!state.loaded, |row| row.child(load_audio)))
             .child(ruler)
-            // The scrollbar hugs the waveform the way the wx timeline does, so the
-            // pair reads as one control instead of two separate rows.
+            // The hint strip and the scrollbar hug the waveform the way the wx
+            // timeline does, so the group reads as one control rather than
+            // three separate rows.
             .child(
                 div()
                     .v_flex()
@@ -1461,6 +1492,7 @@ impl AudioPanel {
                     .min_w_0()
                     .min_h_0()
                     .child(graph)
+                    .child(hints)
                     .child(scrollbar),
             );
         let compact_viewport = div()
@@ -1652,9 +1684,46 @@ fn thumb_fractions(width: f32, span: i64, duration: i64, view_start: i64) -> (f3
     (left / track, thumb / track)
 }
 
+/// One line's span in the strip above the audio scrollbar, positioned by
+/// fraction of the whole duration so it lines up with the waveform.
+fn hint_pill(from: f32, to: f32, ink: gpui_kit::Hsla) -> impl IntoElement {
+    div()
+        .absolute()
+        .top(px(2.))
+        .h(px(6.))
+        .left(relative(from.clamp(0., 1.)))
+        .w(relative((to - from).clamp(0., 1.).max(0.002)))
+        .rounded(px(3.))
+        .bg(ink)
+}
+
+/// The lines immediately before and after the active one, limited to what the
+/// hint strip draws: selected lines already carry a blue band in the waveform,
+/// and a line entirely off screen has no place on the strip.
+fn neighbour_ranges(
+    ranges: &[AudioRange],
+    (active_start, active_end): (i64, i64),
+    (view_start, view_end): (i64, i64),
+) -> (Option<(i64, i64)>, Option<(i64, i64)>) {
+    let mut previous: Option<(i64, i64)> = None;
+    let mut next: Option<(i64, i64)> = None;
+    for range in ranges {
+        if range.selected || range.end <= view_start || range.start >= view_end {
+            continue;
+        }
+        if range.end <= active_start && previous.is_none_or(|(_, end)| range.end > end) {
+            previous = Some((range.start, range.end));
+        }
+        if range.start >= active_end && next.is_none_or(|(start, _)| range.start < start) {
+            next = Some((range.start, range.end));
+        }
+    }
+    (previous, next)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AudioPanel, PanDrag, thumb_fractions};
+    use super::{AudioPanel, AudioRange, PanDrag, neighbour_ranges, thumb_fractions};
 
     #[test]
     fn zoom_preserves_time_under_pointer() {
@@ -1786,5 +1855,61 @@ mod tests {
         assert_eq!(short.len(), tall.len());
         assert!(short.iter().zip(&tall).all(|(a, b)| a != b));
         assert!(tall.iter().all(|key| key.height == 240));
+    }
+
+    fn range(start: i64, end: i64, selected: bool) -> AudioRange {
+        AudioRange {
+            start,
+            end,
+            selected,
+        }
+    }
+
+    #[test]
+    fn neighbour_ranges_picks_the_lines_either_side_of_the_active_one() {
+        let view = (0, 60_000);
+        let ranges = [
+            range(0, 2000, false),
+            range(9000, 11_000, false),
+            range(20_000, 22_000, false),
+        ];
+        assert_eq!(
+            neighbour_ranges(&ranges, (4000, 6000), view),
+            (Some((0, 2000)), Some((9000, 11_000)))
+        );
+        // Only the previous line is on offer when the mode draws just that one.
+        assert_eq!(
+            neighbour_ranges(&ranges[..1], (4000, 6000), view),
+            (Some((0, 2000)), None)
+        );
+        // Nothing ends before a line that starts the file, and nothing follows
+        // the last line in the view.
+        assert_eq!(
+            neighbour_ranges(&ranges, (0, 1000), view),
+            (None, Some((9000, 11_000)))
+        );
+        assert_eq!(
+            neighbour_ranges(&ranges, (20_000, 22_000), view),
+            (Some((9000, 11_000)), None)
+        );
+    }
+
+    #[test]
+    fn neighbour_ranges_takes_the_nearest_line_and_skips_what_it_cannot_draw() {
+        let view = (0, 30_000);
+        let ranges = [
+            range(0, 1000, false),
+            range(1500, 3500, false),
+            // Selected: the waveform already bands it in blue.
+            range(3700, 3900, true),
+            range(7000, 7500, false),
+            range(9000, 11_000, false),
+            // Past the right edge of the view.
+            range(40_000, 41_000, false),
+        ];
+        assert_eq!(
+            neighbour_ranges(&ranges, (4000, 6000), view),
+            (Some((1500, 3500)), Some((7000, 7500)))
+        );
     }
 }
