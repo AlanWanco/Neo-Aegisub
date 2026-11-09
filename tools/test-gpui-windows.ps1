@@ -227,7 +227,6 @@ with path.open('wb') as out:
 '@ | python - $videoPath
     if ($LASTEXITCODE -ne 0) { throw 'Could not generate native video fixture' }
     $null = Invoke-Bridge @{ op = 'open'; kind = 'video'; path = $videoPath }
-    Press-Control 'libmpv'
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
     $videoWindow = [IntPtr]::Zero
     for ($attempt = 0; $attempt -lt 50; $attempt++) {
@@ -446,7 +445,6 @@ with path.open('wb') as out:
         throw "Resume after a paused seek showed $(Format-Colour $firstSeekVisible[0]) instead of the seeked frame: red share $($firstSeekVisible[4])"
     }
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
-    Press-Control 'libmpv'
     Press-Control '时间平移'
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'
     $input = Find-Control '平移时长' -Kind Edit

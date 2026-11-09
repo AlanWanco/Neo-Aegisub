@@ -1395,8 +1395,10 @@ struct Workspace {
     /// The picture lives in its own window; the embedded card is hidden until
     /// that window closes again.
     video_popped: bool,
-    /// Experimental libmpv native surface on macOS and Windows.
-    native_video: bool,
+    /// The file whose native libmpv surface could not be created. mpv is the
+    /// renderer on macOS and Windows; this only stops it retrying one bad file.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    native_video_failed: Option<String>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     mpv_surface: Option<MpvSurface>,
     /// Whether mpv draws the picture: fitted, with no visual or overscan overlay.
@@ -1696,7 +1698,8 @@ impl Workspace {
             show_audio: true,
             show_video: true,
             video_popped: false,
-            native_video: false,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            native_video_failed: None,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             mpv_surface: None,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -4805,8 +4808,7 @@ impl Workspace {
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn update_native_video(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if !self.native_video
-            || !self.snapshot.video
+        if !self.snapshot.video
             || self.snapshot.video_path.is_empty()
             || self.video_popped
         {
@@ -4819,6 +4821,11 @@ impl Workspace {
             return;
         }
         let path = self.snapshot.video_path.clone();
+        if self.native_video_failed.as_deref() == Some(path.as_str()) {
+            self.mpv_surface = None;
+            self.native_visible = false;
+            return;
+        }
         // mpv's window covers the picture, but rounding inside it can still
         // leave a row or column of its own, painted in the card's colour.
         let background = rgb_hex(Palette::current(cx).inset);
@@ -4831,7 +4838,7 @@ impl Workspace {
             match MpvSurface::new(window, &path, background) {
                 Ok(surface) => self.mpv_surface = Some(surface),
                 Err(error) => {
-                    self.native_video = false;
+                    self.native_video_failed = Some(path.clone());
                     self.native_visible = false;
                     let status = format!("原生视频不可用：{error}");
                     if self.status != status {
@@ -7903,29 +7910,13 @@ impl Workspace {
             "未加载视频".into()
         };
         let zoom_percent = self.video_zoom_percent();
-        // The picture is a GPU texture painted by the workspace; zoom and pan are
-        // local to the view, so these buttons only touch local state.
+        // Zoom and pan are local to the view; mpv and the workspace both place
+        // the picture from them, so these buttons only touch local state.
         let controls = div()
             .h_flex()
             .gap_1()
             .items_center()
             .flex_shrink_0()
-            .when(
-                cfg!(any(target_os = "macos", target_os = "windows")),
-                |controls| {
-                    controls.child(
-                        Button::new("video-native-mpv")
-                            .small()
-                            .label("libmpv")
-                            .selected(self.native_video)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.native_video = !view.native_video;
-                                view.refresh_video_frame(cx);
-                                cx.notify();
-                            })),
-                    )
-                },
-            )
             .child(
                 Button::new("video-content-out")
                     .rounded(gpui_kit::px(999.))
