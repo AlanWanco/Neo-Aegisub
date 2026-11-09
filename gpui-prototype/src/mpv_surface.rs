@@ -530,7 +530,9 @@ impl MpvSurface {
         if rate != self.rate && self.set_speed(rate).is_ok() {
             self.rate = rate;
         }
-        let target = time_ms as f64 / 1000. + frame_secs * 0.5;
+        // Match the host's frame timestamp. Adding half a frame can make an
+        // exact seek select the next frame when switching preview renderers.
+        let target = time_ms as f64 / 1000.;
         self.shared
             .desired_position
             .store(target.to_bits(), Ordering::Release);
