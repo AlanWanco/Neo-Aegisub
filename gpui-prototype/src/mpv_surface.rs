@@ -184,6 +184,10 @@ struct Shared {
     load_generation: AtomicU64,
     /// `load_generation` at the last FILE_LOADED event seen by the reader.
     loaded_generation: AtomicU64,
+    /// `f64` bits of the seconds the host wants on screen; NaN until the first
+    /// `sync`. mpv drops a seek queued while a file is still loading, so the
+    /// reader replays this once FILE_LOADED arrives.
+    desired_position: AtomicU64,
     /// Subtitle file waiting for the current file's FILE_LOADED.
     pending_subs: Mutex<Option<String>>,
     stop: AtomicBool,
@@ -195,6 +199,7 @@ impl Shared {
             position: AtomicU64::new(f64::NAN.to_bits()),
             load_generation: AtomicU64::new(0),
             loaded_generation: AtomicU64::new(0),
+            desired_position: AtomicU64::new(f64::NAN.to_bits()),
             pending_subs: Mutex::new(None),
             stop: AtomicBool::new(false),
         }
@@ -261,6 +266,18 @@ fn spawn_reader(api: Arc<MpvApi>, mpv: usize, shared: Arc<Shared>) -> JoinHandle
                     .unwrap_or_else(PoisonError::into_inner);
                 let generation = shared.load_generation.load(Ordering::Acquire);
                 shared.loaded_generation.store(generation, Ordering::Release);
+                // A seek queued before this event is dropped by mpv, which
+                // left the picture on the first frame while the timeline sat
+                // at the restored cursor. Replay the host's position now.
+                let desired = f64::from_bits(shared.desired_position.load(Ordering::Acquire));
+                if desired.is_finite() {
+                    let text = format!("{desired:.6}");
+                    let _ = queue_command(
+                        &api,
+                        handle,
+                        &["seek", text.as_str(), "absolute+exact"],
+                    );
+                }
                 if let Some(path) = pending.take() {
                     let _ = queue_subtitles(&api, handle, &path);
                 }
@@ -514,6 +531,9 @@ impl MpvSurface {
             self.rate = rate;
         }
         let target = time_ms as f64 / 1000. + frame_secs * 0.5;
+        self.shared
+            .desired_position
+            .store(target.to_bits(), Ordering::Release);
         let now = Instant::now();
         if !playing {
             if self.playing && self.set_pause(true).is_ok() {
@@ -521,7 +541,14 @@ impl MpvSurface {
             }
             // mpv keeps the picture up while paused, so it has to follow the
             // host here too: a paused seek or a frame step would otherwise
-            // leave the picture where playback stopped.
+            // leave the picture where playback stopped. A seek queued before
+            // FILE_LOADED is dropped by mpv while the async API still reports
+            // it as sent, so recording it as applied would leave a restored
+            // cursor showing the first frame; the reader repeats
+            // `desired_position` once the file is in.
+            if !self.shared.file_loaded() {
+                return;
+            }
             let retry = self
                 .seek_at
                 .map_or(true, |at| now.duration_since(at) >= SEEK_RETRY);
