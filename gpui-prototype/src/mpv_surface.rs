@@ -51,8 +51,6 @@ const MPV_FORMAT_DOUBLE: c_int = 5;
 const MPV_ERROR_OPTION_NOT_FOUND: c_int = -5;
 const MPV_EVENT_SHUTDOWN: c_int = 1;
 const MPV_EVENT_FILE_LOADED: c_int = 8;
-/// mpv has displayed the first frame after a seek or an unpause.
-const MPV_EVENT_PLAYBACK_RESTART: c_int = 21;
 /// How often the reader thread refreshes the cached `time-pos`.
 const POSITION_POLL: Duration = Duration::from_millis(10);
 /// Drift from the host clock that triggers a seek while playing, in seconds.
@@ -188,10 +186,6 @@ struct Shared {
     loaded_generation: AtomicU64,
     /// Subtitle file waiting for the current file's FILE_LOADED.
     pending_subs: Mutex<Option<String>>,
-    /// Incremented for every PLAYBACK_RESTART: the frame mpv was asked to show
-    /// is on screen. Nothing else proves that, since `time-pos` moves to the
-    /// target before the picture does.
-    restarts: AtomicU64,
     stop: AtomicBool,
 }
 
@@ -202,7 +196,6 @@ impl Shared {
             load_generation: AtomicU64::new(0),
             loaded_generation: AtomicU64::new(0),
             pending_subs: Mutex::new(None),
-            restarts: AtomicU64::new(0),
             stop: AtomicBool::new(false),
         }
     }
@@ -261,9 +254,6 @@ fn spawn_reader(api: Arc<MpvApi>, mpv: usize, shared: Arc<Shared>) -> JoinHandle
             if event_id == MPV_EVENT_SHUTDOWN {
                 break;
             }
-            if event_id == MPV_EVENT_PLAYBACK_RESTART {
-                shared.restarts.fetch_add(1, Ordering::Release);
-            }
             if event_id == MPV_EVENT_FILE_LOADED {
                 let mut pending = shared
                     .pending_subs
@@ -307,9 +297,9 @@ pub struct MpvSurface {
     playing: bool,
     rate: f64,
     seek_at: Option<Instant>,
-    /// `Shared::restarts` before the seek or unpause whose first frame the
-    /// window still waits for; `None` when nothing is awaited.
-    restart_mark: Option<u64>,
+    /// Host time (ms) of the paused position already sent to mpv, so a paused
+    /// seek is queued once instead of on every render.
+    paused_at: Option<i64>,
     subtitle_revision: Option<u64>,
     /// Letterbox colour, as `0xRRGGBB`, matching the card the window covers.
     background: u32,
@@ -343,7 +333,7 @@ impl MpvSurface {
             playing: false,
             rate: 1.,
             seek_at: None,
-            restart_mark: None,
+            paused_at: None,
             subtitle_revision: None,
             background,
         };
@@ -425,46 +415,22 @@ impl MpvSurface {
         (!value.is_nan()).then_some(value)
     }
 
-    fn seek(&mut self, target: f64, now: Instant) {
+    /// Queues a seek and reports whether mpv took the command. Before the file
+    /// is loaded mpv rejects it; `sync` then retries after `SEEK_RETRY`.
+    fn seek(&mut self, target: f64, now: Instant) -> bool {
         let text = format!("{target:.6}");
-        // Queued without waiting. If the file is not loaded yet mpv rejects it;
-        // the position stays drifted, so `sync` retries after SEEK_RETRY.
-        let _ = self.command(&["seek", text.as_str(), "absolute+exact"]);
-        self.seek_at = Some(now);
+        let queued = self
+            .command(&["seek", text.as_str(), "absolute+exact"])
+            .is_ok();
+        if queued {
+            self.seek_at = Some(now);
+        }
+        queued
     }
 
     /// Slack when comparing `time-pos` with a time on the host clock.
     fn settle_tolerance(frame_secs: f64) -> f64 {
         frame_secs.max(0.05)
-    }
-
-    /// Asks `settled` to wait for a restart caused by the command queued next.
-    fn await_restart(&mut self) {
-        self.restart_mark
-            .get_or_insert(self.shared.restarts.load(Ordering::Acquire));
-    }
-
-    /// True when mpv has painted the first frame after its last seek or
-    /// unpause, at `time_ms`. `time-pos` reaches the target while mpv is still
-    /// decoding towards it, so the clock alone cannot tell whether the picture
-    /// is the requested one; the restart event can, and waiting for it keeps a
-    /// resumed window from showing an older frame for a moment.
-    pub fn settled(&mut self, time_ms: i64, frame_secs: f64) -> bool {
-        let tolerance = Self::settle_tolerance(frame_secs);
-        let reached = self
-            .position()
-            .is_some_and(|position| (position - time_ms as f64 / 1000.).abs() <= tolerance);
-        if !reached {
-            return false;
-        }
-        match self.restart_mark {
-            Some(mark) if self.shared.restarts.load(Ordering::Acquire) <= mark => false,
-            Some(_) => {
-                self.restart_mark = None;
-                true
-            }
-            None => true,
-        }
     }
 
     /// Recolours the letterbox under the picture, which mpv paints itself: the
@@ -508,7 +474,7 @@ impl MpvSurface {
         self.command(&["loadfile", path, "replace"])?;
         self.path = path.to_owned();
         self.seek_at = None;
-        self.restart_mark = None;
+        self.paused_at = None;
         self.subtitle_revision = None;
         Ok(())
     }
@@ -540,34 +506,42 @@ impl MpvSurface {
     /// Brings mpv to the host's playback state. Called every render, but it only
     /// queues mpv commands on a change: a pause/play transition, a rate change,
     /// or drift while playing. Drift is judged from the reader thread's cached
-    /// position, so this never waits on mpv. Paused frames are not driven here;
-    /// the GPUI picture shows them.
+    /// position, so this never waits on mpv. While paused mpv keeps the picture
+    /// up, so seeks made then are queued here as well.
     pub fn sync(&mut self, playing: bool, time_ms: i64, rate: f64, frame_secs: f64) {
         let rate = rate.max(0.01);
         if rate != self.rate && self.set_speed(rate).is_ok() {
             self.rate = rate;
         }
+        let target = time_ms as f64 / 1000. + frame_secs * 0.5;
+        let now = Instant::now();
         if !playing {
             if self.playing && self.set_pause(true).is_ok() {
                 self.playing = false;
             }
+            // mpv keeps the picture up while paused, so it has to follow the
+            // host here too: a paused seek or a frame step would otherwise
+            // leave the picture where playback stopped.
+            let retry = self
+                .seek_at
+                .map_or(true, |at| now.duration_since(at) >= SEEK_RETRY);
+            if self.paused_at != Some(time_ms) && retry && self.seek(target, now) {
+                self.paused_at = Some(time_ms);
+            }
             return;
         }
-        let target = time_ms as f64 / 1000. + frame_secs * 0.5;
-        let now = Instant::now();
+        self.paused_at = None;
         if !self.playing {
-            // A plain resume starts from the frame mpv is already on: seeking
+            // A resume from the frame mpv already holds needs no seek: seeking
             // there would repaint from the preceding keyframe and show an
-            // older picture for a moment. Only a position the host has moved
-            // away from needs the seek, which then lands before the unpause.
-            let position = self.position();
-            let moved = position.map_or(true, |position| {
+            // older picture for a moment. Only a position a paused seek left
+            // behind needs one, and that seek was queued above.
+            let moved = self.position().map_or(true, |position| {
                 (position - target).abs() > Self::settle_tolerance(frame_secs)
             });
             if moved {
                 self.seek(target, now);
             }
-            self.await_restart();
             if self.set_pause(false).is_ok() {
                 self.playing = true;
             }

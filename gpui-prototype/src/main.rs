@@ -1021,16 +1021,6 @@ struct Bridge {
 const MAX_AUDIO_HEADER_BYTES: usize = 64 * 1024;
 /// Largest frame body accepted from the host: 8192 x 8192 BGRA8.
 const MAX_VIDEO_FRAME_BYTES: usize = 8192 * 8192 * 4;
-/// How long mpv's window may stay up after a pause, while the host picture catches up.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-const NATIVE_PAUSE_HOLD: Duration = Duration::from_millis(400);
-/// Longest mpv waits for a seek made while paused to land before it shows anyway.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-const NATIVE_RESUME_WAIT: Duration = Duration::from_millis(500);
-/// How long the host picture must already be current before mpv's window closes,
-/// so the card it uncovers has painted that frame.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-const NATIVE_PAUSE_LINGER: Duration = Duration::from_millis(40);
 
 impl Bridge {
     /// Opens a connection and sends one authenticated request line.
@@ -1409,27 +1399,9 @@ struct Workspace {
     native_video: bool,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     mpv_surface: Option<MpvSurface>,
-    /// Whether mpv draws the picture now: playing, fitted, with no visual or overscan overlay.
+    /// Whether mpv draws the picture: fitted, with no visual or overscan overlay.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_visible: bool,
-    /// mpv's window stays up after a pause until the host picture is current.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    native_hold: bool,
-    /// Deadline for `native_hold`, so a silent host cannot pin the window open.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    native_hold_until: Option<Instant>,
-    /// Host position when mpv's window last left; resuming from it needs no seek.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    native_pause: Option<(i64, i64)>,
-    /// Started when mpv's window waits for a paused seek to land.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    native_wait_since: Option<Instant>,
-    /// When the host picture first matched the pause, so the card is painted.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    native_current_at: Option<Instant>,
-    /// A repaint is queued to end a pause hold.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    native_repaint: bool,
     /// A subtitle file request to the host is in flight.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_subs_inflight: bool,
@@ -1729,18 +1701,6 @@ impl Workspace {
             mpv_surface: None,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_visible: false,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            native_hold: false,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            native_hold_until: None,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            native_pause: None,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            native_wait_since: None,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            native_current_at: None,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            native_repaint: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_subs_inflight: false,
             properties_line_id: -1,
@@ -4852,11 +4812,6 @@ impl Workspace {
         {
             self.mpv_surface = None;
             self.native_visible = false;
-            self.native_hold = false;
-            self.native_hold_until = None;
-            self.native_pause = None;
-            self.native_wait_since = None;
-            self.native_current_at = None;
             return;
         }
         let bounds = *self.video_view.bounds.borrow();
@@ -4873,11 +4828,6 @@ impl Workspace {
             .map_or(true, |surface| surface.path() != path);
         if needs_surface {
             self.mpv_surface = None;
-            self.native_hold = false;
-            self.native_hold_until = None;
-            self.native_pause = None;
-            self.native_wait_since = None;
-            self.native_current_at = None;
             match MpvSurface::new(window, &path, background) {
                 Ok(surface) => self.mpv_surface = Some(surface),
                 Err(error) => {
@@ -4898,7 +4848,9 @@ impl Workspace {
             || self.host_dialog.is_some()
             || self.color_dialog.is_some();
         let shown = self.show_video && self.detached.is_none_or(|panel| panel == Panel::Video);
-        let wants = self.snapshot.playing && fit && !overlay && shown;
+        // Paused or not, mpv holds the picture: switching renderers on a pause
+        // is what moved and flashed the picture, so playback state stays out.
+        let wants = fit && !overlay && shown;
         let frame_secs = self
             .snapshot
             .fps
@@ -4908,79 +4860,20 @@ impl Workspace {
             return;
         };
         surface.set_background(background);
-        // Resuming may reveal mpv's window only once its picture sits at the
-        // host position: until then it still holds the frame from before.
-        let was_visible = self.native_visible;
-        let mut visible = wants && was_visible;
-        let mut synced = false;
-        if wants && !visible {
-            // Coming back from the very position the host paused on needs no
-            // seek: mpv never left that frame, so it can show at once. Only a
-            // seek made while paused leaves mpv behind the host, and then the
-            // wait ends as soon as the seek lands.
-            // The host position may tick by a frame while paused, so compare
-            // with a frame of slack instead of demanding an exact pair.
-            let unchanged = self.native_pause.is_some_and(|(time, frame)| {
-                (self.snapshot.video_time - time).abs() <= 50
-                    && (self.snapshot.frame - frame).abs() <= 1
-            });
-            let waiting = self.native_wait_since.get_or_insert_with(Instant::now);
-            visible = unchanged
-                || surface.settled(self.snapshot.video_time, frame_secs)
-                || waiting.elapsed() >= NATIVE_RESUME_WAIT;
-            if !visible {
-                surface.sync(
-                    true,
-                    self.snapshot.video_time,
-                    self.snapshot.playback_rate,
-                    frame_secs,
-                );
-                synced = true;
-            }
-        }
-        self.native_wait_since = self.native_wait_since.filter(|_| wants && !visible);
-        // Pausing hands the picture back to the host, whose cached frame is
-        // still the one from before playback started; the window must stay up
-        // until that frame is replaced and painted, or the card uncovered here
-        // shows the older picture. The deadline stops a silent host from
-        // pinning the window open for good.
-        let mut hold = false;
-        if was_visible && !wants && !overlay && shown && !self.snapshot.playing {
-            let current = self.video_view.frame >= self.snapshot.frame;
-            if current {
-                self.native_current_at.get_or_insert_with(Instant::now);
-            }
-            let until = *self
-                .native_hold_until
-                .get_or_insert_with(|| Instant::now() + NATIVE_PAUSE_HOLD);
-            let now = Instant::now();
-            let painted = self
-                .native_current_at
-                .is_some_and(|at| now.duration_since(at) >= NATIVE_PAUSE_LINGER);
-            hold = now < until && !painted;
-        }
-        if !hold {
-            self.native_current_at = None;
-        }
-        self.native_hold_until = self.native_hold_until.filter(|_| hold);
-        self.native_hold = hold;
-        self.native_visible = visible || hold;
-        if was_visible && !self.native_visible {
-            // Remember where the host left the picture, so the next resume from
-            // the same place can skip the wait.
-            self.native_pause = Some((self.snapshot.video_time, self.snapshot.frame));
-        }
-        if !synced {
-            surface.sync(
-                self.native_visible,
-                self.snapshot.video_time,
-                self.snapshot.playback_rate,
-                frame_secs,
-            );
-        }
+        // mpv holds the picture whenever the host does not paint it, so a
+        // pause never changes who draws: the picture cannot move or flash on
+        // the transition. The host picture is left for overlays, zoomed views,
+        // the popped-out window and platforms without a native surface.
+        self.native_visible = wants;
+        surface.sync(
+            self.snapshot.playing,
+            self.snapshot.video_time,
+            self.snapshot.playback_rate,
+            frame_secs,
+        );
         // mpv covers the picture rect rather than the card: the host paints
-        // that same rect, so playback handing the picture between the two
-        // renderers cannot resize or move it.
+        // that same rect when an overlay takes the picture, so taking turns
+        // cannot resize or move it.
         surface.place(
             fitted_picture(bounds, self.snapshot.aspect as f32),
             self.native_visible,
@@ -4990,27 +4883,6 @@ impl Workspace {
             && surface.subtitle_revision() != Some(self.snapshot.revision);
         if stale {
             self.request_native_subtitles(cx);
-        }
-        if self.native_hold {
-            // The host's next frame ends the hold, so ask for it.
-            self.video_view.retries = 25;
-            self.fetch_video_frame(cx);
-            // The hold ends on elapsed time, so keep painting meanwhile: the
-            // window may only close once the card it uncovers is current.
-            if !self.native_repaint {
-                self.native_repaint = true;
-                let weak = cx.weak_entity();
-                cx.spawn(async move |_, cx| {
-                    cx.background_executor()
-                        .timer(NATIVE_PAUSE_LINGER)
-                        .await;
-                    let _ = weak.update(cx, |view, cx| {
-                        view.native_repaint = false;
-                        cx.notify();
-                    });
-                })
-                .detach();
-            }
         }
     }
 
@@ -5052,9 +4924,11 @@ impl Workspace {
 
     /// One `video_frame` request at a time. With no video the picture is dropped.
     fn fetch_video_frame(&mut self, cx: &mut Context<Self>) {
-        // While mpv draws, the host picture is only wanted to end a pause hold.
+        // While mpv holds the picture, it also decodes the frame the host clock
+        // points at; fetching pixels here as well would send every frame twice
+        // over the bridge for nothing.
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if self.native_visible && !self.native_hold {
+        if self.native_visible && (self.snapshot.playing || self.snapshot.audio.playing) {
             return;
         }
         if !self.snapshot.video {
