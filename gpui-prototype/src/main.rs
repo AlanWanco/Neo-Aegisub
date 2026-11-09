@@ -1404,10 +1404,6 @@ struct Workspace {
     /// Whether mpv draws the picture: fitted, with no visual or overscan overlay.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_visible: bool,
-    /// A menu opened from the preview toolbar drops over the picture, where
-    /// mpv's own window would cover it; the host paints the still frame instead.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    video_menu_open: bool,
     /// A subtitle file request to the host is in flight.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_subs_inflight: bool,
@@ -1708,8 +1704,6 @@ impl Workspace {
             mpv_surface: None,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_visible: false,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            video_menu_open: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_subs_inflight: false,
             properties_line_id: -1,
@@ -4812,20 +4806,16 @@ impl Workspace {
         }
     }
 
-    /// A menu from the preview toolbar drops over the picture, and mpv's own
-    /// window draws above everything the host paints in its window; the
-    /// surface steps aside while the menu is open so the menu stays readable.
+    /// Whether a GPUI layer is drawn over the picture. mpv draws into a window
+    /// of its own, above every layer the host paints in this one, so any
+    /// overlay that lands on the picture has to be drawn while mpv steps
+    /// aside: popovers (dropdowns, selects, colour pickers) register
+    /// themselves with the Base global while open, and a notice covers the
+    /// whole window with a scrim.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn set_video_menu_open(&mut self, open: bool, window: &Window, cx: &mut Context<Self>) {
-        self.video_menu_open = open;
-        self.sync_native_video(window, cx);
-        cx.notify();
+    fn overlay_over_picture(&self, cx: &App) -> bool {
+        gpui_kit::base::GlobalState::is_in_deferred_context(cx) || !self.notices.is_empty()
     }
-
-    /// Without a native surface the host already draws the picture, so a menu
-    /// over it needs nothing.
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn set_video_menu_open(&mut self, _open: bool, _window: &Window, _cx: &mut Context<Self>) {}
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn update_native_video(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -4869,15 +4859,15 @@ impl Workspace {
                 }
             }
         }
-        // mpv draws only while the picture is fitted and no overlay sits on it.
+        // mpv draws only while the picture is fitted and nothing sits on it.
         let fit = self.video_view.zoom == 1. && self.video_view.pan == (0., 0.);
         let overlay = self.active_panel == Panel::Visual
             || self.snapshot.video_overscan
             || self.host_dialog.is_some()
             || self.color_dialog.is_some()
-            // A dropdown from the preview toolbar opens downwards over the
-            // picture, and mpv's window is above the host's own layers.
-            || self.video_menu_open;
+            // Both mpv's window and the host's dialogs are windows of their
+            // own; the host's layers never reach over either.
+            || self.overlay_over_picture(cx);
         let shown = self.show_video && self.detached.is_none_or(|panel| panel == Panel::Video);
         // Paused or not, mpv holds the picture: switching renderers on a pause
         // is what moved and flashed the picture, so playback state stays out.
@@ -8019,14 +8009,6 @@ impl Workspace {
                             }
                             menu
                         }
-                    })
-                    .on_open_change({
-                        let weak = cx.weak_entity();
-                        move |open, window, cx| {
-                            let _ = weak.update(cx, |view, cx| {
-                                view.set_video_menu_open(*open, window, cx);
-                            });
-                        }
                     }),
             )
             .child(
@@ -8087,14 +8069,6 @@ impl Workspace {
                                 ));
                             }
                             menu
-                        }
-                    })
-                    .on_open_change({
-                        let weak = cx.weak_entity();
-                        move |open, window, cx| {
-                            let _ = weak.update(cx, |view, cx| {
-                                view.set_video_menu_open(*open, window, cx);
-                            });
                         }
                     }),
             )
