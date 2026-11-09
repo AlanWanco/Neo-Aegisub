@@ -10839,3 +10839,60 @@ mod drop_tests {
         assert_eq!(dropped_kind(Path::new("/tmp/no-extension")), None);
     }
 }
+
+#[cfg(test)]
+mod picture_tests {
+    use super::fitted_picture;
+    use gpui_kit::{point, px, size, Bounds, Pixels};
+
+    fn area(width: f32, height: f32) -> Bounds<Pixels> {
+        Bounds {
+            origin: point(px(0.), px(0.)),
+            size: size(px(width), px(height)),
+        }
+    }
+
+    fn measure(bounds: Bounds<Pixels>) -> (f32, f32, f32, f32) {
+        (
+            f32::from(bounds.origin.x),
+            f32::from(bounds.origin.y),
+            f32::from(bounds.size.width),
+            f32::from(bounds.size.height),
+        )
+    }
+
+    #[test]
+    fn fits_a_wide_area_by_height() {
+        let (x, y, w, h) = measure(fitted_picture(area(1000., 600.), 4. / 3.));
+        assert_eq!((x, y, w, h), (100., 0., 800., 600.));
+    }
+
+    #[test]
+    fn fits_a_tall_area_by_width() {
+        let (x, y, w, h) = measure(fitted_picture(area(400., 600.), 16. / 9.));
+        assert_eq!((x, y, w), (0., 187.5, 400.));
+        assert!((h - 225.).abs() < 0.01);
+    }
+
+    #[test]
+    fn keeps_the_whole_area_when_the_aspect_matches() {
+        let (x, y, w, h) = measure(fitted_picture(area(640., 360.), 16. / 9.));
+        assert_eq!((x, y), (0., 0.));
+        assert!((w - 640.).abs() < 0.01 && (h - 360.).abs() < 0.01);
+    }
+
+    #[test]
+    fn falls_back_to_sixteen_by_nine_for_an_unusable_aspect() {
+        for aspect in [0., -1.7, f32::NAN, f32::INFINITY] {
+            let (_, _, w, h) = measure(fitted_picture(area(640., 360.), aspect));
+            assert!((w - 640.).abs() < 0.01 && (h - 360.).abs() < 0.01, "{aspect}");
+        }
+    }
+
+    #[test]
+    fn stays_finite_in_an_empty_area() {
+        let (x, y, w, h) = measure(fitted_picture(area(0., 0.), 16. / 9.));
+        assert!(x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite());
+        assert!(w >= 1. && h > 0.);
+    }
+}
