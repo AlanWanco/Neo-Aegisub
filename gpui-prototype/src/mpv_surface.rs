@@ -370,6 +370,9 @@ impl MpvSurface {
             ("sub-auto", "no"),
             ("input-default-bindings", "no"),
             ("vo", "gpu"),
+            // The window covers the picture rect itself, so mpv fills it
+            // instead of fitting the video inside it with bars of its own.
+            ("keepaspect", "no"),
             // Create the window during asynchronous load; init must not wait on the UI thread.
             ("force-window", "yes"),
         ]
@@ -1135,16 +1138,13 @@ mod platform {
 
         /// Places the popup over `bounds` and shows or hides it.
         ///
-        /// `bounds` are logical pixels of the keyboard focus window; a popup is
-        /// positioned in screen pixels, so the bounds are scaled by the parent's
-        /// DPI and offset by its client origin. The result is clipped to the
-        /// client area, which a child window would have done by itself.
-        ///
-        /// The frame is then shrunk by one device pixel per edge, the amount by
-        /// which GPUI paints the preview picture inside its element: the host
-        /// frame and mpv must cover the same rectangle, otherwise the picture
-        /// jumps by two pixels every time playback hands it from one renderer
-        /// to the other.
+        /// `bounds` are logical pixels of the keyboard focus window and cover
+        /// the picture itself, not the card around it: the host paints that
+        /// same rectangle, so playback handing the picture between the two
+        /// renderers cannot resize or move it. A popup is positioned in screen
+        /// pixels, so the bounds are scaled by the parent's DPI and offset by
+        /// its client origin. The result is clipped to the client area, which a
+        /// child window would have done by itself.
         pub fn place(&mut self, bounds: Bounds<Pixels>, visible: bool) {
             let dpi = unsafe { GetDpiForWindow(self.parent) };
             let dpi = if dpi == 0 { DEFAULT_DPI } else { dpi };
@@ -1154,10 +1154,10 @@ mod platform {
             unsafe { ClientToScreen(self.parent, &mut origin) };
             let mut client = Rect { left: 0, top: 0, right: 0, bottom: 0 };
             unsafe { GetClientRect(self.parent, &mut client) };
-            let left = (origin.x + x).max(origin.x) + 1;
-            let top = (origin.y + y).max(origin.y) + 1;
-            let right = (origin.x + x + width).min(origin.x + client.right) - 1;
-            let bottom = (origin.y + y + height).min(origin.y + client.bottom) - 1;
+            let left = (origin.x + x).max(origin.x);
+            let top = (origin.y + y).max(origin.y);
+            let right = (origin.x + x + width).min(origin.x + client.right);
+            let bottom = (origin.y + y + height).min(origin.y + client.bottom);
             let frame = (left, top, (right - left).max(0), (bottom - top).max(0));
             let placed = ((origin.x, origin.y), frame);
             let fits = frame.2 > 0 && frame.3 > 0;

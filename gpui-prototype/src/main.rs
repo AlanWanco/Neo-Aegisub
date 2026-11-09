@@ -835,6 +835,35 @@ fn rgb_hex(color: gpui_kit::Hsla) -> u32 {
     channel(rgb.r) << 16 | channel(rgb.g) << 8 | channel(rgb.b)
 }
 
+/// The rect a fitted picture covers inside `area`: the video's aspect at the
+/// largest scale that fits, centred. Both renderers paint into this one rect
+/// (the host frame draws the image there, mpv's window is placed there), so
+/// handing the preview from one renderer to the other cannot move it.
+fn fitted_picture(
+    area: gpui_kit::Bounds<gpui_kit::Pixels>,
+    aspect: f32,
+) -> gpui_kit::Bounds<gpui_kit::Pixels> {
+    let width = f32::from(area.size.width).max(1.);
+    let height = f32::from(area.size.height).max(1.);
+    let aspect = if aspect.is_finite() && aspect > 0. {
+        aspect
+    } else {
+        16. / 9.
+    };
+    let (w, h) = if width / height > aspect {
+        (height * aspect, height)
+    } else {
+        (width, width / aspect)
+    };
+    gpui_kit::Bounds {
+        origin: gpui_kit::point(
+            area.origin.x + px((width - w) / 2.),
+            area.origin.y + px((height - h) / 2.),
+        ),
+        size: size(px(w), px(h)),
+    }
+}
+
 fn escape_line_breaks(text: String, soft: bool) -> String {
     if !text.contains('\n') {
         return text;
@@ -4835,8 +4864,8 @@ impl Workspace {
             return;
         }
         let path = self.snapshot.video_path.clone();
-        // mpv paints the letterbox under the picture itself, and its window
-        // covers the card, so it must know the card's colour.
+        // mpv's window covers the picture, but rounding inside it can still
+        // leave a row or column of its own, painted in the card's colour.
         let background = rgb_hex(Palette::current(cx).inset);
         let needs_surface = self
             .mpv_surface
@@ -4949,7 +4978,13 @@ impl Workspace {
                 frame_secs,
             );
         }
-        surface.place(bounds, self.native_visible);
+        // mpv covers the picture rect rather than the card: the host paints
+        // that same rect, so playback handing the picture between the two
+        // renderers cannot resize or move it.
+        surface.place(
+            fitted_picture(bounds, self.snapshot.aspect as f32),
+            self.native_visible,
+        );
         let stale = self.native_visible
             && !self.native_subs_inflight
             && surface.subtitle_revision() != Some(self.snapshot.revision);
@@ -5139,7 +5174,10 @@ impl Workspace {
             .bg(p.inset)
             .when(fill, |area| area.flex_1().min_h_0())
             .when(!fill, |area| {
-                area.max_w(px(560.)).mx_auto().aspect_ratio(aspect)
+                // A definite width keeps the aspect ratio from measuring
+                // against the card's full width, which would leave the card
+                // hundreds of pixels taller than the picture it holds.
+                area.w(px(560.)).max_w(gpui_kit::relative(1.)).mx_auto().aspect_ratio(aspect)
             })
             .on_scroll_wheel(
                 cx.listener(|view, event: &gpui_kit::ScrollWheelEvent, _, cx| {
@@ -5260,9 +5298,27 @@ impl Workspace {
             );
         }
         if let Some(image) = &self.video_view.image {
-            area = area.child(
-                gpui_kit::img(image.clone())
-                    .absolute()
+            // Fitted, the picture covers the rect mpv's window is placed on
+            // rather than whatever `Contain` rounds to, so the two renderers
+            // swap without moving a pixel.
+            let fitted = fill && zoom == 1. && pan_x == 0. && pan_y == 0.;
+            let picture = fitted_picture(
+                gpui_kit::Bounds {
+                    origin: gpui_kit::point(px(0.), px(0.)),
+                    size: self.video_view.bounds.borrow().size,
+                },
+                aspect,
+            );
+            let element = gpui_kit::img(image.clone()).absolute();
+            area = area.child(if fitted {
+                element
+                    .left(picture.origin.x)
+                    .top(picture.origin.y)
+                    .w(picture.size.width)
+                    .h(picture.size.height)
+                    .object_fit(ObjectFit::Fill)
+            } else {
+                element
                     .left(gpui_kit::relative((1. - zoom) / 2. + pan_x))
                     .top(gpui_kit::relative((1. - zoom) / 2. + pan_y))
                     .w(gpui_kit::relative(zoom))
@@ -5271,8 +5327,8 @@ impl Workspace {
                         ObjectFit::Contain
                     } else {
                         ObjectFit::Fill
-                    }),
-            );
+                    })
+            });
         }
         if self.snapshot.video && self.snapshot.video_overscan {
             // Broadcast safe areas, as the wx display drew them: the outer box
@@ -9809,7 +9865,9 @@ impl Render for Workspace {
             .overflow_hidden();
         if self.active_panel == Panel::Subtitles {
             let show_video = self.show_video && !self.video_popped;
-            let side_by_side = show_video && f32::from(window.viewport_size().width) >= 900.;
+            // Two columns need room for the preview beside the editor: below
+            // 1080 logical pixels the preview stacks under the waveform.
+            let side_by_side = show_video && f32::from(window.viewport_size().width) >= 1080.;
             let sidebar = if self
                 .sidebar_collapsed
                 .unwrap_or(f32::from(window.viewport_size().width) < 1150.)
