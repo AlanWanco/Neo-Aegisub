@@ -73,12 +73,23 @@ $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 $runtime = Join-Path $OutputDirectory 'runtime'
 Copy-Item -LiteralPath $PackageDirectory -Destination $runtime -Recurse
-# The package ships no settings file; the app creates one on first start. Seed
-# only the keys this smoke run depends on, so no first-start prompt or update check appears.
-$configPath = Join-Path $runtime 'config.json'
+# Options live in the user directory (%APPDATA%\Aegisub on Windows), never next
+# to the executable, so a settings file in the package folder is ignored. Seed
+# only the keys this run depends on: the fixture video is untagged, and an open
+# prompt is a host notice that covers the window, where the native surface has
+# to step aside — these checks need no notice on screen at all.
+$configPath = Join-Path $env:APPDATA 'Aegisub/config.json'
+New-Item -ItemType Directory -Force (Split-Path -Parent $configPath) | Out-Null
 $config = @{
-    App = @{ 'First Start' = $false; Language = 'en_US'; Theme = 2; Auto = @{ 'Check For Updates' = $false } }
-    Video = @{ 'PlayRes Mismatch' = 0; 'LayoutRes Mismatch' = 0; 'YCbCr Matrix Mismatch' = 0 }
+    Video = @{
+        'PlayRes Mismatch' = 0
+        'LayoutRes Mismatch' = 0
+        'No LayoutRes in Script' = 0
+        'No YCbCr Matrix in Script' = 0
+        'YCbCr Matrix Mismatch' = 0
+        'Untagged Matrix Warning' = $false
+        'HDR Video Warning' = $false
+    }
 }
 $config | ConvertTo-Json -Depth 20 | Set-Content $configPath -Encoding utf8NoBOM
 $history = @(0..49 | ForEach-Object {
