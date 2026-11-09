@@ -267,9 +267,19 @@ with path.open('wb') as out:
     # while DWM stops compositing its presents, so the clock check above cannot
     # see a frozen picture; only the pixels can.
     function Save-VideoFrame {
+        # Opening another file rebuilds the mpv surface, so the handle is
+        # resolved again per capture: a stale one reads as a zero-size window.
+        $script:videoWindow = [GpuiDesktop]::FindVideoWindow($script:windowHandle, $frontend.Id)
         $frameBounds = [GpuiDesktop+Rect]::new()
-        [void][GpuiDesktop]::GetWindowRect($videoWindow, [ref]$frameBounds)
-        $image = [Drawing.Bitmap]::new($frameBounds.Right - $frameBounds.Left, $frameBounds.Bottom - $frameBounds.Top)
+        if ($script:videoWindow -ne [IntPtr]::Zero) {
+            [void][GpuiDesktop]::GetWindowRect($script:videoWindow, [ref]$frameBounds)
+        }
+        $width = $frameBounds.Right - $frameBounds.Left
+        $height = $frameBounds.Bottom - $frameBounds.Top
+        if ($width -le 0 -or $height -le 0) {
+            throw "Native video window has no area: ${width}x${height} handle=$($script:videoWindow)"
+        }
+        $image = [Drawing.Bitmap]::new($width, $height)
         $graphics = [Drawing.Graphics]::FromImage($image)
         try { $graphics.CopyFromScreen($frameBounds.Left, $frameBounds.Top, 0, 0, $image.Size) }
         finally { $graphics.Dispose() }
@@ -401,6 +411,13 @@ with path.open('wb') as out:
         Start-Sleep -Milliseconds 100
     }
     if ($videoWindow -eq [IntPtr]::Zero) { throw 'Colour video: native preview did not appear' }
+    # A poll taken before the host swaps files still reports the previous
+    # clip's clock, which would let the wait below pass on stale time.
+    for ($attempt = 0; $attempt -lt 100; $attempt++) {
+        $state = Invoke-Bridge @{ op = 'playback' }
+        if ($state.video_time -lt 1000) { break }
+        Start-Sleep -Milliseconds 50
+    }
     $state = $null
     for ($attempt = 0; $attempt -lt 120; $attempt++) {
         $state = Invoke-Bridge @{ op = 'playback' }
