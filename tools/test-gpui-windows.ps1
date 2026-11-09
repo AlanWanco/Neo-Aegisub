@@ -97,7 +97,7 @@ $history = @(0..49 | ForEach-Object {
        'is by time' = $true; 'is backward' = $false; amount = '0:00:01.10'; mode = 0; fields = 0;
        selection = @(@{ start = 1; end = 1 }) }
 })
-$history | ConvertTo-Json -Depth 20 | Set-Content (Join-Path $runtime 'shift_history.json') -Encoding utf8NoBOM
+$history | ConvertTo-Json -Depth 20 | Set-Content (Join-Path $env:APPDATA 'Aegisub/shift_history.json') -Encoding utf8NoBOM
 Copy-Item (Join-Path $PSScriptRoot '../gpui-prototype/assets/demo.ass') (Join-Path $runtime 'demo.ass')
 $hostProcess = $null
 $frontend = $null
