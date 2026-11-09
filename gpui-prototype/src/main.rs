@@ -864,6 +864,18 @@ fn fitted_picture(
     }
 }
 
+/// The pan a picture can take without uncovering the area behind it. A fitted
+/// picture has no slack, and a zoomed one may only move while its edges still
+/// reach past the frame: the picture is drawn at `zoom` of the area and its
+/// overhang on each side is `(zoom - 1) / 2` of it.
+fn clamp_pan(pan: (f32, f32), zoom: f32) -> (f32, f32) {
+    let slack = ((zoom - 1.) / 2.).max(0.);
+    if !slack.is_finite() {
+        return (0., 0.);
+    }
+    (pan.0.clamp(-slack, slack), pan.1.clamp(-slack, slack))
+}
+
 fn escape_line_breaks(text: String, soft: bool) -> String {
     if !text.contains('\n') {
         return text;
@@ -4761,14 +4773,13 @@ impl Workspace {
             })
     }
 
-    /// Zooms the picture by `steps` wheel notches; going back to the fit
-    /// recentres it. The lower bound leaves room for small sources at 100%.
+    /// Zooms the picture by `steps` wheel notches; the pan follows so the
+    /// picture keeps covering the area, and zooming back to the fit recentres
+    /// it. The lower bound leaves room for small sources at 100%.
     fn video_zoom_by(&mut self, steps: f32, cx: &mut Context<Self>) {
         let view = &mut self.video_view;
         view.zoom = (view.zoom * 1.25_f32.powf(steps)).clamp(0.125, 10.);
-        if view.zoom <= 1. {
-            view.pan = (0., 0.);
-        }
+        view.pan = clamp_pan(view.pan, view.zoom);
         cx.notify();
     }
 
@@ -5124,9 +5135,12 @@ impl Workspace {
                     let area = *view.video_view.bounds.borrow();
                     let width = f32::from(area.size.width).max(1.);
                     let height = f32::from(area.size.height).max(1.);
-                    view.video_view.pan = (
-                        origin.0 + (f32::from(event.position.x) - x) / width,
-                        origin.1 + (f32::from(event.position.y) - y) / height,
+                    view.video_view.pan = clamp_pan(
+                        (
+                            origin.0 + (f32::from(event.position.x) - x) / width,
+                            origin.1 + (f32::from(event.position.y) - y) / height,
+                        ),
+                        view.video_view.zoom,
                     );
                     cx.notify();
                 }),
@@ -8047,6 +8061,9 @@ impl Workspace {
                     .ghost()
                     .dropdown_menu({
                         let weak = cx.weak_entity();
+                        // A fitted picture has nothing to pan into, so the
+                        // items stay disabled until the picture is zoomed.
+                        let can_pan = self.video_view.zoom > 1.;
                         move |mut menu, _, _| {
                             for (label, dx, dy) in [
                                 ("向左平移", -20., 0.),
@@ -8055,18 +8072,25 @@ impl Workspace {
                                 ("向下平移", 0., 20.),
                             ] {
                                 let weak = weak.clone();
-                                menu = menu.item(PopupMenuItem::new(label).on_click(
-                                    move |_, _, cx| {
-                                        let _ = weak.update(cx, |view, cx| {
-                                            let area = *view.video_view.bounds.borrow();
-                                            let width = f32::from(area.size.width).max(1.);
-                                            let height = f32::from(area.size.height).max(1.);
-                                            view.video_view.pan.0 += dx / width;
-                                            view.video_view.pan.1 += dy / height;
-                                            cx.notify();
-                                        });
-                                    },
-                                ));
+                                menu = menu.item(
+                                    PopupMenuItem::new(label).disabled(!can_pan).on_click(
+                                        move |_, _, cx| {
+                                            let _ = weak.update(cx, |view, cx| {
+                                                let area = *view.video_view.bounds.borrow();
+                                                let width = f32::from(area.size.width).max(1.);
+                                                let height = f32::from(area.size.height).max(1.);
+                                                view.video_view.pan = clamp_pan(
+                                                    (
+                                                        view.video_view.pan.0 + dx / width,
+                                                        view.video_view.pan.1 + dy / height,
+                                                    ),
+                                                    view.video_view.zoom,
+                                                );
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                                );
                             }
                             menu
                         }
@@ -10735,7 +10759,7 @@ mod drop_tests {
 
 #[cfg(test)]
 mod picture_tests {
-    use super::fitted_picture;
+    use super::{clamp_pan, fitted_picture};
     use gpui_kit::{point, px, size, Bounds, Pixels};
 
     fn area(width: f32, height: f32) -> Bounds<Pixels> {
@@ -10787,5 +10811,19 @@ mod picture_tests {
         let (x, y, w, h) = measure(fitted_picture(area(0., 0.), 16. / 9.));
         assert!(x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite());
         assert!(w >= 1. && h > 0.);
+    }
+
+    #[test]
+    fn a_fitted_picture_cannot_be_panned() {
+        // The picture already fills the frame at the fit, so any pan would only
+        // slide it off the frame: the 「平移画面」 items must not move it.
+        assert_eq!(clamp_pan((0.2, -0.3), 1.), (0., 0.));
+        assert_eq!(clamp_pan((0.2, -0.3), 0.5), (0., 0.));
+    }
+
+    #[test]
+    fn panning_stops_where_the_zoomed_picture_leaves_a_gap() {
+        assert_eq!(clamp_pan((0.2, -0.9), 2.), (0.2, -0.5));
+        assert_eq!(clamp_pan((-0.7, 0.1), 1.5), (-0.25, 0.1));
     }
 }
