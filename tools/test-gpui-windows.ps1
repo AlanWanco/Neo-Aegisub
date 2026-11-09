@@ -319,17 +319,25 @@ with path.open('wb') as out:
         [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, 0, 0, $originalWidth, $originalHeight, 0x0006)
         Start-Sleep -Milliseconds 300
     }
+    $playingBounds = [GpuiDesktop+Rect]::new()
+    [void][GpuiDesktop]::GetWindowRect($videoWindow, [ref]$playingBounds)
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
-    for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        if (-not [GpuiDesktop]::IsWindowVisible($videoWindow)) { break }
-        Start-Sleep -Milliseconds 100
+    Start-Sleep -Milliseconds 400
+    # A pause keeps mpv on the picture. Handing it back to the workspace repaints
+    # the same rect from a cached frame, and that swap is what moved and flashed
+    # the picture, so the window has to survive the pause exactly where it was.
+    if (-not [GpuiDesktop]::IsWindowVisible($videoWindow)) { throw 'Pause dropped the native picture back into the workspace' }
+    $pausedBounds = [GpuiDesktop+Rect]::new()
+    [void][GpuiDesktop]::GetWindowRect($videoWindow, [ref]$pausedBounds)
+    if ($pausedBounds.Left -ne $playingBounds.Left -or $pausedBounds.Top -ne $playingBounds.Top -or
+        $pausedBounds.Right -ne $playingBounds.Right -or $pausedBounds.Bottom -ne $playingBounds.Bottom) {
+        throw 'Pause moved or resized the native video window'
     }
-    if ([GpuiDesktop]::IsWindowVisible($videoWindow)) { throw 'Pause left native video above the editing preview' }
     Save-Screenshot 'native-video-paused'
 
-    # Pausing hands the picture back to the workspace, whose cached frame is the
-    # one from before playback started. A flat colour per second names the frame
-    # by hue, so a card still holding that first frame cannot pass unnoticed.
+    # Pausing keeps mpv painting, so the paused picture has to be the frame
+    # playback stopped on. A flat colour names each second by hue, so a pause
+    # that falls back to a cached frame shows up as the wrong colour.
     $colourPath = Join-Path $runtime 'native-video-colour.y4m'
     @'
 import pathlib, sys
@@ -372,13 +380,6 @@ with path.open('wb') as out:
         } finally { $image.Dispose() }
     }
     function Format-Colour($Colour) { return ('{0},{1},{2}' -f $Colour[0], $Colour[1], $Colour[2]) }
-    function Wait-VideoHidden {
-        for ($attempt = 0; $attempt -lt 40; $attempt++) {
-            if (-not [GpuiDesktop]::IsWindowVisible($videoWindow)) { return }
-            Start-Sleep -Milliseconds 50
-        }
-        throw 'Native video window stayed up after a pause'
-    }
     # Captures the window as fast as the screen allows, with the instant each
     # capture started and the window's visibility at that instant.
     function Watch-VideoFrames([int]$Count) {
@@ -410,17 +411,14 @@ with path.open('wb') as out:
     if (-not $state -or $state.video_time -lt 2400) { throw 'Colour video did not reach its second second' }
     $pauseSample = Measure-VideoFrame
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
-    Wait-VideoHidden
-    $cardSample = Measure-VideoFrame
-    $cardColour = $cardSample.Mean
-    if ($cardColour[0] -ge 180 -and $cardColour[1] -ge 180 -and $cardColour[2] -ge 180) {
-        throw "Pause uncovered the frame from the start of playback: card $(Format-Colour $cardColour)"
+    Start-Sleep -Milliseconds 400
+    if (-not [GpuiDesktop]::IsWindowVisible($videoWindow)) { throw 'Pause dropped the native picture back into the workspace' }
+    $pausedSample = Measure-VideoFrame
+    if ($pausedSample.Green -lt 0.02) {
+        throw "Paused picture $(Format-Colour $pausedSample.Mean) is not the pause frame $(Format-Colour $pauseSample.Mean): green share $($pausedSample.Green)"
     }
-    if ($cardSample.Green -lt 0.02) {
-        throw "Paused card $(Format-Colour $cardColour) is not the pause frame $(Format-Colour $pauseSample.Mean): green share $($cardSample.Green)"
-    }
-    # Resuming from the paused position needs no seek, so the window comes back
-    # at the same picture instead of the frame it was left on.
+    # Playback continues from the frame it stopped on, so the picture stays the
+    # same instead of jumping back to the frame the workspace had cached.
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
     $resumeFrames = Watch-VideoFrames 48
     $firstVisible = $resumeFrames | Where-Object { $_[2] } | Select-Object -First 1
@@ -429,13 +427,18 @@ with path.open('wb') as out:
     if ($firstVisible[3] -lt 0.02) {
         throw "Resume revealed $(Format-Colour $firstVisible[0]) instead of the paused picture: green share $($firstVisible[3])"
     }
-    # A seek made while paused leaves mpv behind the workspace: the window must
-    # stay hidden until its own seek lands, so the pre-seek frame never shows.
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
-    Wait-VideoHidden
+    Start-Sleep -Milliseconds 300
+    # A seek made while paused has to reach mpv: the front end forwards it, so
+    # the picture changes before playback resumes instead of after it.
     $null = Invoke-Bridge @{ op = 'seek'; frame = 540 }
+    Start-Sleep -Milliseconds 500
+    $seekSample = Measure-VideoFrame
+    if ($seekSample.Red -lt 0.02) {
+        throw "Paused seek did not reach mpv: $(Format-Colour $seekSample.Mean) is not the frame at 540: red share $($seekSample.Red)"
+    }
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/play' }
-    $seekFrames = Watch-VideoFrames 48
+    $seekFrames = Watch-VideoFrames 24
     $firstSeekVisible = $seekFrames | Where-Object { $_[2] } | Select-Object -First 1
     if (-not $firstSeekVisible) { throw 'Resume after a paused seek never showed the native video window' }
     if ($firstSeekVisible[1] -gt 800) { throw "Resume after a paused seek took $($firstSeekVisible[1]) ms" }
@@ -443,7 +446,6 @@ with path.open('wb') as out:
         throw "Resume after a paused seek showed $(Format-Colour $firstSeekVisible[0]) instead of the seeked frame: red share $($firstSeekVisible[4])"
     }
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
-    Wait-VideoHidden
     Press-Control 'libmpv'
     Press-Control '时间平移'
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'
