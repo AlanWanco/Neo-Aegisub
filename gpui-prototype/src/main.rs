@@ -8475,76 +8475,16 @@ impl Workspace {
             );
         }
         format_toolbar = format_toolbar.child(color_menu);
-        // Playback lives next to the text it affects: jumping frames or replaying
-        // the current line used to require moving the pointer to the video panel.
-        let mut playback_toolbar = div().h_flex().flex_wrap().gap_1().items_center();
-        for (id, label, icon, name) in [
-            (
-                "editor-play",
-                "播放/暂停",
-                if self.snapshot.playing {
-                    IconName::Pause
-                } else {
-                    IconName::Play
-                },
-                "video/play",
-            ),
-            (
-                "editor-prev-frame",
-                "上一帧",
-                IconName::ChevronLeft,
-                "video/frame/prev",
-            ),
-            (
-                "editor-next-frame",
-                "下一帧",
-                IconName::ChevronRight,
-                "video/frame/next",
-            ),
-            (
-                "editor-play-line-video",
-                "播放当前行视频",
-                IconName::Video,
-                "video/play/line",
-            ),
-            (
-                "editor-play-line-audio",
-                "播放当前行音频",
-                IconName::AudioLines,
-                "audio/play/selection",
-            ),
-            ("editor-undo", "撤销", IconName::Undo2, "edit/undo"),
-            ("editor-redo", "重做", IconName::Redo2, "edit/redo"),
-        ] {
-            let enabled = self
-                .catalog
-                .command(name)
-                .is_some_and(|command| command.can_invoke());
-            playback_toolbar = playback_toolbar.child(
-                Button::new(id)
-                    .rounded(gpui_kit::px(999.))
-                    .small()
-                    .px(gpui_kit::px(13.))
-                    .py(gpui_kit::px(3.))
-                    .child(Icon::new(icon).size(px(15.)))
-                    .accessibility_label(label)
-                    .tooltip(label)
-                    .ghost()
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.invoke(json!({"op":"command", "name":name}), cx)
-                    })),
-            );
-        }
-        // These two toggles ride at the end of the playback row: on their own row
-        // they held a whole line for two chips and left the rest of it empty.
-        playback_toolbar = playback_toolbar
+        // These two toggles close the formatting row: they change what the
+        // timing fields and the editor show, and a row of their own would hold
+        // two chips on an otherwise empty line.
+        format_toolbar = format_toolbar
             .child(div().mx_1().h(px(16.)).w(px(1.)).bg(p.divider))
             .child(crate::page::with_tooltip(
                 crate::page::toggle_chip(
                     cx,
                     "editor-frame-mode",
-                    // The playback row is shared with the other toggles, so the
+                    // The row is shared with the formatting controls, so the
                     // disabled state gets a short label; the tooltip explains it.
                     if self.snapshot.fps.is_some() {
                         "按帧显示"
@@ -8606,6 +8546,78 @@ impl Workspace {
                     cx.notify();
                 })),
             );
+        // Playback lives next to the text it affects: jumping frames or replaying
+        // the current line used to require moving the pointer to the video panel.
+        let mut playback_toolbar = div()
+            .h_flex()
+            .flex_wrap()
+            .gap_1()
+            .items_center()
+            // A pill outline keeps the transport controls readable as one unit
+            // now that the formatting row sits below them.
+            .rounded(gpui_kit::px(999.))
+            .border_1()
+            .border_color(p.divider)
+            .px_1()
+            .py_1();
+        for (id, label, icon, name) in [
+            (
+                "editor-play",
+                "播放/暂停",
+                if self.snapshot.playing {
+                    IconName::Pause
+                } else {
+                    IconName::Play
+                },
+                "video/play",
+            ),
+            (
+                "editor-prev-frame",
+                "上一帧",
+                IconName::ChevronLeft,
+                "video/frame/prev",
+            ),
+            (
+                "editor-next-frame",
+                "下一帧",
+                IconName::ChevronRight,
+                "video/frame/next",
+            ),
+            (
+                "editor-play-line-video",
+                "播放当前行视频",
+                IconName::Video,
+                "video/play/line",
+            ),
+            (
+                "editor-play-line-audio",
+                "播放当前行音频",
+                IconName::AudioLines,
+                "audio/play/selection",
+            ),
+            ("editor-undo", "撤销", IconName::Undo2, "edit/undo"),
+            ("editor-redo", "重做", IconName::Redo2, "edit/redo"),
+        ] {
+            let enabled = self
+                .catalog
+                .command(name)
+                .is_some_and(|command| command.can_invoke());
+            playback_toolbar = playback_toolbar.child(
+                Button::new(id)
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(13.))
+                    .py(gpui_kit::px(3.))
+                    .child(Icon::new(icon).size(px(15.)))
+                    .accessibility_label(label)
+                    .tooltip(label)
+                    .ghost()
+                    .disabled(!enabled)
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.invoke(json!({"op":"command", "name":name}), cx)
+                    })),
+            );
+        }
         let row_count = visible.len();
         let properties_rail =
             rail.map(|width| self.render_properties(Some(width), cx).into_any_element());
@@ -8790,8 +8802,10 @@ impl Workspace {
                                     })),
                             ),
                     )
+                    // A column child stretches to the card width; the pill has
+                    // to hug its buttons, so a row wrapper sizes it.
+                    .child(div().h_flex().child(playback_toolbar))
                     .child(format_toolbar)
-                    .child(playback_toolbar)
                     .when(self.show_original, |col| {
                         col.child(
                             div()
