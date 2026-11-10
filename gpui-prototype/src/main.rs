@@ -1772,6 +1772,7 @@ impl Workspace {
         if snapshot.audio.render_revision != self.snapshot.audio.render_revision {
             self.audio.tile_inflight.clear();
         }
+        self.audio.gain = snapshot.audio.gain;
         if snapshot.audio.epoch != self.snapshot.audio.epoch
             || snapshot.audio.loaded != self.snapshot.audio.loaded
         {

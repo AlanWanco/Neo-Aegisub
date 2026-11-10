@@ -70,6 +70,7 @@ struct Audio::Impl {
 	std::unique_ptr<AudioRendererCanvasProvider> bitmap_provider;
 	AudioRenderer renderer;
 	std::string mode;
+	int gain = 800;
 	uint64_t epoch = 1;
 	uint64_t render_revision = 1;
 	std::vector<agi::signal::Connection> option_connections;
@@ -95,6 +96,13 @@ struct Audio::Impl {
 		renderer.SetAudioProvider(context->project->AudioProvider());
 		for (auto name : {"Colour/Audio Display/Spectrum", "Colour/Audio Display/Waveform", "Audio/Display/Waveform Style", "Audio/Renderer/Spectrum/Quality", "Audio/Renderer/Spectrum/FreqCurve", "Audio/Renderer/Spectrum/Memory Max"})
 			option_connections.emplace_back(OPT_SUB(name, [this](auto const&) { mode.clear(); ++render_revision; }));
+		option_connections.emplace_back(OPT_SUB("Audio/Link", [this](auto const&) { SetGain(gain); }));
+		SetGain(gain);
+	}
+
+	void SetGain(int value) {
+		gain = value;
+		if (OPT_GET("Audio/Link")->GetBool()) context->audioController->SetVolume(gain / 100.);
 	}
 
 	json::Object State() {
@@ -114,6 +122,8 @@ struct Audio::Impl {
 		result["position"] = context->audioController->GetPlaybackPosition();
 		result["rate"] = context->audioController->GetPlaybackRate();
 		result["volume"] = static_cast<int>(std::lround(context->audioController->GetVolume() * 100));
+		result["gain"] = gain;
+		result["linked"] = OPT_GET("Audio/Link")->GetBool();
 		result["autocommit"] = OPT_GET("Audio/Auto/Commit")->GetBool();
 		result["autonext"] = OPT_GET("Audio/Next Line on Commit")->GetBool();
 		result["autoscroll"] = OPT_GET("Audio/Auto/Scroll")->GetBool();
@@ -288,7 +298,11 @@ std::string Audio::Interact(json::Object const& request) {
 	else if (action == "stop") context->audioController->Stop();
 	else if (action == "commit") timing->Commit();
 	else if (action == "revert") { impl->dragging.clear(); timing->Revert(); }
-	else if (action == "volume") context->audioController->SetVolume(integer(request, "value", 0, 200) / 100.);
+	else if (action == "gain") impl->SetGain(integer(request, "value", 10, 1000));
+	else if (action == "volume") {
+		if (OPT_GET("Audio/Link")->GetBool()) throw std::invalid_argument("volume is linked to waveform gain");
+		context->audioController->SetVolume(integer(request, "value", 0, 1000) / 100.);
+	}
 	else if (action == "rate") {
 		double const rate = integer(request, "value", 50, 200) / 100.;
 		context->videoController->SetPlaybackRate(rate);

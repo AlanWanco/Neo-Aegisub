@@ -66,6 +66,10 @@ pub struct AudioState {
     #[serde(default)]
     pub volume: i64,
     #[serde(default)]
+    pub gain: i64,
+    #[serde(default)]
+    pub linked: bool,
+    #[serde(default)]
     pub autocommit: bool,
     #[serde(default)]
     pub autonext: bool,
@@ -1080,8 +1084,9 @@ impl AudioPanel {
                     .accessibility_label("音量 −")
                     .tooltip("音量 −10%")
                     .ghost()
+                    .disabled(!state.loaded || state.linked)
                     .on_click(cx.listener(|view, _, _, cx| {
-                        let volume = (view.snapshot.audio.volume - 10).clamp(0, 200);
+                        let volume = (view.snapshot.audio.volume - 10).clamp(0, 1000);
                         view.invoke(
                             json!({"op":"audio_action", "action":"volume", "value":volume}),
                             cx,
@@ -1098,7 +1103,7 @@ impl AudioPanel {
                     .text_color(p.muted_foreground)
                     .child(Icon::new(IconName::Volume2).size(px(15.)))
                     .child(format!("{}%", state.volume)),
-                "播放音量",
+                if state.linked { "播放音量：跟随波形增益" } else { "播放音量" },
             ))
             .child(
                 Button::new("audio-volume-up")
@@ -1110,14 +1115,22 @@ impl AudioPanel {
                     .accessibility_label("音量 +")
                     .tooltip("音量 +10%")
                     .ghost()
+                    .disabled(!state.loaded || state.linked)
                     .on_click(cx.listener(|view, _, _, cx| {
-                        let volume = (view.snapshot.audio.volume + 10).clamp(0, 200);
+                        let volume = (view.snapshot.audio.volume + 10).clamp(0, 1000);
                         view.invoke(
                             json!({"op":"audio_action", "action":"volume", "value":volume}),
                             cx,
                         );
                     })),
-            );
+            )
+            .child(crate::page::with_tooltip(
+                crate::page::toggle_chip(cx, "audio-volume-link", "联动", state.linked, !state.loaded)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.invoke(json!({"op":"command", "name":"audio/opt/vertical_link"}), cx);
+                    })),
+                "音量与波形增益联动：开启后播放音量跟随增益，关闭后可独立调节",
+            ));
         let mut karaoke = div().v_flex().gap_2().flex_shrink_0();
         if state.karaoke {
             let mut syllables = div().flex().flex_wrap().gap_2();
@@ -1559,9 +1572,8 @@ impl AudioPanel {
                     .tooltip("降低波形增益（÷2）")
                     .disabled(!state.loaded)
                     .on_click(cx.listener(|view, _, _, cx| {
-                        view.audio.gain = (view.audio.gain / 2).max(10);
-                        view.refresh_audio(cx);
-                        cx.notify();
+                        let gain = (view.snapshot.audio.gain / 2).max(10);
+                        view.invoke(json!({"op":"audio_action", "action":"gain", "value":gain}), cx);
                     })),
             )
             .child(crate::page::with_tooltip(
@@ -1574,7 +1586,11 @@ impl AudioPanel {
                     .text_color(Theme::global(cx).muted_foreground)
                     .child(Icon::new(IconName::AudioLines).size(px(15.)))
                     .child(format!("{}%", self.gain)),
-                "波形显示增益：只改变画面幅度，不改变播放音量",
+                if state.linked {
+                    "波形显示增益：同时调整播放音量"
+                } else {
+                    "波形显示增益：只改变画面幅度，不改变播放音量"
+                },
             ))
             .child(
                 Button::new("audio-gain-up")
@@ -1586,9 +1602,8 @@ impl AudioPanel {
                     .tooltip("提高波形增益（×2）")
                     .disabled(!state.loaded)
                     .on_click(cx.listener(|view, _, _, cx| {
-                        view.audio.gain = (view.audio.gain * 2).min(1000);
-                        view.refresh_audio(cx);
-                        cx.notify();
+                        let gain = (view.snapshot.audio.gain * 2).min(1000);
+                        view.invoke(json!({"op":"audio_action", "action":"gain", "value":gain}), cx);
                     })),
             )
             .child(
