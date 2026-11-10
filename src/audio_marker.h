@@ -41,7 +41,7 @@ namespace agi {
 /// @brief A marker on the audio display
 /// @brief How an audio marker is drawn
 struct AudioMarkerStyle {
-	agi::Color colour{255, 255, 255, 255};
+	agi::Color colour{255, 255, 255, 0};
 	int width = 1;
 	bool dotted = false;
 };

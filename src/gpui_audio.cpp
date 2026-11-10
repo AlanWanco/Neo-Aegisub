@@ -73,6 +73,7 @@ struct Audio::Impl {
 	int gain = 800;
 	uint64_t epoch = 1;
 	uint64_t render_revision = 1;
+	TimeRange marker_range{0, 12000};
 	std::vector<agi::signal::Connection> option_connections;
 	agi::signal::Connection provider_connection;
 	agi::signal::Connection timing_connection;
@@ -86,6 +87,7 @@ struct Audio::Impl {
 		provider_connection = context->project->AddAudioProviderListener([this](agi::AudioProvider *provider) {
 			renderer.SetAudioProvider(provider);
 			dragging.clear(); ++gesture; ++epoch;
+			marker_range = TimeRange(0, 12000);
 		});
 		timing_connection = context->audioController->AddTimingControllerListener([this] {
 			dragging.clear(); ++gesture;
@@ -156,7 +158,7 @@ struct Audio::Impl {
 		if (auto timing = context->audioController->GetTimingController()) {
 			timing->GetRenderingStyles(ranges);
 			AudioMarkerVector positions;
-			timing->GetMarkers(timing->GetIdealVisibleTimeRange(), positions);
+			timing->GetMarkers(marker_range, positions);
 			// Every provider draws with its own pen, and the seconds ticks are
 			// dotted while the structural lines are solid; without the pen the
 			// frontend cannot tell a second tick from a keyframe or the play
@@ -165,7 +167,8 @@ struct Audio::Impl {
 				AudioMarkerStyle const style = marker->GetStyle();
 				auto const& colour = style.colour;
 				char hex[10];
-				snprintf(hex, sizeof hex, "#%02x%02x%02x%02x", colour.r, colour.g, colour.b, colour.a);
+				// agi::Color stores ASS transparency; the wire uses RGBA opacity.
+				snprintf(hex, sizeof hex, "#%02x%02x%02x%02x", colour.r, colour.g, colour.b, 255 - colour.a);
 				json::Object item;
 				item["time"] = marker->GetPosition();
 				item["colour"] = std::string(hex);
@@ -252,7 +255,12 @@ std::string Audio::Interact(json::Object const& request) {
 	auto timing = context->audioController->GetTimingController();
 	if (!timing) throw std::invalid_argument("no audio timing controller is available");
 	std::string const& action = request.at("action");
-	if (action == "down") {
+	if (action == "view") {
+		int const start = integer(request, "start", 0, std::numeric_limits<int>::max() - 600000);
+		int const span = integer(request, "span", 250, 600000);
+		impl->marker_range = TimeRange(start, start + span);
+	}
+	else if (action == "down") {
 		int const ms = integer(request, "ms", 0, std::numeric_limits<int>::max() - 1);
 		int const sensitivity = integer(request, "sensitivity", 0, 10000);
 		int const snap = integer(request, "snap", 0, 10000);

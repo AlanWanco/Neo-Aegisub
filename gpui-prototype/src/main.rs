@@ -4980,6 +4980,39 @@ impl Workspace {
         if !self.snapshot.audio.loaded {
             return;
         }
+        let marker_view = (
+            self.snapshot.audio.epoch,
+            self.audio.view_start,
+            self.audio.span,
+        );
+        if !self.audio.marker_loading && self.audio.marker_view != Some(marker_view) {
+            self.audio.marker_loading = true;
+            let bridge = self.bridge.clone();
+            let weak = cx.weak_entity();
+            cx.spawn(async move |_, cx| {
+                let result = bridge
+                    .call(json!({"op":"audio_action", "action":"view", "start":marker_view.1, "span":marker_view.2}))
+                    .await
+                    .and_then(|value| serde_json::from_value::<AudioState>(value).context("invalid audio markers"));
+                let _ = weak.update(cx, |view, cx| {
+                    view.audio.marker_loading = false;
+                    match result {
+                        Ok(state) => {
+                            if state.epoch == marker_view.0 && state.epoch == view.snapshot.audio.epoch {
+                                view.audio.marker_view = Some(marker_view);
+                                if (view.audio.view_start, view.audio.span) == (marker_view.1, marker_view.2) {
+                                    view.snapshot.audio.markers = state.markers;
+                                }
+                            }
+                            // A scroll during the request sends only its newest viewport.
+                            view.refresh_audio(cx);
+                        }
+                        Err(error) => view.status = format!("音频标记更新失败：{error:#}"),
+                    }
+                    cx.notify();
+                });
+            }).detach();
+        }
         let cached = &self.audio.tiles;
         self.audio
             .tile_inflight

@@ -269,6 +269,9 @@ pub struct AudioPanel {
     /// Tiles whose render is already in flight, so a burst of mouse moves does
     /// not queue the same slice twice.
     pub tile_inflight: Vec<TileKey>,
+    /// Last viewport acknowledged by the host, independent of cached bitmaps.
+    pub marker_view: Option<(u64, i64, i64)>,
+    pub marker_loading: bool,
     pub bounds: Rc<RefCell<Bounds<Pixels>>>,
     pub gesture: Option<u64>,
     pub dragging: bool,
@@ -294,6 +297,8 @@ impl AudioPanel {
             gain: 800,
             tiles: Vec::new(),
             tile_inflight: Vec::new(),
+            marker_view: None,
+            marker_loading: false,
             bounds: Rc::new(RefCell::new(Bounds::default())),
             gesture: None,
             dragging: false,
