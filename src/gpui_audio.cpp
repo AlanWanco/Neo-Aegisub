@@ -104,6 +104,9 @@ struct Audio::Impl {
 		result["render_revision"] = static_cast<int64_t>(render_revision);
 		result["snap_distance"] = OPT_GET("Audio/Snap/Distance")->GetInt();
 		result["drag_sensitivity"] = OPT_GET("Audio/Start Drag Sensitivity")->GetInt();
+		result["wheel_zoom"] = OPT_GET("Audio/Wheel Default to Zoom")->GetBool();
+		result["lock_scroll"] = OPT_GET("Audio/Lock Scroll on Cursor")->GetBool();
+		result["auto_focus"] = OPT_GET("Audio/Auto/Focus")->GetBool();
 		auto provider = context->project->AudioProvider();
 		result["duration"] = provider ? static_cast<int64_t>(std::min<int64_t>(provider->GetNumSamples() * 1000 / provider->GetSampleRate(), std::numeric_limits<int>::max() - 1)) : 0;
 		result["decoded"] = provider ? static_cast<int64_t>(provider->GetDecodedSamples() * 1000 / provider->GetSampleRate()) : 0;

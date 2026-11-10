@@ -46,6 +46,12 @@ pub struct AudioState {
     #[serde(default)]
     pub drag_sensitivity: i64,
     #[serde(default)]
+    pub wheel_zoom: bool,
+    #[serde(default)]
+    pub lock_scroll: bool,
+    #[serde(default)]
+    pub auto_focus: bool,
+    #[serde(default)]
     pub duration: i64,
     #[serde(default)]
     pub playing: bool,
@@ -428,6 +434,46 @@ impl AudioPanel {
         self.view_start =
             ((anchor - span as f64 * fraction).round() as i64).clamp(0, (duration - span).max(0));
         self.span = span;
+    }
+
+    fn scroll_wheel(
+        &mut self,
+        delta: gpui_kit::ScrollDelta,
+        zoom: bool,
+        fraction: f64,
+        duration: i64,
+    ) {
+        let (x, y) = match delta {
+            gpui_kit::ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y)),
+            gpui_kit::ScrollDelta::Lines(delta) => (delta.x * 40., delta.y * 40.),
+        };
+        if zoom {
+            // Horizontal gestures never zoom, matching the native audio display.
+            if x.abs() <= y.abs() {
+                let span = (self.span as f64 * 1.25_f64.powf(-f64::from(y) / 40.)).round() as i64;
+                self.zoom_at(span, fraction, duration);
+            }
+        } else {
+            let delta = if x.abs() > y.abs() { x } else { y };
+            let width = f32::from(self.bounds.borrow().size.width).max(1.);
+            let shift = (f64::from(delta) / f64::from(width) * self.span as f64).round() as i64;
+            self.view_start = (self.view_start - shift).clamp(0, (duration - self.span).max(0));
+        }
+    }
+
+    pub fn follow_playback(&mut self, state: &AudioState) -> bool {
+        if !state.loaded || !state.playing || !state.lock_scroll {
+            return false;
+        }
+        let edge = self.span / 20;
+        let start = self.view_start;
+        if state.position < start + edge {
+            self.view_start = state.position - edge;
+        } else if state.position > start + self.span - edge {
+            self.view_start = state.position - self.span + edge;
+        }
+        self.view_start = self.view_start.clamp(0, (state.duration - self.span).max(0));
+        self.view_start != start
     }
 
     /// Moves the view window from a cursor position while a pan is active.
@@ -885,27 +931,30 @@ impl AudioPanel {
                     if !view.snapshot.audio.loaded || view.audio.dragging {
                         return;
                     }
-                    let delta = match event.delta {
-                        gpui_kit::ScrollDelta::Pixels(delta) => f32::from(delta.y) / 40.,
-                        gpui_kit::ScrollDelta::Lines(delta) => delta.y,
+                    let invert = if cfg!(target_os = "macos") {
+                        event.modifiers.platform
+                    } else {
+                        event.modifiers.control
                     };
-                    if delta == 0. {
-                        return;
-                    }
                     let bounds = *view.audio.bounds.borrow();
                     let fraction = (f64::from(f32::from(event.position.x - bounds.left()))
                         / f64::from(f32::from(bounds.size.width).max(1.)))
                     .clamp(0., 1.);
-                    let span =
-                        (view.audio.span as f64 * 1.25_f64.powf(-f64::from(delta))).round() as i64;
-                    view.audio
-                        .zoom_at(span, fraction, view.snapshot.audio.duration);
-                    // Wheel zoom fires many times per gesture; each tick refreshes
-                    // the bounded set of missing slices, so the queue stays capped.
+                    view.audio.scroll_wheel(
+                        event.delta,
+                        invert != view.snapshot.audio.wheel_zoom,
+                        fraction,
+                        view.snapshot.audio.duration,
+                    );
                     view.refresh_audio(cx);
                     cx.notify();
                 }),
             )
+            .on_hover(cx.listener(|view, hovered: &bool, window, cx| {
+                if *hovered && view.snapshot.audio.loaded && view.snapshot.audio.auto_focus {
+                    view.claim_key_focus(crate::KeyFocus::Audio, window, cx);
+                }
+            }))
             .on_any_mouse_down(
                 cx.listener(|view, event: &gpui_kit::MouseDownEvent, window, cx| {
                     if !view.snapshot.audio.loaded
@@ -1723,7 +1772,61 @@ fn neighbour_ranges(
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioPanel, AudioRange, PanDrag, neighbour_ranges, thumb_fractions};
+    use super::{AudioPanel, AudioRange, AudioState, PanDrag, neighbour_ranges, thumb_fractions};
+
+    #[test]
+    fn wheel_pans_both_axes_and_zoom_ignores_horizontal_gestures() {
+        use gpui_kit::{Bounds, ScrollDelta, point, px, size};
+        let mut panel = AudioPanel::new();
+        *panel.bounds.borrow_mut() = Bounds::new(point(px(0.), px(0.)), size(px(1000.), px(100.)));
+        panel.scroll_wheel(
+            ScrollDelta::Pixels(point(px(0.), px(-100.))),
+            false,
+            0.5,
+            60000,
+        );
+        assert_eq!((panel.view_start, panel.span), (1200, 12000));
+        panel.scroll_wheel(ScrollDelta::Lines(point(-1., 0.)), false, 0.5, 60000);
+        assert_eq!((panel.view_start, panel.span), (1680, 12000));
+        panel.scroll_wheel(ScrollDelta::Lines(point(1., 0.)), true, 0.5, 60000);
+        assert_eq!((panel.view_start, panel.span), (1680, 12000));
+        panel.scroll_wheel(ScrollDelta::Lines(point(0., 1.)), true, 0.5, 60000);
+        assert_eq!((panel.view_start, panel.span), (2880, 9600));
+        panel.scroll_wheel(ScrollDelta::Lines(point(1000., 0.)), false, 0.5, 60000);
+        assert_eq!(panel.view_start, 0);
+        panel.scroll_wheel(ScrollDelta::Lines(point(-1000., 0.)), false, 0.5, 60000);
+        assert_eq!(panel.view_start, 50400);
+    }
+
+    #[test]
+    fn playback_follow_keeps_margin_and_respects_toggle_stop_and_media_end() {
+        let mut panel = AudioPanel::new();
+        let mut state = AudioState {
+            loaded: true,
+            playing: true,
+            lock_scroll: true,
+            duration: 60000,
+            position: 11000,
+            ..Default::default()
+        };
+        assert!(!panel.follow_playback(&state));
+        state.position = 11800;
+        assert!(panel.follow_playback(&state));
+        assert_eq!(panel.view_start, 400);
+        state.position = 100;
+        assert!(panel.follow_playback(&state));
+        assert_eq!(panel.view_start, 0);
+        state.position = 20000;
+        state.lock_scroll = false;
+        assert!(!panel.follow_playback(&state));
+        state.lock_scroll = true;
+        state.playing = false;
+        assert!(!panel.follow_playback(&state));
+        state.playing = true;
+        state.position = 59999;
+        assert!(panel.follow_playback(&state));
+        assert_eq!(panel.view_start, 48000);
+    }
 
     #[test]
     fn zoom_preserves_time_under_pointer() {

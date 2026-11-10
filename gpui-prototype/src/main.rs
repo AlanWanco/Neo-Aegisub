@@ -1835,6 +1835,7 @@ impl Workspace {
             }
         }
         self.snapshot = snapshot;
+        self.audio.follow_playback(&self.snapshot.audio);
         self.sync_script_dialog(cx);
         if !self.snapshot.modified {
             if let Some(action) = self.after_save.take() {
@@ -1888,6 +1889,9 @@ impl Workspace {
         self.snapshot.playing = playback.playing;
         self.snapshot.audio.playing = playback.audio_playing;
         self.snapshot.audio.position = playback.audio_position;
+        if self.audio.follow_playback(&self.snapshot.audio) && self.active_panel == Panel::Subtitles {
+            self.refresh_audio(cx);
+        }
         // Repaint only when a visible playback value changes.
         if self.snapshot.frame != frame
             || self.snapshot.playing != playing
