@@ -608,7 +608,8 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		    << ",\"video_scroll\":" << OPT_GET("Video/Scroll Action")->GetInt()
 		    << ",\"video_ctrl_scroll\":" << OPT_GET("Video/Ctrl Scroll Action")->GetInt()
 		    << ",\"video_shift_scroll\":" << OPT_GET("Video/Shift Scroll Action")->GetInt()
-		    << ",\"video_overscan\":" << (OPT_GET("Video/Overscan Mask")->GetBool() ? "true" : "false");
+		    << ",\"video_overscan\":" << (OPT_GET("Video/Overscan Mask")->GetBool() ? "true" : "false")
+		    << ",\"visual_autohide\":" << (OPT_GET("Tool/Visual/Autohide")->GetBool() ? "true" : "false");
 		out << ",\"styles\":[";
 		{
 			bool first_style = true;

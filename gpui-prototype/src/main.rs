@@ -602,6 +602,8 @@ struct Snapshot {
     video_epoch: u64,
     #[serde(default)]
     video_overscan: bool,
+    #[serde(default)]
+    visual_autohide: bool,
     fps: Option<f64>,
     #[serde(default = "no_active_line")]
     active: i64,
@@ -1630,6 +1632,7 @@ impl Workspace {
                 aspect: 1.,
                 video_epoch: 0,
                 video_overscan: false,
+                visual_autohide: false,
                 fps: None,
                 active: -1,
                 selected: vec![],
@@ -4955,7 +4958,13 @@ impl Workspace {
             }
         }
         if self.snapshot.video && self.active_panel == Panel::Visual {
-            area = area.child(self.visual.overlay(aspect, zoom, (pan_x, pan_y), cx));
+            area = area.child(self.visual.overlay(
+                aspect,
+                zoom,
+                (pan_x, pan_y),
+                self.snapshot.visual_autohide,
+                cx,
+            ));
         }
         area
     }

@@ -102,6 +102,7 @@ pub struct VisualPanel {
     pub queue: VecDeque<Value>,
     pub loading: bool,
     pub dragging: bool,
+    hovered: bool,
     pub drawn: Option<(u64, i64, i64, i64)>,
 }
 
@@ -116,6 +117,7 @@ impl VisualPanel {
             queue: VecDeque::new(),
             loading: false,
             dragging: false,
+            hovered: false,
             drawn: None,
         }
     }
@@ -206,12 +208,17 @@ impl VisualPanel {
         aspect: f32,
         zoom: f32,
         pan: (f32, f32),
+        auto_hide: bool,
         cx: &mut Context<Workspace>,
     ) -> impl IntoElement {
         let region = self.bounds.clone();
         let canvas_region = self.canvas_bounds.clone();
         let weak = cx.weak_entity();
-        let commands = self.commands.clone();
+        let commands = if auto_hide && !self.hovered {
+            Vec::new()
+        } else {
+            self.commands.clone()
+        };
         div()
             .id("visual-canvas")
             .absolute()
@@ -349,6 +356,8 @@ impl VisualPanel {
                 }),
             )
             .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
+                view.visual.hovered = *hovered;
+                cx.notify();
                 if !hovered && !view.visual.dragging {
                     view.queue_visual(json!({"action":"leave","x":0,"y":0}), cx);
                 }
