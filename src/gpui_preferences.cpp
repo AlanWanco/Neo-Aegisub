@@ -370,7 +370,7 @@ std::string Preferences(json::Object const& request) {
 			"Audio/Wheel Default to Zoom", "Audio/Lock Scroll on Cursor", "Audio/Auto/Focus",
 			"Audio/Display/Draw/Cursor Time", "Audio/Line Boundaries Thickness",
 			"Video/Scroll Action", "Video/Ctrl Scroll Action", "Video/Shift Scroll Action",
-			"Tool/Visual/Autohide",
+			"Tool/Visual/Autohide", "Video/Slider/Show Keyframes",
 			"Colour/Subtitle Grid/Standard", "Colour/Subtitle Grid/Background/Background",
 			"Colour/Subtitle Grid/Selection", "Colour/Subtitle Grid/Background/Selection",
 			"Colour/Subtitle Grid/Background/Comment", "Colour/Subtitle Grid/Background/Selected Comment",

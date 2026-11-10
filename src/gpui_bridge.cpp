@@ -610,6 +610,17 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		    << ",\"video_shift_scroll\":" << OPT_GET("Video/Shift Scroll Action")->GetInt()
 		    << ",\"video_overscan\":" << (OPT_GET("Video/Overscan Mask")->GetBool() ? "true" : "false")
 		    << ",\"visual_autohide\":" << (OPT_GET("Tool/Visual/Autohide")->GetBool() ? "true" : "false");
+		out << ",\"video_keyframes\":[";
+		if (current_provider && OPT_GET("Video/Slider/Show Keyframes")->GetBool()) {
+			bool first = true;
+			for (int frame : context->project->Keyframes()) {
+				if (frame < 0 || frame >= current_provider->GetFrameCount()) continue;
+				if (!first) out << ',';
+				first = false;
+				out << frame;
+			}
+		}
+		out << ']';
 		out << ",\"styles\":[";
 		{
 			bool first_style = true;

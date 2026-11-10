@@ -591,6 +591,8 @@ struct Snapshot {
     #[serde(default)]
     frame_count: i64,
     #[serde(default)]
+    video_keyframes: Arc<[i64]>,
+    #[serde(default)]
     video_time: i64,
     #[serde(default)]
     video_duration: i64,
@@ -1626,6 +1628,7 @@ impl Workspace {
                 styles: Vec::new(),
                 frame: 0,
                 frame_count: 0,
+                video_keyframes: Arc::default(),
                 video_time: 0,
                 video_duration: 0,
                 playback_rate: 1.,

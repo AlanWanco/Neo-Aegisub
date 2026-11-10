@@ -5,7 +5,10 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     slider::{SliderEvent, SliderState},
 };
-use gpui_kit::{AnimationExt, Context, Entity, IntoElement, Subscription, div, prelude::*, px};
+use gpui_kit::{
+    AnimationExt, Bounds, Context, Entity, IntoElement, Subscription, canvas, div, fill, point,
+    prelude::*, px, size,
+};
 use serde_json::json;
 
 use crate::{Snapshot, Workspace, format_time, workspace_theme::Palette};
@@ -84,6 +87,9 @@ impl VideoTimeline {
         let enabled = snapshot.video;
         let thick = self.hovering_scrubber || self.dragging;
         let target = if thick { 1. } else { 0. };
+        let keyframes = snapshot.video_keyframes.clone();
+        let last_frame = (snapshot.frame_count - 1).max(1);
+        let keyframe_ink = p.warning;
         div()
             .id("video-scrubber")
             .w_full()
@@ -188,6 +194,36 @@ impl VideoTimeline {
                                                         .bg(accent),
                                                 ),
                                         )
+                                        .child({
+                                            let keyframes = keyframes.clone();
+                                            canvas(
+                                                |_, _, _| (),
+                                                move |bounds, _, window, _| {
+                                                    let width = f32::from(bounds.size.width);
+                                                    let mut previous_x = None;
+                                                    for &frame in keyframes.iter() {
+                                                        let x = (frame as f32 / last_frame as f32
+                                                            * width)
+                                                            .round();
+                                                        // Dense lists need only one tick per pixel.
+                                                        if previous_x == Some(x) {
+                                                            continue;
+                                                        }
+                                                        previous_x = Some(x);
+                                                        window.paint_quad(fill(
+                                                            Bounds::new(
+                                                                bounds.origin
+                                                                    + point(px(x), px(2.)),
+                                                                size(px(1.), px(7.5)),
+                                                            ),
+                                                            keyframe_ink,
+                                                        ));
+                                                    }
+                                                },
+                                            )
+                                            .absolute()
+                                            .size_full()
+                                        })
                                         .child(
                                             // A playhead tick, not a dot: a short
                                             // vertical stroke that stands proud of
