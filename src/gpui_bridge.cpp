@@ -441,10 +441,19 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		if (op == "audio_render") { Reply(client, audio.Render(object)); return; }
 		if (op == "audio_action") { Reply(client, audio.Interact(object)); return; }
 		if (op == "automation_manager") { Reply(client, gpui::AutomationManager(context, object)); return; }
-		if (op == "dialog") {
-		Reply(client, gpui::Dialog(context, object));
-		return;
-	}
+        if (op == "dialog") {
+            std::string const& action = object.at("action");
+            if (action == "kanji_preview") object["revision"] = static_cast<json::Integer>(revision);
+            if (action == "kanji_match" || action == "kanji_apply") {
+                auto expected = object.find("revision");
+                if (expected == object.end() || static_cast<json::Integer const&>(expected->second) != static_cast<int64_t>(revision)) {
+                    Reply(client, R"({"ok":false,"error":"document changed; refresh kanji preview first"})");
+                    return;
+                }
+            }
+            Reply(client, gpui::Dialog(context, object));
+            return;
+        }
 	if (op == "color") { Reply(client, gpui::ColorPanel(context, object)); return; }
 		if (op == "catalog") { Reply(client, gpui::CommandCatalog(context, visual)); return; }
 		if (op == "attachments") {

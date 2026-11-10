@@ -45,6 +45,7 @@ use mpv_surface::MpvSurface;
 mod video_timeline;
 use translation_panel::{TranslationPanel, TranslationState};
 use video_settings_panel::{VideoPage, VideoSettings, VideoSettingsPanel};
+mod kanji_panel;
 mod script_dialog;
 mod visual_panel;
 mod workspace_theme;
@@ -526,23 +527,7 @@ enum HostDialog {
         fonts: Vec<FontEntry>,
         busy: bool,
     },
-    Kanji {
-        styles: Vec<String>,
-        source: String,
-        dest: String,
-        pairs: Vec<KanjiPair>,
-        source_count: i64,
-        dest_count: i64,
-        busy: bool,
-    },
-}
-
-#[derive(Clone, Debug)]
-struct KanjiPair {
-    source: String,
-    dest: String,
-    start: i64,
-    end: i64,
+    Kanji(kanji_panel::KanjiState),
 }
 
 #[derive(Clone, Debug)]
@@ -2549,154 +2534,6 @@ impl Workspace {
         cx.notify();
     }
 
-    fn open_kanji(&mut self, cx: &mut Context<Self>) {
-        self.dialog_request(
-            json!({"op": "dialog", "action": "kanji_preview", "source": "", "dest": ""}),
-            cx,
-            |view, value, cx| {
-                let styles: Vec<String> = value["styles"]
-                    .as_array()
-                    .map(|list| {
-                        list.iter()
-                            .filter_map(|name| name.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if styles.len() < 2 {
-                    view.status = "至少需要两个样式才能配对打轴".into();
-                    return;
-                }
-                view.host_dialog = Some(HostDialog::Kanji {
-                    source: styles[0].clone(),
-                    dest: styles[1].clone(),
-                    styles,
-                    pairs: Vec::new(),
-                    source_count: 0,
-                    dest_count: 0,
-                    busy: false,
-                });
-                view.refresh_kanji(cx);
-            },
-        );
-    }
-
-    fn refresh_kanji(&mut self, cx: &mut Context<Self>) {
-        let Some(HostDialog::Kanji { source, dest, .. }) = &self.host_dialog else {
-            return;
-        };
-        let payload = json!({
-            "op": "dialog",
-            "action": "kanji_preview",
-            "source": source,
-            "dest": dest,
-        });
-        self.dialog_request(payload, cx, |view, value, _| {
-            let pairs = value["pairs"]
-                .as_array()
-                .map(|list| {
-                    list.iter()
-                        .map(|pair| KanjiPair {
-                            source: pair["source"].as_str().unwrap_or("").to_owned(),
-                            dest: pair["dest"].as_str().unwrap_or("").to_owned(),
-                            start: pair["start"].as_i64().unwrap_or(0),
-                            end: pair["end"].as_i64().unwrap_or(0),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let styles: Vec<String> = value["styles"]
-                .as_array()
-                .map(|list| {
-                    list.iter()
-                        .filter_map(|name| name.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if let Some(HostDialog::Kanji {
-                pairs: slot,
-                styles: styles_slot,
-                source_count,
-                dest_count,
-                ..
-            }) = view.host_dialog.as_mut()
-            {
-                *slot = pairs;
-                if !styles.is_empty() {
-                    *styles_slot = styles;
-                }
-                *source_count = value["source_count"].as_i64().unwrap_or(0);
-                *dest_count = value["dest_count"].as_i64().unwrap_or(0);
-            }
-        });
-    }
-
-    fn apply_kanji(&mut self, cx: &mut Context<Self>) {
-        let Some(HostDialog::Kanji {
-            source, dest, busy, ..
-        }) = &mut self.host_dialog
-        else {
-            return;
-        };
-        if *busy {
-            return;
-        }
-        let payload = json!({
-            "op": "dialog",
-            "action": "kanji_apply",
-            "source": source,
-            "dest": dest,
-        });
-        *busy = true;
-        let bridge = self.bridge.clone();
-        let weak = cx.weak_entity();
-        cx.spawn(async move |_, cx| {
-            let result = bridge.call(payload).await;
-            let _ = weak.update(cx, |view, cx| {
-                match result {
-                    Ok(value) => {
-                        let changed = value["changed"].as_i64().unwrap_or(0);
-                        view.host_dialog = None;
-                        view.status = format!("已按配对复制 {changed} 行的时轴");
-                        view.refresh_document(cx);
-                    }
-                    Err(error) => {
-                        if let Some(HostDialog::Kanji { busy, .. }) = view.host_dialog.as_mut() {
-                            *busy = false;
-                        }
-                        view.status = format!("打轴失败：{error}");
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    fn dialog_request(
-        &mut self,
-        payload: Value,
-        cx: &mut Context<Self>,
-        apply: impl FnOnce(&mut Self, &Value, &mut Context<Self>) + 'static,
-    ) {
-        let bridge = self.bridge.clone();
-        let weak = cx.weak_entity();
-        cx.spawn(async move |_, cx| {
-            let result = bridge.call(payload).await;
-            let _ = weak.update(cx, |view, cx| match result {
-                Ok(value) => {
-                    apply(view, &value, cx);
-                    cx.notify();
-                }
-                Err(error) => {
-                    view.status = format!("对话框请求失败：{error}");
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
     fn open_font(&mut self, cx: &mut Context<Self>) {
         let bridge = self.bridge.clone();
         let weak = cx.weak_entity();
@@ -2811,6 +2648,9 @@ impl Workspace {
     }
 
     fn close_host_dialog(&mut self, cx: &mut Context<Self>) {
+        if matches!(&self.host_dialog, Some(HostDialog::Kanji(state)) if state.busy()) {
+            return;
+        }
         self.host_dialog = None;
         cx.notify();
     }
@@ -3403,169 +3243,12 @@ impl Workspace {
                     div().into_any_element(),
                 )
             }
-            HostDialog::Kanji {
-                styles,
-                source,
-                dest,
-                pairs,
-                source_count,
-                dest_count,
-                busy,
-            } => {
-                let busy = *busy;
-                let style_select = |id: &'static str,
-                                    current: String,
-                                    target_source: bool,
-                                    cx: &mut Context<Self>| {
-                    let options = styles.clone();
-                    let weak = cx.weak_entity();
-                    let current = if current.is_empty() {
-                        "选择样式".to_owned()
-                    } else {
-                        current
-                    };
-                    crate::page::select_trigger(cx, id, current, busy)
-                        .w(px(200.))
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for name in options.iter() {
-                                let choice = name.clone();
-                                let target = weak.clone();
-                                menu = menu.item(PopupMenuItem::new(choice.clone()).on_click(
-                                    move |_, _, cx| {
-                                        let choice = choice.clone();
-                                        let _ = target.update(cx, |view, cx| {
-                                            if let Some(HostDialog::Kanji {
-                                                source, dest, ..
-                                            }) = view.host_dialog.as_mut()
-                                            {
-                                                if target_source {
-                                                    *source = choice;
-                                                } else {
-                                                    *dest = choice;
-                                                }
-                                            }
-                                            view.refresh_kanji(cx);
-                                            cx.notify();
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        })
-                };
-                let style_row = div()
-                    .h_flex()
-                    .gap_3()
-                    .items_center()
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(div().text_xs().text_color(p.muted).child("源样式"))
-                            .child(style_select("kanji-source", source.clone(), true, cx)),
-                    )
-                    .child(
-                        Icon::new(IconName::ArrowRight)
-                            .size(px(14.))
-                            .text_color(p.muted),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(div().text_xs().text_color(p.muted).child("目标样式"))
-                            .child(style_select("kanji-dest", dest.clone(), false, cx)),
-                    );
-                let mut list = div()
-                    .id("host-dialog-kanji")
-                    .v_flex()
-                    .gap_1()
-                    .h(px(220.))
-                    .overflow_y_scrollbar()
-                    .rounded(px(workspace_theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(p.border)
-                    .bg(p.inset)
-                    .p(px(8.));
-                for (index, pair) in pairs.iter().enumerate() {
-                    list = list.child(
-                        div()
-                            .id(("kanji-pair", index))
-                            .v_flex()
-                            .gap_1()
-                            .px(px(8.))
-                            .py(px(6.))
-                            .rounded(px(workspace_theme::RADIUS_SM))
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .w(px(150.))
-                                            .flex_shrink_0()
-                                            .text_xs()
-                                            .text_color(p.muted)
-                                            .child(format!(
-                                                "{} → {}",
-                                                format_time(pair.start),
-                                                format_time(pair.end)
-                                            )),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .text_sm()
-                                            .child(pair.source.clone()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(div().w(px(58.)).flex_shrink_0())
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .text_xs()
-                                            .text_color(p.muted)
-                                            .child(pair.dest.clone()),
-                                    ),
-                            ),
-                    );
-                }
-                let note = format!(
-                    "源 {} 行 · 目标 {} 行 · 可配对 {} 对",
-                    source_count,
-                    dest_count,
-                    pairs.len()
-                );
-                let body = div()
-                    .v_flex()
-                    .gap_3()
-                    .child(style_row)
-                    .child(list)
-                    .child(div().text_xs().text_color(p.muted).child(note))
-                    .when(busy, |v| {
-                        v.child(div().text_xs().text_color(p.muted).child("正在写入…"))
-                    });
-                (
-                    "汉字打轴".into(),
-                    "按样式顺序把源行的时轴复制到目标行".into(),
-                    body.into_any_element(),
-                    div().into_any_element(),
-                )
-            }
+            HostDialog::Kanji(state) => (
+                "汉字打轴".into(),
+                "把源音节配给目标文字，生成卡拉 OK 标签".into(),
+                kanji_panel::render(state, window, cx),
+                div().into_any_element(),
+            ),
         };
 
         self.host_dialog = Some(dialog);
@@ -3600,9 +3283,7 @@ impl Workspace {
                         Some(HostDialog::Fonts { fonts, .. }) => {
                             format!("{} 个字体文件", fonts.len())
                         }
-                        Some(HostDialog::Kanji { pairs, .. }) => {
-                            format!("{} 对可写入", pairs.len())
-                        }
+                        Some(HostDialog::Kanji(state)) => state.summary(),
                         _ => String::new(),
                     }),
             )
@@ -3612,13 +3293,17 @@ impl Workspace {
                     .gap_2()
                     .child(
                         Button::new("host-dialog-close")
-                            .label("关闭")
+                            .label(if matches!(self.host_dialog, Some(HostDialog::Kanji(_))) { "取消" } else { "关闭" })
+                            .disabled(matches!(&self.host_dialog, Some(HostDialog::Kanji(state)) if state.busy()))
                             .ghost()
                             .rounded(px(999.))
                             .small()
                             .px(px(13.))
                             .py(px(3.))
-                            .on_click(cx.listener(|view, _, _, cx| view.close_host_dialog(cx))),
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.close_host_dialog(cx);
+                                if view.host_dialog.is_none() { view.focus_handle.focus(window, cx); }
+                            })),
                     )
                     .when(
                         matches!(self.host_dialog, Some(HostDialog::Font { .. })),
@@ -3666,12 +3351,13 @@ impl Workspace {
                         },
                     )
                     .when(
-                        matches!(self.host_dialog, Some(HostDialog::Kanji { .. })),
+                        matches!(self.host_dialog, Some(HostDialog::Kanji(_))),
                         |v| {
                             v.child(
                                 Button::new("host-dialog-kanji-apply")
-                                    .label("应用打轴")
+                                    .label("应用已接受的行")
                                     .primary()
+                                    .disabled(!matches!(&self.host_dialog, Some(HostDialog::Kanji(state)) if state.can_apply()))
                                     .rounded(px(999.))
                                     .small()
                                     .px(px(13.))
@@ -3684,7 +3370,13 @@ impl Workspace {
 
         let card = div()
             .id("host-dialog")
-            .w(px(560.))
+            .w(px(
+                if matches!(self.host_dialog, Some(HostDialog::Kanji(_))) {
+                    760.
+                } else {
+                    560.
+                },
+            ))
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|_, _, _, cx| cx.stop_propagation()),
@@ -3709,7 +3401,16 @@ impl Workspace {
                     .child(div().text_size(px(15.)).font_semibold().child(title))
                     .child(div().text_xs().text_color(p.muted).child(hint)),
             )
-            .child(div().v_flex().gap_3().p(px(20.)).child(body))
+            .child(
+                div()
+                    .id("host-dialog-body")
+                    .max_h(window.viewport_size().height - px(220.))
+                    .overflow_y_scrollbar()
+                    .v_flex()
+                    .gap_3()
+                    .p(px(20.))
+                    .child(body),
+            )
             .child(footer);
         let _ = window;
         Some(card.into_any_element())
@@ -6921,6 +6622,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(self.host_dialog, Some(HostDialog::Kanji(_))) {
+            self.handle_kanji_key(event, window, cx);
+            return;
+        }
         let key = &event.keystroke;
         // The script dialog owns the keyboard while it is up: its keys never
         // reach the document, and the window's own shortcuts stay quiet.
