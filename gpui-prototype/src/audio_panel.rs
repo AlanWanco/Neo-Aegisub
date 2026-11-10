@@ -566,7 +566,7 @@ impl AudioPanel {
             )
             .on_click(cx.listener(|view, _, _, cx| {
                 view.invoke(
-                    json!({"op":"audio_action", "action":"karaoke", "enabled":!view.snapshot.audio.karaoke}),
+                    json!({"op":"command", "name":"audio/karaoke"}),
                     cx,
                 )
             })),

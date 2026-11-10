@@ -258,10 +258,6 @@ std::string Audio::Interact(json::Object const& request) {
 			timing->OnMarkerDrag(impl->dragging, ms, snap);
 		if (action == "up") impl->dragging.clear();
 	}
-	else if (action == "karaoke") {
-		if (!context->selectionController->GetActiveLine()) throw std::invalid_argument("no line is selected");
-		context->karaoke->SetEnabled(flag(request, "enabled"));
-	}
 	else if (action == "karaoke_split" || action == "karaoke_merge" || action == "karaoke_accept" || action == "karaoke_cancel" || action == "karaoke_tag") {
 		if (!context->karaoke->IsEnabled()) throw std::invalid_argument("karaoke mode is not enabled");
 		impl->dragging.clear(); ++impl->gesture;

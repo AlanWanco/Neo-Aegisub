@@ -40,7 +40,7 @@ std::string_view CommandSurface(std::string_view name) {
 		name == "video/open" || name == "video/open/dummy" || name == "video/jump" ||
 		name == "video/aspect/custom" || name == "video/details" || name == "audio/open" ||
 		name == "tool/style/manager" || name == "subtitle/save" || name == "subtitle/save/as" ||
-		name == "audio/karaoke" || name == "audio/view/waveform" || name == "audio/view/spectrum" ||
+		name == "audio/view/waveform" || name == "audio/view/spectrum" ||
 		name == "audio/opt/vertical_link" || name == "app/language" ||
 		name.starts_with("edit/color/") || name == "edit/font" || name == "subtitle/open/video" ||
 		name == "tool/export" || name == "tool/font_collector" || name == "tool/time/kanji" ||

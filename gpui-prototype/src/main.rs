@@ -3855,11 +3855,6 @@ impl Workspace {
                     }
                     return;
                 }
-                Some("audio/karaoke") => {
-                    self.status = "卡拉 OK 模式尚未移植到 GPUI 前端".to_owned();
-                    cx.notify();
-                    return;
-                }
                 Some("app/new_window") => {
                     self.open_new_window(cx);
                     return;

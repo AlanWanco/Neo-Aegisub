@@ -34,6 +34,7 @@
 #include "../ass_dialogue.h"
 #include "../async_video_provider.h"
 #include "../audio_controller.h"
+#include "../audio_karaoke.h"
 #include "../audio_timing.h"
 #include "../gpui_bridge.h"
 #include "../include/aegisub/context.h"
@@ -506,13 +507,16 @@ struct audio_karaoke final : public Command {
 	STR_MENU("Toggle karaoke mode")
 	STR_DISP("Toggle karaoke mode")
 	STR_HELP("Toggle karaoke mode")
-	CMD_TYPE(COMMAND_TOGGLE)
+	CMD_TYPE(COMMAND_TOGGLE | COMMAND_VALIDATE)
 
-	bool IsActive(const agi::Context *) override {
-		return false;
+	bool Validate(const agi::Context *c) override {
+		return c->project->AudioProvider() && c->selectionController->GetActiveLine();
 	}
-	void operator()(agi::Context *) override {
-		gpui::PushCommand("audio/karaoke");
+	bool IsActive(const agi::Context *c) override {
+		return c->karaoke->IsEnabled();
+	}
+	void operator()(agi::Context *c) override {
+		c->karaoke->SetEnabled(!c->karaoke->IsEnabled());
 	}
 };
 
