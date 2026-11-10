@@ -368,6 +368,7 @@ std::string Preferences(json::Object const& request) {
 			"Subtitle/Grid/Focus Allow", "Subtitle/Grid/Highlight Subtitles in Frame",
 			"Audio/Snap/Distance", "Audio/Start Drag Sensitivity",
 			"Audio/Wheel Default to Zoom", "Audio/Lock Scroll on Cursor", "Audio/Auto/Focus",
+			"Audio/Display/Draw/Cursor Time", "Audio/Line Boundaries Thickness",
 			"Video/Scroll Action", "Video/Ctrl Scroll Action", "Video/Shift Scroll Action",
 			"Colour/Subtitle Grid/Standard", "Colour/Subtitle Grid/Background/Background",
 			"Colour/Subtitle Grid/Selection", "Colour/Subtitle Grid/Background/Selection",

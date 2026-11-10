@@ -52,6 +52,10 @@ pub struct AudioState {
     #[serde(default)]
     pub auto_focus: bool,
     #[serde(default)]
+    pub cursor_time: bool,
+    #[serde(default)]
+    pub boundary_width: i64,
+    #[serde(default)]
     pub duration: i64,
     #[serde(default)]
     pub playing: bool,
@@ -276,6 +280,7 @@ pub struct AudioPanel {
     pub drag_origin_x: Pixels,
     pub snap_inverted: bool,
     pub pan_drag: Option<PanDrag>,
+    hover_x: Option<Pixels>,
     /// Track size (width, height) the last refresh ran for, so a resize triggers one.
     pub last_track: (f32, f32),
 }
@@ -300,6 +305,7 @@ impl AudioPanel {
             drag_origin_x: px(0.),
             snap_inverted: false,
             pan_drag: None,
+            hover_x: None,
             last_track: (0., 0.),
         }
     }
@@ -834,10 +840,10 @@ impl AudioPanel {
                 .bg(fill)
                 .border_color(inactive_line);
             if range.start >= self.view_start {
-                band = band.border_l_1();
+                band = band.border_l(px(state.boundary_width.max(1) as f32));
             }
             if range.end <= self.view_start + self.span {
-                band = band.border_r_1();
+                band = band.border_r(px(state.boundary_width.max(1) as f32));
             }
             graph = graph.child(band);
         }
@@ -879,15 +885,22 @@ impl AudioPanel {
                     .left(px(width * left))
                     .w(px(width * (right - left)))
                     .bg(gpui_kit::rgba(0x65b8ff3d))
-                    .border_l_2()
-                    .border_color(start_color)
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(state.boundary_width.max(1) as f32))
+                            .bg(start_color),
+                    )
                     .child(
                         div()
                             .absolute()
                             .right_0()
                             .top_0()
                             .bottom_0()
-                            .w(px(2.))
+                            .w(px(state.boundary_width.max(1) as f32))
                             .bg(end_color),
                     )
                     .child(
@@ -929,6 +942,39 @@ impl AudioPanel {
                     .bg(appearance.color("Colour/Audio Display/Play Cursor", rgb(0xffffff).into())),
             );
         }
+        if state.loaded && !self.dragging {
+            if let Some(hover_x) = self.hover_x {
+                let x = f32::from(hover_x - self.bounds.borrow().left()).clamp(0., width);
+                graph = graph.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(x.min((width - 1.).max(0.))))
+                        .w(px(1.))
+                        .bg(rgb(0xffffff)),
+                );
+                if state.cursor_time {
+                    let text = format_time(self.time_at(hover_x, state));
+                    let label_width = (text.len() as f32 * 7. + 8.).min(width);
+                    graph = graph.child(
+                        div()
+                            .absolute()
+                            .top(px(2.))
+                            .left(px((x - label_width / 2.).clamp(0., width - label_width)))
+                            .w(px(label_width))
+                            .text_center()
+                            .whitespace_nowrap()
+                            .font_family(Theme::global(cx).mono_font_family.clone())
+                            .text_size(px(11.))
+                            .text_color(rgb(0xffffff))
+                            .bg(gpui_kit::rgba(0x101519e6))
+                            .rounded(px(3.))
+                            .child(text),
+                    );
+                }
+            }
+        }
         let graph = graph
             .on_scroll_wheel(
                 cx.listener(|view, event: &gpui_kit::ScrollWheelEvent, _, cx| {
@@ -958,6 +1004,9 @@ impl AudioPanel {
                 if *hovered && view.snapshot.audio.loaded && view.snapshot.audio.auto_focus {
                     view.claim_key_focus(crate::KeyFocus::Audio, window, cx);
                 }
+                if !*hovered && view.audio.hover_x.take().is_some() {
+                    cx.notify();
+                }
             }))
             .on_any_mouse_down(
                 cx.listener(|view, event: &gpui_kit::MouseDownEvent, window, cx| {
@@ -968,6 +1017,7 @@ impl AudioPanel {
                         return;
                     }
                     view.key_focus = crate::KeyFocus::Audio;
+                    view.audio.hover_x = None;
                     view.focus_handle.focus(window, cx);
                     let ms = view.audio.time_at(event.position.x, &view.snapshot.audio);
                     view.audio.snap_inverted = event.modifiers.shift;
@@ -984,6 +1034,10 @@ impl AudioPanel {
             )
             .on_mouse_move(
                 cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                    if view.snapshot.audio.loaded {
+                        view.audio.hover_x = Some(event.position.x);
+                        cx.notify();
+                    }
                     if !view.audio.dragging || event.pressed_button != view.audio.drag_button {
                         return;
                     }
