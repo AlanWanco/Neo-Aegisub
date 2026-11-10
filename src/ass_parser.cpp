@@ -85,7 +85,7 @@ public:
 		}
 
 		if (key.starts_with("Automation Settings ")) {
-			target->Properties.automation_settings[key.substr(strlen("Automation Settings"))] = value;
+			target->Properties.automation_settings[key.substr(strlen("Automation Settings "))] = value;
 			return true;
 		}
 

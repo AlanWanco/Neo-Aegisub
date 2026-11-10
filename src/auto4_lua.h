@@ -31,6 +31,8 @@
 
 #include "auto4_base.h"
 
+#include <libaegisub/cajun/elements.h>
+
 #include <deque>
 #include <vector>
 
@@ -156,5 +158,14 @@ namespace Automation4 {
 
 		static ProgressSink* GetObjPointer(lua_State *L, int idx);
 	};
+
+    /// Normalizes the Lua control table at stack index `controls` (plus optional `buttons` and
+    /// `button_ids` tables; 0 means absent, negative indices are relative to the top) into
+    /// {"controls": [...], "buttons": [...]}. Every control carries its typed default value.
+    /// Invalid tables raise a Lua error through agi::lua::error (agi::lua::error_tag).
+    json::Object LuaDialogDefinition(lua_State *L, int controls, int buttons = 0, int button_ids = 0);
+    /// Pushes one table keyed by control name, holding the typed value from `values` or the
+    /// definition's default when a name is missing. Label controls produce no output.
+    void LuaDialogPushValues(lua_State *L, json::Object const& definition, json::Object const& values);
 
 }

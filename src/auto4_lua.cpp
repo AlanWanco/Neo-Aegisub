@@ -55,6 +55,8 @@
 #include "utils.h"
 #include "version.h"
 
+#include <libaegisub/ass/string_codec.h>
+#include <libaegisub/cajun/writer.h>
 #include <libaegisub/dispatch.h>
 #include <libaegisub/lua/ffi.h>
 #include <libaegisub/lua/modules.h>
@@ -62,6 +64,8 @@
 #include <libaegisub/lua/utils.h>
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
+#include <libaegisub/split.h>
+#include <libaegisub/util.h>
 
 #include <algorithm>
 #include <boost/algorithm/string/case_conv.hpp>
@@ -69,7 +73,9 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/scope_exit.hpp>
 #include <cassert>
+#include <map>
 #include <mutex>
+#include <sstream>
 
 using namespace agi::lua;
 using namespace Automation4;
@@ -392,7 +398,15 @@ namespace {
 		LuaExportFilter(lua_State *L);
 		static int LuaRegister(lua_State *L);
 
+		void LoadSettings(bool, agi::Context *c) override;
 		void ProcessSubs(AssFile *subs) override;
+
+	private:
+		bool has_config = false;
+		agi::Context *context = nullptr;
+		json::Object config_definition;
+
+		json::Object ShowConfigDialog(AssFile *subs);
 	};
 	class LuaScript final : public Script {
 		lua_State *L = nullptr;
@@ -673,6 +687,7 @@ namespace {
 			runner.Run([&](agi::ProgressSink *raw) {
 				ProgressSink aps(raw);
 				ProgressSink *ps = &aps;
+				ps->SetTitle(title);
 				LuaProgressSink lps(L, ps);
 
 				// Insert our error handler under the function to call
@@ -1001,6 +1016,7 @@ namespace {
 		// store config function
 		push_value(L, "config");
 		lua_pushvalue(L, 5);
+        has_config = lua_isfunction(L, -1);
 		lua_rawset(L, -3);
 
 		// store the table in the registry
@@ -1020,31 +1036,131 @@ namespace {
 		return 0;
 	}
 
+	void LuaExportFilter::LoadSettings(bool, agi::Context *c)
+	{
+		context = c;
+	}
+
+	json::Object LuaExportFilter::ShowConfigDialog(AssFile *subs)
+	{
+		LuaStackcheck stackcheck(L);
+		int const stack_top = lua_gettop(L);
+		BOOST_SCOPE_EXIT_ALL(&) { lua_settop(L, stack_top); };
+		set_context(L, context);
+		auto const identifier = GetScriptSettingsIdentifier();
+		std::map<std::string, std::string> stored;
+		if (auto it = subs->Properties.automation_settings.find(identifier); it != subs->Properties.automation_settings.end()) {
+			for (auto item : agi::Split(it->second, '|')) {
+				auto const colon = item.find(':');
+				if (colon != item.npos)
+					stored[agi::ass::inline_string_decode(item.substr(0, colon))] = agi::ass::inline_string_decode(item.substr(colon + 1));
+			}
+		}
+
+		auto restore = [&](json::Object const& definition) {
+			json::Object values;
+			for (auto const& element : static_cast<json::Array const&>(definition.at("controls"))) {
+				auto const& control = static_cast<json::Object const&>(element);
+				auto const& name = static_cast<json::String const&>(control.at("name"));
+				auto const& kind = static_cast<json::String const&>(control.at("class"));
+				auto const it = stored.find(name);
+				if (kind == "label" || it == stored.end()) continue;
+				if (kind == "intedit") {
+					int value;
+					if (agi::util::try_parse(it->second, &value)) values[name] = value;
+				}
+				else if (kind == "floatedit") {
+					double value;
+					if (agi::util::try_parse(it->second, &value)) values[name] = value;
+				}
+				else if (kind == "checkbox") values[name] = it->second != "0";
+				else values[name] = it->second;
+			}
+			return values;
+		};
+
+		GetFeatureFunction("config");
+		auto subsobj = new LuaAssFile(L, subs);
+		if (!config_definition.empty() && !stored.empty())
+			LuaDialogPushValues(L, config_definition, restore(config_definition));
+		else
+			lua_newtable(L);
+
+		int const err = lua_pcall(L, 2, 1, 0);
+		subsobj->ProcessingComplete();
+		if (err) {
+			auto message = fmt_tl("Runtime error in Lua export config function:\n%s", get_string_or_default(L, -1));
+			lua_pop(L, 1);
+			throw AutomationError(std::move(message));
+		}
+
+		try {
+			config_definition = LuaDialogDefinition(L, -1);
+		}
+		catch (agi::lua::error_tag const&) {
+			auto message = fmt_tl("Runtime error in Lua export config function:\n%s", get_string_or_default(L, -1));
+			throw AutomationError(std::move(message));
+		}
+		lua_pop(L, 1);
+		stackcheck.check_stack(0);
+		auto& definition = config_definition;
+		auto restored = restore(definition);
+		for (auto& element : static_cast<json::Array&>(definition.at("controls"))) {
+			auto& control = static_cast<json::Object&>(element);
+			auto const& name = static_cast<json::String const&>(control.at("name"));
+			if (auto it = restored.find(name); it != restored.end()) control["value"] = std::move(it->second);
+		}
+		definition["kind"] = std::string("form");
+		definition["title"] = GetName();
+		auto response = gpui::AskScriptDialog(definition);
+		if (!response.count("button") || static_cast<json::Integer const&>(response.at("button")) != 0)
+			throw agi::UserCancelException("Export cancelled in filter config");
+
+		auto values = std::move(static_cast<json::Object&>(response.at("values")));
+		std::string serialised;
+		for (auto const& element : static_cast<json::Array const&>(definition.at("controls"))) {
+			auto const& control = static_cast<json::Object const&>(element);
+			auto const& kind = static_cast<json::String const&>(control.at("class"));
+			if (kind == "label") continue;
+			auto const& name = static_cast<json::String const&>(control.at("name"));
+			auto const it = values.find(name);
+			auto const& value = it == values.end() ? control.at("value") : it->second;
+			std::string text;
+			if (kind == "checkbox") text = static_cast<json::Boolean const&>(value) ? "1" : "0";
+			else if (kind == "intedit" || kind == "floatedit") {
+				std::ostringstream stream;
+				agi::JsonWriter::Write(value, stream);
+				text = stream.str();
+			}
+			else text = static_cast<json::String const&>(value);
+			if (!serialised.empty()) serialised += '|';
+			serialised += agi::ass::inline_string_encode(name) + ":" + agi::ass::inline_string_encode(text);
+		}
+		// Export works on a copy; AssExporter publishes settings only after a successful write.
+		subs->Properties.automation_settings[identifier] = std::move(serialised);
+		return values;
+	}
+
 	void LuaExportFilter::ProcessSubs(AssFile *subs)
 	{
 		LuaStackcheck stackcheck(L);
+		int const stack_top = lua_gettop(L);
+		BOOST_SCOPE_EXIT_ALL(&) { lua_settop(L, stack_top); };
+		set_context(L, context);
+		auto const values = has_config ? ShowConfigDialog(subs) : json::Object{};
 
 		GetFeatureFunction("run");
-		stackcheck.check_stack(1);
-
-		// The entire point of an export filter is to modify the file, but
-		// setting undo points makes no sense
 		auto subsobj = new LuaAssFile(L, subs, true);
-		assert(lua_isuserdata(L, -1));
-		stackcheck.check_stack(2);
-
-        // config: the config panel is front-end owned and not wired up yet,
-        // so the script receives an empty table
-        lua_newtable(L);
-		assert(lua_istable(L, -1));
-		stackcheck.check_stack(3);
-
 		try {
+			if (has_config)
+				LuaDialogPushValues(L, config_definition, values);
+			else
+				lua_newtable(L);
 			LuaThreadedCall(L, 2, 0, GetName());
 			stackcheck.check_stack(0);
 			subsobj->ProcessingComplete();
 		}
-		catch (agi::UserCancelException const&) {
+		catch (...) {
 			subsobj->Cancel();
 			throw;
 		}

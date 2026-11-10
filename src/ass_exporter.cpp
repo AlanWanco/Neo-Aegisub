@@ -60,6 +60,7 @@ std::vector<std::string> AssExporter::GetAllFilterNames() const {
 
 void AssExporter::Export(agi::fs::path const& filename, const char *charset) {
 	AssFile subs(*c->ass);
+	subs.Properties.automation_settings = c->ass->Properties.automation_settings;
 
 	for (auto filter : filters) {
 		filter->LoadSettings(true, c);
@@ -71,6 +72,7 @@ void AssExporter::Export(agi::fs::path const& filename, const char *charset) {
 		throw agi::InvalidInputException("Unknown file type.");
 
 	writer->ExportFile(&subs, filename, c->project->Timecodes(), charset);
+	c->ass->Properties.automation_settings = std::move(subs.Properties.automation_settings);
 }
 
 std::string const& AssExporter::GetDescription(std::string const& name) const {

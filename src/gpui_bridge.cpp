@@ -44,6 +44,8 @@
 
 #include <libaegisub/cajun/reader.h>
 #include <libaegisub/cajun/visitor.h>
+#include <libaegisub/cajun/writer.h>
+#include <libaegisub/dispatch.h>
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/log.h>
 
@@ -59,8 +61,10 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -98,6 +102,16 @@ struct ProgressState {
 	bool cancelled = false;
 };
 ProgressState progress_state;
+
+struct ScriptDialogState {
+	int64_t id;
+	std::string request;
+	std::optional<json::Object> response;
+};
+// Script dialogs are created and answered on the host loop thread, including
+// when a Lua worker asks synchronously through the main dispatch queue.
+ScriptDialogState *script_dialog = nullptr;
+int64_t next_script_dialog_id = 0;
 
 int attached_clients = 0;
 
@@ -216,6 +230,29 @@ int gpui::AskChoice(std::string title, std::string body, std::string suppress_op
 			answered = true;
 		});
 	while (!answered) EventLoop::Current().Pump(8);
+	return answer;
+}
+
+json::Object gpui::AskScriptDialog(json::Object& request) {
+	json::Object answer;
+	auto ask = [&] {
+		if (!FrontendAttached()) return;
+		if (script_dialog) throw std::logic_error("A script dialog is already open");
+		int64_t const id = ++next_script_dialog_id;
+		request["id"] = id;
+		std::ostringstream stream;
+		agi::JsonWriter::Write(request, stream);
+		auto encoded = stream.str();
+		encoded.erase(std::remove(encoded.begin(), encoded.end(), '\n'), encoded.end());
+		ScriptDialogState pending{id, std::move(encoded), std::nullopt};
+		script_dialog = &pending;
+		while (!pending.response && FrontendAttached() && !ProgressCancelled())
+			EventLoop::Current().Pump(8);
+		script_dialog = nullptr;
+		if (pending.response) answer = std::move(*pending.response);
+	};
+	if (EventLoop::Current().OnLoopThread()) ask();
+	else agi::dispatch::Main().Sync(ask);
 	return answer;
 }
 
@@ -344,7 +381,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		std::istringstream stream(request);
 		json::UnknownElement parsed;
 		json::Reader::Read(parsed, stream);
-		auto const& object = static_cast<json::Object const&>(parsed);
+		auto& object = static_cast<json::Object&>(parsed);
 		auto token_it = object.find("token");
 		if (token_it == object.end() || static_cast<std::string const&>(token_it->second) != token) {
 			Reply(client, R"({"ok":false,"error":"unauthorized"})");
@@ -382,6 +419,17 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 				if (progress_state.active) progress_state.cancelled = true;
 			}
 			Reply(client, "{\"ok\":true}");
+			return;
+		}
+		if (op == "script_dialog_reply") {
+			int64_t const id = static_cast<json::Integer const&>(object.at("id"));
+			if (!script_dialog || script_dialog->response ||
+				id != script_dialog->id) {
+				Reply(client, R"({"ok":false,"error":"script dialog is no longer open"})");
+				return;
+			}
+			script_dialog->response = std::move(static_cast<json::Object&>(object.at("response")));
+			Reply(client, R"({"ok":true})");
 			return;
 		}
 		if (op == "snapshot") { Reply(client, Snapshot()); return; }
@@ -563,6 +611,10 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		}
 		out << ']';
 		out << ",\"audio\":" << audio.Snapshot();
+		out << ",\"script_dialog\":";
+		if (script_dialog && !script_dialog->response)
+			out << script_dialog->request;
+		else out << "null";
 		out << ",\"notices\":[";
 		{
 			std::lock_guard<std::mutex> lock(notice_mutex);

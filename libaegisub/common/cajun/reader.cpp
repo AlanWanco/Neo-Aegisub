@@ -313,16 +313,17 @@ UnknownElement Reader::ParseNumber(Reader::TokenStream& tokenStream) {
 	iStr >> iValue;
 
 	// If the entire token was consumed then it's not a double
-	if (iStr.eof())
+	if (iStr.eof() && !iStr.fail())
 		return iValue;
 
 	// Try again as a double
+	iStr.clear();
 	iStr.seekg(0, std::ios::beg);
 	double dValue;
 	iStr >> dValue;
 
 	// If there's still stuff left in the token then it's malformed
-	if (!iStr.eof())
+	if (iStr.fail() || !iStr.eof())
 		throw ParseException(std::string("Unexpected character in NUMBER token: ") + (char)iStr.peek(),
 			currentToken.locBegin, currentToken.locEnd);
 

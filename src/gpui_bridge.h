@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <libaegisub/cajun/elements.h>
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -41,6 +43,11 @@ void PushCommand(std::string name);
 /// no front end is attached or the prompt was dismissed.
 int AskChoice(std::string title, std::string body, std::string suppress_option,
               std::string kind, std::vector<std::string> choices);
+
+/// Show a Lua form or file picker and wait while the host keeps answering
+/// frontend requests. Safe on the loop thread and on a script worker thread.
+/// A dismissed dialog or disconnected frontend returns an empty response.
+json::Object AskScriptDialog(json::Object& request);
 
 /// Replace the front end's status line text.
 void PushStatus(std::string text);

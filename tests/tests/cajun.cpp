@@ -25,6 +25,8 @@
 #include <libaegisub/cajun/elements.h>
 #include <libaegisub/cajun/visitor.h>
 
+#include <limits>
+
 class lagi_cajun : public libagi { };
 
 TEST(lagi_cajun, CastNonConst) {
@@ -268,6 +270,19 @@ TEST(lagi_cajun, round_double_roundtrips) {
 
 TEST(lagi_cajun, representable_double_roundtrips) {
 	EXPECT_STREQ("1.5", roundtrip_test("1.5").c_str());
+}
+
+TEST(lagi_cajun, scientific_double_values_roundtrip) {
+	for (double value : {1e19, 1e20, -1e20, std::numeric_limits<double>::max(), -std::numeric_limits<double>::max()}) {
+		SCOPED_TRACE(value);
+		std::stringstream stream;
+		json::Object object;
+		object["value"] = value;
+		agi::JsonWriter::Write(object, stream);
+		json::UnknownElement restored;
+		json::Reader::Read(restored, stream);
+		EXPECT_EQ(value, static_cast<json::Double const&>(static_cast<json::Object const&>(restored).at("value")));
+	}
 }
 
 TEST(lagi_cajun, int_roundtrips) {

@@ -18,6 +18,7 @@
 
 #include <libaegisub/cajun/writer.h>
 #include <libaegisub/charset_conv.h>
+#include <libaegisub/exception.h>
 #include <libaegisub/log.h>
 #include <libaegisub/split.h>
 
@@ -274,11 +275,17 @@ std::string Dialog(agi::Context *context, json::Object const& request) {
 			filters += name;
 		}
 		std::string const& encoding = request.at("encoding");
-		exporter.Export(path, encoding.c_str());
-		context->ass->Properties.export_filters = filters;
-		context->ass->Properties.export_encoding = encoding;
-		result["ok"] = true;
-		result["path"] = path;
+		try {
+			exporter.Export(path, encoding.c_str());
+			context->ass->Properties.export_filters = filters;
+			context->ass->Properties.export_encoding = encoding;
+			result["ok"] = true;
+			result["path"] = path;
+		}
+		catch (agi::UserCancelException const&) {
+			result["ok"] = false;
+			result["cancelled"] = true;
+		}
 	}
 	else if (action == "font_collect") result = font_collection(context);
 	else if (action == "kanji_preview") result = kanji_preview(context, request);

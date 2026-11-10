@@ -45,12 +45,14 @@ use mpv_surface::MpvSurface;
 mod video_timeline;
 use translation_panel::{TranslationPanel, TranslationState};
 use video_settings_panel::{VideoPage, VideoSettings, VideoSettingsPanel};
+mod script_dialog;
 mod visual_panel;
 mod workspace_theme;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Sizable;
 use gpui_kit::{ObjectFit, StyledImage};
 use image::Frame as VideoImageFrame;
+use script_dialog::{ScriptDialogRequest, ScriptDialogState};
 use workspace_theme::Palette;
 
 use visual_panel::{VisualPanel, VisualReply};
@@ -634,6 +636,9 @@ struct Snapshot {
     /// Commands the host wants this front end to run, because it owns their UI.
     #[serde(default)]
     commands: Vec<String>,
+    /// The dialog the host is waiting on; repeated in every snapshot until answered.
+    #[serde(default)]
+    script_dialog: Option<ScriptDialogRequest>,
 }
 
 /// Status bar hints per hotkey context: (context, label, [(command, text)]).
@@ -1428,6 +1433,8 @@ struct Workspace {
     color_picker: Entity<ColorPickerState>,
     _color_events: Vec<Subscription>,
     host_dialog: Option<HostDialog>,
+    script_dialog: Option<ScriptDialogState>,
+    script_dialog_replied: i64,
     font_filter: Entity<InputState>,
     log_filter: Entity<InputState>,
     _host_dialog_events: Vec<Subscription>,
@@ -1615,6 +1622,7 @@ impl Workspace {
                 file: "正在连接 Neo Aegisub…".into(),
                 notices: Vec::new(),
                 progress: None,
+                script_dialog: None,
                 commands: Vec::new(),
                 modified: false,
                 can_save: false,
@@ -1725,6 +1733,8 @@ impl Workspace {
             color_picker,
             _color_events: color_events,
             host_dialog: None,
+            script_dialog: None,
+            script_dialog_replied: 0,
             font_filter,
             log_filter,
             _host_dialog_events: host_dialog_events,
@@ -1840,6 +1850,7 @@ impl Workspace {
             }
         }
         self.snapshot = snapshot;
+        self.sync_script_dialog(cx);
         if !self.snapshot.modified {
             if let Some(action) = self.after_save.take() {
                 self.invoke(json!({"op": "command", "name": action, "direct": true}), cx);
@@ -4865,6 +4876,7 @@ impl Workspace {
             || self.snapshot.video_overscan
             || self.host_dialog.is_some()
             || self.color_dialog.is_some()
+            || self.script_dialog.is_some()
             // Both mpv's window and the host's dialogs are windows of their
             // own; the host's layers never reach over either.
             || self.overlay_over_picture(cx);
@@ -6910,6 +6922,15 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let key = &event.keystroke;
+        // The script dialog owns the keyboard while it is up: its keys never
+        // reach the document, and the window's own shortcuts stay quiet.
+        if self.script_dialog.is_some() {
+            if self.handle_script_dialog_key(event, window, cx) {
+                cx.stop_propagation();
+            }
+            cx.notify();
+            return;
+        }
         // A host notice behaves like a modal: Enter or Escape acknowledges it.
         if !self.notices.is_empty()
             && matches!(key.key.as_str(), "escape" | "enter" | "return" | "space")
@@ -9652,7 +9673,6 @@ impl Render for Workspace {
         let root = div()
             .id("aegisub-gpui-workspace")
             .track_focus(&self.focus_handle)
-            .capture_key_down(cx.listener(Self::handle_key))
             .on_drop(cx.listener(|view, paths: &ExternalPaths, _, cx| view.open_dropped(paths, cx)))
             .on_mouse_move(
                 cx.listener(|view, event: &gpui_kit::MouseMoveEvent, _, cx| {
@@ -10069,7 +10089,11 @@ impl Render for Workspace {
                     .when(detached, |v| v.p_3())
                     .child(body),
             );
-        let mut layered = div().relative().size_full().child(workspace);
+        let mut layered = div()
+            .relative()
+            .size_full()
+            .capture_key_down(cx.listener(Self::handle_key))
+            .child(workspace);
         if let Some(card) = self.render_color_dialog(window, cx) {
             layered = layered.child(
                 div()
@@ -10113,6 +10137,9 @@ impl Render for Workspace {
                     .bg(gpui_kit::hsla(0., 0., 0., 0.42))
                     .child(card),
             );
+        }
+        if let Some(card) = self.render_script_dialog(window, cx) {
+            layered = layered.child(card);
         }
         if self.notices.is_empty() {
             return layered.into_any_element();
@@ -10529,6 +10556,7 @@ fn open_workspace(
                 }
                 view.update(cx, |view, cx| {
                     if view.detached.is_some() || !view.snapshot.modified {
+                        view.cancel_script_dialog(cx);
                         return true;
                     }
                     if view.notices.iter().any(|notice| notice.kind == "unsaved") {

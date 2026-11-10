@@ -67,10 +67,11 @@ void JsonWriter::Visit(json::Object const& object) {
 }
 
 void JsonWriter::Visit(double d) {
-	ostr << std::setprecision(20) << d;
+	ostr << std::defaultfloat << std::setprecision(20) << d;
 
 	double unused;
-	if (!std::modf(d, &unused))
+	// At this precision, integral values >= 1e20 already have an exponent.
+	if (std::abs(d) < 1e20 && !std::modf(d, &unused))
 		ostr << ".0";
 }
 
