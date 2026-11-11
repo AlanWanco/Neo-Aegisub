@@ -466,6 +466,8 @@ impl MpvSurface {
         {
             self.background = background;
         }
+    }
+
     pub fn set_view(&mut self, aspect: f64, zoom: f32, pan: (f32, f32)) {
         let values = [aspect, f64::from(zoom.log2()), f64::from(pan.0), f64::from(pan.1)];
         if self.view == Some(values) {
@@ -482,8 +484,6 @@ impl MpvSurface {
             }
         }
         self.view = Some(values);
-    }
-
     }
 
     pub fn path(&self) -> &str {
