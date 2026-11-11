@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Sizable;
@@ -50,12 +50,26 @@ pub struct VisualReply {
     pub height: i64,
 }
 
+/// Which tool takes pointer input over the picture. The subtitle tools hand
+/// it to the host; the view tools move or zoom the picture through the video
+/// view and never reach the host.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ViewTool {
+    /// Subtitle tools: pointer input goes to the host.
+    #[default]
+    Edit,
+    /// Drags the picture; the video view handles the press and motion.
+    Pan,
+    /// Zooms the picture; the video view handles the wheel and drag.
+    Zoom,
+}
+
 const VISUAL_TOOLS: [(&str, &str); 7] = [
     ("cross", "十字"),
-    ("drag", "拖动"),
+    ("drag", "字幕移动"),
     ("rotate/z", "Z 旋转"),
     ("rotate/xy", "XY 旋转"),
-    ("scale", "缩放"),
+    ("scale", "字幕缩放"),
     ("clip", "矩形裁剪"),
     ("vector_clip", "矢量裁剪"),
 ];
@@ -93,6 +107,10 @@ pub fn command_tool(name: &str) -> Option<(&'static str, Option<usize>)> {
 pub struct VisualPanel {
     pub tool: &'static str,
     pub subtool: usize,
+    /// Navigation tool over the picture. Only `Edit` lets the subtitle tools
+    /// draw and take the mouse; the parent sets it back to `Edit` when a
+    /// subtitle tool is selected.
+    pub view_tool: ViewTool,
     /// The picture rectangle on screen, zoom and pan included.
     pub bounds: Rc<RefCell<Bounds<Pixels>>>,
     /// The picture fitted to the viewport before zoom and pan. The host sizes
@@ -103,6 +121,8 @@ pub struct VisualPanel {
     pub loading: bool,
     pub dragging: bool,
     hovered: bool,
+    /// Whether the last paint was interactive; a change requests a fresh draw.
+    live_edit: Rc<Cell<bool>>,
     pub drawn: Option<(u64, i64, i64, i64)>,
 }
 
@@ -111,6 +131,7 @@ impl VisualPanel {
         Self {
             tool: "cross",
             subtool: 1,
+            view_tool: ViewTool::Edit,
             bounds: Rc::new(RefCell::new(Bounds::default())),
             canvas_bounds: Rc::new(RefCell::new(Bounds::default())),
             commands: vec![],
@@ -118,6 +139,7 @@ impl VisualPanel {
             loading: false,
             dragging: false,
             hovered: false,
+            live_edit: Rc::new(Cell::new(false)),
             drawn: None,
         }
     }
@@ -132,30 +154,35 @@ impl VisualPanel {
         )
     }
 
+    /// Whether the subtitle tool owns the picture: Edit mode while paused.
+    /// While playing, or under a view tool, the video view and mpv keep it.
+    pub fn interactive(&self, playing: bool) -> bool {
+        self.view_tool == ViewTool::Edit && !playing
+    }
+
     pub fn toolbar(&self, cx: &mut Context<Workspace>) -> impl IntoElement {
-        let active = VISUAL_TOOLS
-            .iter()
-            .position(|(mode, _)| *mode == self.tool)
-            .unwrap_or(0);
-        let mut bar = crate::page::toolbar([crate::page::segmented(
-            cx,
+        let edit = self.view_tool == ViewTool::Edit;
+        // Wrapping buttons rather than a segmented control: a segmented row
+        // cannot shrink or wrap, so it clips the tools in a compact window.
+        let mut bar = crate::page::toolbar(
             VISUAL_TOOLS
                 .iter()
                 .enumerate()
-                .map(|(index, (_, label))| {
-                    (
-                        format!("visual-mode-{index}"),
-                        *label,
-                        index == active,
-                        false,
-                    )
-                })
-                .collect(),
-            |view, index, _, cx| {
-                view.select_visual_tool(VISUAL_TOOLS[index].0, None, cx);
-            },
-        )
-        .into_any_element()]);
+                .map(|(index, (mode, label))| {
+                    Button::new(format!("visual-mode-{index}"))
+                        .rounded(gpui_kit::px(999.))
+                        .small()
+                        .px(gpui_kit::px(13.))
+                        .py(gpui_kit::px(3.))
+                        .label(*label)
+                        .ghost()
+                        .when(edit && *mode == self.tool, |button| button.primary())
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.select_visual_tool(VISUAL_TOOLS[index].0, None, cx);
+                        }))
+                        .into_any_element()
+                }),
+        );
         if self.tool == "vector_clip" {
             for (mode, label) in [
                 (0, "控制点"),
@@ -176,14 +203,14 @@ impl VisualPanel {
                         .py(gpui_kit::px(3.))
                         .label(label)
                         .ghost()
-                        .when(mode == self.subtool, |button| button.primary())
+                        .when(edit && mode == self.subtool, |button| button.primary())
                         .on_click(cx.listener(move |view, _, _, cx| {
                             view.select_visual_tool("vector_clip", Some(mode), cx);
                         })),
                 );
             }
         }
-        if self.tool == "drag" {
+        if self.tool == "drag" && edit {
             bar = bar.child(
                 Button::new("visual-toggle-move")
                     .icon(IconName::Move)
@@ -197,24 +224,50 @@ impl VisualPanel {
                     })),
             );
         }
-        bar
+        let view_bar = crate::page::toolbar(
+            [
+                ("visual-view-pan", "画面拖动", ViewTool::Pan),
+                ("visual-view-zoom", "画面缩放", ViewTool::Zoom),
+            ]
+            .into_iter()
+            .map(|(id, label, mode)| {
+                Button::new(id)
+                    .rounded(gpui_kit::px(999.))
+                    .small()
+                    .px(gpui_kit::px(13.))
+                    .py(gpui_kit::px(3.))
+                    .label(label)
+                    .ghost()
+                    .when(self.view_tool == mode, |button| button.primary())
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.select_view_tool(mode, cx);
+                    }))
+                    .into_any_element()
+            }),
+        );
+        div().flex().flex_col().w_full().gap_2().child(bar).child(view_bar)
     }
 
     /// Draws the recorded commands over the picture and forwards pointer
     /// events to the tool. `zoom` and `pan` are the workspace video view's
     /// own transform, so handles stay on the pixels they were drawn over.
+    /// Handles and pointer edits exist only while the subtitle tool is
+    /// `interactive`; otherwise the overlay lets the video view take the mouse.
     pub fn overlay(
         &self,
         aspect: f32,
         zoom: f32,
         pan: (f32, f32),
         auto_hide: bool,
+        playing: bool,
         cx: &mut Context<Workspace>,
     ) -> impl IntoElement {
+        let interactive = self.interactive(playing);
         let region = self.bounds.clone();
         let canvas_region = self.canvas_bounds.clone();
+        let live_edit = self.live_edit.clone();
         let weak = cx.weak_entity();
-        let commands = if auto_hide && !self.hovered {
+        let commands = if !interactive || (auto_hide && !self.hovered) {
             Vec::new()
         } else {
             self.commands.clone()
@@ -225,7 +278,7 @@ impl VisualPanel {
             .inset_0()
             .size_full()
             .overflow_hidden()
-            .cursor(gpui_kit::CursorStyle::Crosshair)
+            .when(interactive, |overlay| overlay.cursor(gpui_kit::CursorStyle::Crosshair))
             .child(
                 canvas(
                     move |bounds, window, cx| {
@@ -235,11 +288,13 @@ impl VisualPanel {
                             zoom,
                             point(px(pan.0 * f32::from(bounds.size.width)), px(pan.1 * f32::from(bounds.size.height))),
                         );
-                        let changed =
-                            *canvas_region.borrow() != base || *region.borrow() != picture;
+                        let was_interactive = live_edit.replace(interactive);
+                        let changed = *canvas_region.borrow() != base
+                            || *region.borrow() != picture
+                            || was_interactive != interactive;
                         *canvas_region.borrow_mut() = base;
                         *region.borrow_mut() = picture;
-                        if changed {
+                        if changed && interactive {
                             // The host canvas changed size or position: the
                             // recorded primitives are in the old pixels.
                             let weak = weak.clone();
@@ -322,8 +377,11 @@ impl VisualPanel {
                 .size_full(),
             )
             .on_mouse_move(cx.listener(
-                |view, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                move |view, event: &gpui_kit::MouseMoveEvent, _, cx| {
                     if event.pressed_button == Some(gpui_kit::MouseButton::Middle) {
+                        return;
+                    }
+                    if !interactive {
                         return;
                     }
                     let (x, y) = view.visual.local(event.position);
@@ -335,9 +393,13 @@ impl VisualPanel {
             ))
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
-                cx.listener(|view, event: &gpui_kit::MouseDownEvent, window, cx| {
+                cx.listener(move |view, event: &gpui_kit::MouseDownEvent, window, cx| {
+                    if !interactive {
+                        return;
+                    }
                     view.key_focus = crate::KeyFocus::Video;
                     view.focus_handle.focus(window, cx);
+                    cx.stop_propagation();
                     if event.click_count >= 2 {
                         let (x, y) = view.visual.local(event.position);
                         view.visual.dragging = true;
@@ -355,10 +417,10 @@ impl VisualPanel {
                     );
                 }),
             )
-            .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
+            .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
                 view.visual.hovered = *hovered;
                 cx.notify();
-                if !hovered && !view.visual.dragging {
+                if interactive && !hovered && !view.visual.dragging {
                     view.queue_visual(json!({"action":"leave","x":0,"y":0}), cx);
                 }
             }))
@@ -505,19 +567,23 @@ fn mask_path(command: &DrawCommand, origin: Point<Pixels>, zoom: f32) -> Option<
     for polygon in &command.polygons {
         append(&mut builder, polygon, origin, zoom, true);
     }
-    let inside = builder.build().ok()?;
+    // A missing or empty polygon set leaves no inside: the outside shade then
+    // covers the whole rectangle rather than vanishing.
+    let inside = builder.build().ok();
     if !command.outside {
-        return Some(inside);
+        return inside;
     }
     // Tessellate the ASS nonzero-winding region first. Its disjoint triangles
     // can then be subtracted using even/odd fill, including overlaps and holes.
     let mut outside = PathBuilder::fill();
     append(&mut outside, &command.bounds, origin, zoom, true);
-    for triangle in inside.vertices.chunks_exact(3) {
-        outside.move_to(triangle[0].xy_position);
-        outside.line_to(triangle[1].xy_position);
-        outside.line_to(triangle[2].xy_position);
-        outside.close();
+    if let Some(inside) = &inside {
+        for triangle in inside.vertices.chunks_exact(3) {
+            outside.move_to(triangle[0].xy_position);
+            outside.line_to(triangle[1].xy_position);
+            outside.line_to(triangle[2].xy_position);
+            outside.close();
+        }
     }
     outside.build().ok()
 }
@@ -586,6 +652,13 @@ mod tests {
         reversed.reverse();
         assert!((area(&mask(vec![reversed], true), 1.) - 300.).abs() < 0.01);
         assert!((area(&mask(vec![a.clone(), a], true), 1.) - 300.).abs() < 0.01);
+    }
+
+    #[test]
+    fn empty_clip_shades_the_entire_outside() {
+        assert!((area(&mask(vec![], true), 1.) - 400.).abs() < 0.01);
+        assert!((area(&mask(vec![], true), 2.) - 1600.).abs() < 0.01);
+        assert!((area(&mask(vec![vec![[4., 4.]]], true), 1.) - 400.).abs() < 0.01);
     }
 
     #[test]

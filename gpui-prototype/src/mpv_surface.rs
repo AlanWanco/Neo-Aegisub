@@ -318,6 +318,8 @@ pub struct MpvSurface {
     /// seek is queued once instead of on every render.
     paused_at: Option<i64>,
     subtitle_revision: Option<u64>,
+    /// Aspect, logarithmic zoom, and pan already queued to mpv.
+    view: Option<[f64; 4]>,
     /// Letterbox colour, as `0xRRGGBB`, matching the card the window covers.
     background: u32,
 }
@@ -351,6 +353,7 @@ impl MpvSurface {
             rate: 1.,
             seek_at: None,
             paused_at: None,
+            view: None,
             subtitle_revision: None,
             background,
         };
@@ -377,9 +380,9 @@ impl MpvSurface {
             ("sub-auto", "no"),
             ("input-default-bindings", "no"),
             ("vo", "gpu"),
-            // The window covers the picture rect itself, so mpv fills it
-            // instead of fitting the video inside it with bars of its own.
-            ("keepaspect", "no"),
+            // Native pan and zoom require aspect handling. The workspace
+            // supplies its display aspect and the same fitted view transform.
+            ("keepaspect", "yes"),
             // Create the window during asynchronous load; init must not wait on the UI thread.
             ("force-window", "yes"),
         ]
@@ -463,6 +466,24 @@ impl MpvSurface {
         {
             self.background = background;
         }
+    pub fn set_view(&mut self, aspect: f64, zoom: f32, pan: (f32, f32)) {
+        let values = [aspect, f64::from(zoom.log2()), f64::from(pan.0), f64::from(pan.1)];
+        if self.view == Some(values) {
+            return;
+        }
+        for (index, property) in ["video-aspect-override", "video-zoom", "video-pan-x", "video-pan-y"]
+            .into_iter().enumerate()
+        {
+            if self.view.is_some_and(|previous| previous[index] == values[index]) {
+                continue;
+            }
+            if self.command(&["set", property, &values[index].to_string()]).is_err() {
+                return;
+            }
+        }
+        self.view = Some(values);
+    }
+
     }
 
     pub fn path(&self) -> &str {

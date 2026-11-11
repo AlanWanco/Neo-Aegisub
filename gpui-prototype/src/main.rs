@@ -56,7 +56,7 @@ use image::Frame as VideoImageFrame;
 use script_dialog::{ScriptDialogRequest, ScriptDialogState};
 use workspace_theme::Palette;
 
-use visual_panel::{VisualPanel, VisualReply};
+use visual_panel::{ViewTool, VisualPanel, VisualReply};
 
 use video_timeline::VideoTimeline;
 
@@ -1751,6 +1751,16 @@ impl Workspace {
             self.notices.extend(snapshot.notices.iter().cloned());
         }
         let forwarded = snapshot.commands.clone();
+        if snapshot.playing != self.snapshot.playing {
+            self.visual.drawn = None;
+            if snapshot.playing {
+                self.visual.queue.clear();
+                if self.visual.dragging {
+                    self.queue_visual(json!({"action":"cancel"}), cx);
+                    self.visual.dragging = false;
+                }
+            }
+        }
         if snapshot.dark != Theme::global(cx).is_dark() {
             Theme::change(
                 if snapshot.dark {
@@ -1871,6 +1881,8 @@ impl Workspace {
             self.video_epoch as i64,
         );
         if self.active_panel == Panel::Visual
+            && !self.snapshot.playing
+            && self.visual.view_tool == ViewTool::Edit
             && !self.visual.dragging
             && self.visual.drawn != Some(visual_state)
         {
@@ -4320,6 +4332,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.active_panel = Panel::Visual;
+        self.visual.view_tool = ViewTool::Edit;
+        self.video_view.pan_drag = None;
         self.visual.tool = mode;
         if let Some(subtool) = subtool {
             self.visual.subtool = subtool;
@@ -4332,6 +4346,19 @@ impl Workspace {
         self.visual.commands.clear();
         self.visual.drawn = None;
         self.visual.dragging = false;
+        cx.notify();
+    }
+
+    fn select_view_tool(&mut self, tool: ViewTool, cx: &mut Context<Self>) {
+        self.visual.queue.clear();
+        if self.visual.dragging {
+            self.queue_visual(json!({"action":"cancel"}), cx);
+        }
+        self.visual.view_tool = tool;
+        self.visual.dragging = false;
+        self.visual.commands.clear();
+        self.visual.drawn = None;
+        self.video_view.pan_drag = None;
         cx.notify();
     }
 
@@ -4362,6 +4389,11 @@ impl Workspace {
     /// second request in flight would draw over the first one's answer.
     fn queue_visual(&mut self, mut request: Value, cx: &mut Context<Self>) {
         if !self.snapshot.video {
+            return;
+        }
+        if (self.snapshot.playing || self.visual.view_tool != ViewTool::Edit)
+            && !matches!(request["action"].as_str(), Some("cancel" | "up"))
+        {
             return;
         }
         let bounds = *self.visual.canvas_bounds.borrow();
@@ -4419,6 +4451,8 @@ impl Workspace {
                     Ok(reply) => {
                         let bounds = *view.visual.canvas_bounds.borrow();
                         if view.video_epoch == request_epoch
+                            && !view.snapshot.playing
+                            && view.visual.view_tool == ViewTool::Edit
                             && reply.tool == view.visual.tool
                             && reply.width == f32::from(bounds.size.width).round() as i64
                             && reply.height == f32::from(bounds.size.height).round() as i64
@@ -4577,9 +4611,12 @@ impl Workspace {
                 }
             }
         }
-        // mpv draws only while the picture is fitted and nothing sits on it.
+        // Playback does not need editing handles. Keep it on the native
+        // renderer instead of copying every decoded frame through the bridge.
         let fit = self.video_view.zoom == 1. && self.video_view.pan == (0., 0.);
-        let overlay = self.active_panel == Panel::Visual
+        let overlay = (self.active_panel == Panel::Visual
+            && self.visual.view_tool == ViewTool::Edit
+            && !self.snapshot.playing)
             || self.snapshot.video_overscan
             || self.host_dialog.is_some()
             || self.color_dialog.is_some()
@@ -4587,10 +4624,9 @@ impl Workspace {
             // Both mpv's window and the host's dialogs are windows of their
             // own; the host's layers never reach over either.
             || self.overlay_over_picture(cx);
-        let shown = self.show_video && self.detached.is_none_or(|panel| panel == Panel::Video);
-        // Paused or not, mpv holds the picture: switching renderers on a pause
-        // is what moved and flashed the picture, so playback state stays out.
-        let wants = fit && !overlay && shown;
+        let shown = self.show_video
+            && self.detached.is_none_or(|panel| matches!(panel, Panel::Video | Panel::Visual));
+        let wants = !overlay && shown;
         let frame_secs = self
             .snapshot
             .fps
@@ -4600,10 +4636,20 @@ impl Workspace {
             return;
         };
         surface.set_background(background);
-        // mpv holds the picture whenever the host does not paint it, so a
-        // pause never changes who draws: the picture cannot move or flash on
-        // the transition. The host picture is left for overlays, zoomed views,
-        // the popped-out window and platforms without a native surface.
+        let viewport = if fit {
+            fitted_picture(bounds, self.snapshot.aspect as f32)
+        } else {
+            bounds
+        };
+        let picture = fitted_picture(viewport, self.snapshot.aspect as f32);
+        let zoom = self.video_view.zoom;
+        let pan = (
+            self.video_view.pan.0 * f32::from(bounds.size.width)
+                / (f32::from(picture.size.width) * zoom),
+            self.video_view.pan.1 * f32::from(bounds.size.height)
+                / (f32::from(picture.size.height) * zoom),
+        );
+        surface.set_view(self.snapshot.aspect, zoom, pan);
         self.native_visible = wants;
         surface.sync(
             self.snapshot.playing,
@@ -4611,13 +4657,7 @@ impl Workspace {
             self.snapshot.playback_rate,
             frame_secs,
         );
-        // mpv covers the picture rect rather than the card: the host paints
-        // that same rect when an overlay takes the picture, so taking turns
-        // cannot resize or move it.
-        surface.place(
-            fitted_picture(bounds, self.snapshot.aspect as f32),
-            self.native_visible,
-        );
+        surface.place(viewport, self.native_visible);
         let stale = self.native_visible
             && !self.native_subs_inflight
             && surface.subtitle_revision() != Some(self.snapshot.revision);
@@ -4795,6 +4835,11 @@ impl Workspace {
             })
             .on_scroll_wheel(
                 cx.listener(|view, event: &gpui_kit::ScrollWheelEvent, _, cx| {
+                    if view.active_panel == Panel::Visual
+                        && view.visual.view_tool != ViewTool::Zoom
+                    {
+                        return;
+                    }
                     let delta = match event.delta {
                         gpui_kit::ScrollDelta::Pixels(delta) => f32::from(delta.y) / 40.,
                         gpui_kit::ScrollDelta::Lines(delta) => delta.y,
@@ -4806,8 +4851,17 @@ impl Workspace {
             )
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
-                cx.listener(|view, event: &gpui_kit::MouseDownEvent, _, _| {
-                    if view.video_view.zoom <= 1. {
+                cx.listener(|view, event: &gpui_kit::MouseDownEvent, _, cx| {
+                    if view.active_panel == Panel::Visual {
+                        match view.visual.view_tool {
+                            ViewTool::Edit => return,
+                            ViewTool::Zoom => {
+                                view.video_zoom_by(if event.modifiers.shift { -1. } else { 1. }, cx);
+                                return;
+                            }
+                            ViewTool::Pan => {}
+                        }
+                    } else if view.video_view.zoom <= 1. {
                         return;
                     }
                     view.video_view.pan_drag = Some((
@@ -4821,6 +4875,11 @@ impl Workspace {
             .on_mouse_down(
                 gpui_kit::MouseButton::Middle,
                 cx.listener(|view, event: &gpui_kit::MouseDownEvent, _, _| {
+                    if view.active_panel == Panel::Visual
+                        && view.visual.view_tool != ViewTool::Pan
+                    {
+                        return;
+                    }
                     view.video_view.pan_drag = Some((
                         gpui_kit::MouseButton::Middle,
                         f32::from(event.position.x),
@@ -4966,6 +5025,7 @@ impl Workspace {
                 zoom,
                 (pan_x, pan_y),
                 self.snapshot.visual_autohide,
+                self.snapshot.playing,
                 cx,
             ));
         }
@@ -7933,7 +7993,11 @@ impl Workspace {
                     .text_color(p.muted)
                     .child(div().child(readout))
                     .when(f32::from(window.viewport_size().width) > 1100., |v| {
-                        v.child("滚轮缩放与拖动在视频区域中进行")
+                        v.child(if self.active_panel == Panel::Visual {
+                            "先选择画面拖动或画面缩放工具"
+                        } else {
+                            "滚轮缩放与拖动在视频区域中进行"
+                        })
                     }),
             )
             .child(self.timeline.render(&self.snapshot, cx))
@@ -9684,7 +9748,7 @@ impl Render for Workspace {
                     .child(self.render_player(window, true, true, cx))
                     .child(page::hint(
                         cx,
-                        "双击十字定位；拖动控制点调整，Shift 约束，Ctrl/⌘ 多选。",
+                        "字幕工具调整控制点；画面拖动/缩放只改变预览。播放时隐藏编辑手柄，暂停后恢复。",
                     )),
             );
         } else if self.active_panel == Panel::Commands {
