@@ -50,6 +50,7 @@ mod script_dialog;
 mod visual_panel;
 mod workspace_theme;
 mod theme_reveal;
+mod tool_window;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Sizable;
 use gpui_kit::{ObjectFit, StyledImage};
@@ -10406,6 +10407,22 @@ fn open_workspace(
             ..Default::default()
         },
         move |window, cx| {
+            if detached.is_some() {
+                if let Some(parent) = MAIN_WINDOW.with(|main| *main.borrow()) {
+                    // Defer until the caller's window update has returned: opening
+                    // from the sidebar otherwise borrows the parent twice.
+                    window.defer(cx, move |child, cx| {
+                        if let Err(error) = parent
+                            .update(cx, |_, parent, _| tool_window::attach(child, parent))
+                            .and_then(|result| result)
+                        {
+                            eprintln!("Could not attach tool window to workspace: {error:#}");
+                        }
+                    });
+                }
+            } else {
+                MAIN_WINDOW.with(|main| main.borrow_mut().replace(window.window_handle()));
+            }
             cx.activate(true);
             window.activate_window();
             let workspace = cx.new(|cx| {
@@ -10567,6 +10584,9 @@ fn open_panel_window(
 }
 
 thread_local! {
+    /// Native ownership is attached after the opener's window update returns.
+    static MAIN_WINDOW: std::cell::RefCell<Option<gpui_kit::AnyWindowHandle>> =
+        const { std::cell::RefCell::new(None) };
     /// One window per tool: clicking the same sidebar row twice should raise the
     /// window that is already open instead of stacking duplicates.
     static PANEL_WINDOWS: std::cell::RefCell<
