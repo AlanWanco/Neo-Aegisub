@@ -336,7 +336,9 @@ pub fn segmented(
                 let global = cx.global_mut::<SegmentBounds>();
                 let mut geometry = global.0.borrow_mut();
                 let geometry = geometry.entry(owner.clone()).or_default();
-                geometry.resize(index + 1, Bounds::default());
+                if geometry.len() <= index {
+                    geometry.resize(index + 1, Bounds::default());
+                }
                 geometry[index] = bounds;
             });
         if index == 0 {

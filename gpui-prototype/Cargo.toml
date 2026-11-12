@@ -18,5 +18,11 @@ serde_json = "1"
 raw-window-handle = "0.6"
 libloading = "0.8"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+xcap = "0.9.10"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+xcap = { version = "0.9.10", features = ["wgc"] }
+
 [build-dependencies]
 winresource = "0.1"

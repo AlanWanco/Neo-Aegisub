@@ -49,6 +49,7 @@ mod kanji_panel;
 mod script_dialog;
 mod visual_panel;
 mod workspace_theme;
+mod theme_reveal;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Sizable;
 use gpui_kit::{ObjectFit, StyledImage};
@@ -82,7 +83,7 @@ use gpui_kit::{
     Window, WindowBounds, WindowOptions, canvas, div, prelude::*, px, size, uniform_list,
 };
 use gpui_kit::{
-    base::{Disableable, Selectable},
+    base::{Disableable, ElementExt, Selectable},
     component::{
         Icon, Root, StyledExt, Theme, ThemeMode, WindowExt,
         button::{Button, ButtonVariants},
@@ -1413,6 +1414,13 @@ struct Workspace {
     detached: Option<Panel>,
     key_focus: KeyFocus,
     sidebar_collapsed: Option<bool>,
+    sidebar_selected: Panel,
+    sidebar_rows: std::rc::Rc<std::cell::RefCell<Vec<gpui_kit::Bounds<gpui_kit::Pixels>>>>,
+    theme_reveal: theme_reveal::ThemeReveal,
+    menu_hovered: Option<usize>,
+    menu_open: Option<usize>,
+    menu_last: usize,
+    menu_rows: std::rc::Rc<std::cell::RefCell<Vec<gpui_kit::Bounds<gpui_kit::Pixels>>>>,
     selected_line: i64,
     status: String,
     notices: Vec<Notice>,
@@ -1716,6 +1724,13 @@ impl Workspace {
             detached: None,
             key_focus: KeyFocus::Grid,
             sidebar_collapsed: None,
+            sidebar_selected: Panel::Subtitles,
+            sidebar_rows: Default::default(),
+            theme_reveal: Default::default(),
+            menu_hovered: None,
+            menu_open: None,
+            menu_last: 0,
+            menu_rows: Default::default(),
             selected_line: -1,
             status: "已连接当前 Neo Aegisub 文档".into(),
             notices: Vec::new(),
@@ -1760,18 +1775,6 @@ impl Workspace {
                     self.visual.dragging = false;
                 }
             }
-        }
-        if snapshot.dark != Theme::global(cx).is_dark() {
-            Theme::change(
-                if snapshot.dark {
-                    ThemeMode::Dark
-                } else {
-                    ThemeMode::Light
-                },
-                None,
-                cx,
-            );
-            workspace_theme::apply(cx);
         }
         let command_state_changed = snapshot.revision != self.snapshot.revision
             || snapshot.selected != self.snapshot.selected
@@ -4621,6 +4624,7 @@ impl Workspace {
             || self.host_dialog.is_some()
             || self.color_dialog.is_some()
             || self.script_dialog.is_some()
+            || self.theme_reveal.is_active()
             // Both mpv's window and the host's dialogs are windows of their
             // own; the host's layers never reach over either.
             || self.overlay_over_picture(cx);
@@ -7190,8 +7194,20 @@ impl Workspace {
             )
     }
 
-    fn render_legacy_menus(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_legacy_menus(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::current(cx);
+        let active = self.menu_open.or(self.menu_hovered);
+        let geometry = self.menu_rows.borrow();
+        let target = geometry.first().zip(geometry.get(active.unwrap_or(self.menu_last)))
+            .map(|(first, selected)| (f32::from(selected.origin.x - first.origin.x), f32::from(selected.size.width)));
+        drop(geometry);
+        let motion = gpui_kit::base::Spring::new(Duration::from_millis(280)).with_damping(0.85);
+        let left = gpui_kit::base::spring("legacy-menu-indicator-x", target.map_or(0., |b| b.0), motion, window, cx);
+        let width = gpui_kit::base::spring("legacy-menu-indicator-width", target.map_or(0., |b| b.1), motion, window, cx);
+        let opacity = gpui_kit::base::transition("legacy-menu-indicator-opacity",
+            if active.is_some() { 1_f32 } else { 0_f32 },
+            gpui_kit::base::Transition::new(Duration::from_millis(100)), window, cx);
+        let mut index = 0usize;
         let mut bar = div()
             .h_flex()
             .items_center()
@@ -7227,7 +7243,34 @@ impl Workspace {
             } else {
                 catalog.menu(&submenu)
             };
-            bar = bar.child(
+            let rows = self.menu_rows.clone();
+            let menu_index = index;
+            index += 1;
+            let mut wrapper = div().id(format!("legacy-menu-hit-{menu_index}"))
+                .relative().flex_shrink_0()
+                .on_prepaint(move |bounds, window, _| {
+                    let mut rows = rows.borrow_mut();
+                    if rows.len() <= menu_index { rows.resize(menu_index + 1, Default::default()); }
+                    if rows[menu_index] != bounds {
+                        rows[menu_index] = bounds;
+                        window.request_animation_frame();
+                    }
+                })
+                .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
+                    if *hovered {
+                        view.menu_hovered = Some(menu_index);
+                        view.menu_last = menu_index;
+                    } else if view.menu_hovered == Some(menu_index) {
+                        view.menu_hovered = None;
+                    }
+                    cx.notify();
+                }));
+            if menu_index == 0 && target.is_some() {
+                wrapper = wrapper.child(div().absolute().top_0().h_full()
+                    .left(px(left)).w(px(width.max(0.))).rounded_full()
+                    .bg(p.selected).opacity(opacity.clamp(0., 1.)));
+            }
+            bar = bar.child(wrapper.child(
                 Button::new(format!("legacy-menu-{label}"))
                     .icon(IconName::Menu)
                     .rounded(gpui_kit::px(999.))
@@ -7247,11 +7290,18 @@ impl Workspace {
                         )
                     })
                     .on_open_change(move |open, _, cx| {
-                        if *open {
-                            let _ = refresh_weak.update(cx, |view, cx| view.refresh_catalog(cx));
-                        }
+                        let _ = refresh_weak.update(cx, |view, cx| {
+                            if *open {
+                                view.menu_open = Some(menu_index);
+                                view.menu_last = menu_index;
+                                view.refresh_catalog(cx);
+                            } else if view.menu_open == Some(menu_index) {
+                                view.menu_open = None;
+                            }
+                            cx.notify();
+                        });
                     }),
-            );
+            ));
         }
         bar.child(div().flex_1()).child(
             Button::new("command-browser")
@@ -7552,7 +7602,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn render_menu(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_menu(&self, window: &mut Window, sidebar_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::current(cx);
         let compact = self
             .sidebar_collapsed
@@ -7562,6 +7612,21 @@ impl Workspace {
         } else {
             "折叠侧栏"
         };
+        let label_opacity = ((sidebar_width - 80.) / 84.).clamp(0., 1.);
+        let geometry = self.sidebar_rows.borrow();
+        let mut row_index = 0usize;
+        let selected_index = [Panel::Subtitles, Panel::Visual, Panel::Translation,
+            Panel::Styles, Panel::Styling, Panel::Timing, Panel::Processor,
+            Panel::Resample, Panel::Search, Panel::Spelling, Panel::Paste,
+            Panel::Project, Panel::VideoSettings, Panel::Automation, Panel::Attachments,
+            Panel::Files, Panel::Preferences, Panel::Hotkeys, Panel::Commands]
+            .iter().position(|panel| *panel == self.sidebar_selected).unwrap_or(0);
+        let indicator_top = geometry.first().zip(geometry.get(selected_index))
+            .map(|(first, selected)| selected.origin.y - first.origin.y);
+        drop(geometry);
+        let indicator_y = gpui_kit::base::spring("sidebar-selection-y",
+            indicator_top.map_or(0., f32::from),
+            gpui_kit::base::Spring::new(Duration::from_millis(280)).with_damping(0.85), window, cx);
         let mut navigation = div()
             .id("workspace-navigation")
             .v_flex()
@@ -7610,27 +7675,30 @@ impl Workspace {
                     .px_2()
                     .text_size(px(11.))
                     .text_color(p.muted)
-                    .child(if compact { "" } else { group }),
+                    .h(px(14.))
+                    .overflow_hidden()
+                    .opacity(label_opacity)
+                    .child(group),
             );
             for panel in panels {
-                let selected = self.active_panel == panel;
+                let selected = self.sidebar_selected == panel;
                 let content = div()
                     .h_flex()
                     .w_full()
                     .gap_2()
                     .items_center()
-                    .when(compact, |v| v.justify_center())
-                    .child(Icon::new(panel.icon()).size(px(15.)))
-                    .when(!compact, |v| {
-                        v.child(div().flex_1().text_size(px(13.)).child(panel.label()))
-                    });
+                    .overflow_hidden()
+                    .child(div().w(px(16.)).flex_shrink_0().child(Icon::new(panel.icon()).size(px(15.))))
+                    .child(div().w(px(104.)).flex_shrink_0().opacity(label_opacity)
+                        .text_size(px(13.)).whitespace_nowrap().child(panel.label()));
                 let button = Button::new(format!("panel-{}", panel.label()))
                     .rounded(gpui_kit::px(999.))
                     .small()
                     .px(gpui_kit::px(13.))
                     .py(gpui_kit::px(3.))
                     .ghost()
-                    .selected(selected)
+                    .when(selected && indicator_top.is_none(), |button| button.bg(p.selected))
+                    .when(selected, |button| button.text_color(p.accent))
                     .accessibility_label(panel.label())
                     .tooltip(panel.label())
                     .w_full()
@@ -7643,13 +7711,30 @@ impl Workspace {
                         // editing context the user is working in.
                         if panel == Panel::Subtitles {
                             view.activate_panel(panel, window, cx);
-                        } else if let Err(error) =
-                            focus_or_open_panel_window(cx, view.bridge.clone(), panel)
-                        {
-                            eprintln!("Could not open tool window: {error:#}");
+                            view.sidebar_selected = panel;
+                        } else {
+                            match focus_or_open_panel_window(cx, view.bridge.clone(), panel) {
+                                Ok(_) => { view.sidebar_selected = panel; cx.notify(); }
+                                Err(error) => eprintln!("Could not open tool window: {error:#}"),
+                            }
                         }
                     }));
-                let row = div().relative().w_full().child(button);
+                let rows = self.sidebar_rows.clone();
+                let index = row_index;
+                row_index += 1;
+                let mut row = div().relative().w_full().on_prepaint(move |bounds, window, _| {
+                    let mut rows = rows.borrow_mut();
+                    if rows.len() <= index { rows.resize(index + 1, Default::default()); }
+                    if rows[index] != bounds {
+                        rows[index] = bounds;
+                        window.request_animation_frame();
+                    }
+                });
+                if index == 0 && indicator_top.is_some() {
+                    row = row.child(div().absolute().left_0().w_full().h(px(36.))
+                        .rounded_full().bg(p.selected).top(px(indicator_y)));
+                }
+                let row = row.child(button);
                 navigation = navigation.child(row);
             }
         }
@@ -7658,45 +7743,33 @@ impl Workspace {
             .h_full()
             .min_h_0()
             .overflow_hidden()
-            .w(px(if compact { 60. } else { 164. }))
+            .w(px(sidebar_width))
             .flex_shrink_0()
             .bg(p.canvas)
             .border_r_1()
             .border_color(p.divider)
             .child(
                 div()
+                    .relative()
                     .h_flex()
                     .h(px(64.))
                     .px_3()
                     .gap_2()
                     .items_center()
                     .justify_between()
-                    .when(compact, |v| v.justify_center())
                     .flex_shrink_0()
-                    .when(!compact, |v| {
-                        v.child(
-                            div()
-                                .v_flex()
-                                .child(
-                                    div()
-                                        .font_semibold()
-                                        .text_size(px(15.))
-                                        .child("Neo Aegisub"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(p.muted)
-                                        .child("字幕工作台"),
-                                ),
-                        )
-                    })
+                    .child(div().absolute().left(px(12.)).w(px(104.))
+                        .overflow_hidden().opacity(label_opacity)
+                        .v_flex().whitespace_nowrap()
+                        .child(div().font_semibold().text_size(px(15.)).child("Neo Aegisub"))
+                        .child(div().text_size(px(11.)).text_color(p.muted).child("字幕工作台")))
                     .child(
                         // Button::icon() renders nothing inside this header row,
                         // so the icon goes in as an explicit child like the nav
                         // rows do.
                         Button::new("toggle-sidebar")
                             .rounded(gpui_kit::px(999.))
+                            .ml_auto()
                             .small()
                             .px(gpui_kit::px(11.))
                             .py(gpui_kit::px(3.))
@@ -7886,20 +7959,18 @@ impl Workspace {
                                 ("向下平移", 0., 20.),
                             ] {
                                 let weak = weak.clone();
-                                menu = menu.item(
-                                    PopupMenuItem::new(label).on_click(
-                                        move |_, _, cx| {
-                                            let _ = weak.update(cx, |view, cx| {
-                                                let area = *view.video_view.bounds.borrow();
-                                                let width = f32::from(area.size.width).max(1.);
-                                                let height = f32::from(area.size.height).max(1.);
-                                                view.video_view.pan.0 += dx / width;
-                                                view.video_view.pan.1 += dy / height;
-                                                cx.notify();
-                                            });
-                                        },
-                                    ),
-                                );
+                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                    move |_, _, cx| {
+                                        let _ = weak.update(cx, |view, cx| {
+                                            let area = *view.video_view.bounds.borrow();
+                                            let width = f32::from(area.size.width).max(1.);
+                                            let height = f32::from(area.size.height).max(1.);
+                                            view.video_view.pan.0 += dx / width;
+                                            view.video_view.pan.1 += dy / height;
+                                            cx.notify();
+                                        });
+                                    },
+                                ));
                             }
                             menu
                         }
@@ -9351,6 +9422,18 @@ async fn invoke_weak(
 }
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(dark) = self.theme_reveal.advance(self.snapshot.dark, window, cx) {
+            if dark != Theme::global(cx).is_dark() {
+                Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, None, cx);
+                workspace_theme::apply(cx);
+            }
+        }
+        let compact = self.sidebar_collapsed
+            .unwrap_or(f32::from(window.viewport_size().width) < 1150.);
+        let sidebar_width = gpui_kit::base::spring("workspace-sidebar-width",
+            if compact { 60_f32 } else { 164_f32 },
+            gpui_kit::base::Spring::new(Duration::from_millis(280)).with_damping(0.85),
+            window, cx);
         let focus_area = self.focus_area(window, cx);
         self.sync_native_video(window, cx);
         // A track whose measured size changed is requested again at its new
@@ -9602,14 +9685,7 @@ impl Render for Workspace {
             // Two columns need room for the preview beside the editor: below
             // 1080 logical pixels the preview stacks under the waveform.
             let side_by_side = show_video && f32::from(window.viewport_size().width) >= 1080.;
-            let sidebar = if self
-                .sidebar_collapsed
-                .unwrap_or(f32::from(window.viewport_size().width) < 1150.)
-            {
-                60.
-            } else {
-                164.
-            };
+            let sidebar = if self.detached.is_some() { 0. } else { sidebar_width };
             let body_width = (f32::from(window.viewport_size().width) - sidebar - 48.).max(320.);
             let column_width = self
                 .column_split
@@ -9888,7 +9964,7 @@ impl Render for Workspace {
         // legacy menu bar, no document toolbar.
         let detached = self.detached.is_some();
         let workspace = root
-            .when(!detached, |v| v.child(self.render_menu(window, cx)))
+            .when(!detached, |v| v.child(self.render_menu(window, sidebar_width, cx)))
             .child(
                 div()
                     .v_flex()
@@ -9898,7 +9974,7 @@ impl Render for Workspace {
                     .min_w_0()
                     .min_h_0()
                     .when(!cfg!(target_os = "macos") && !detached, |bar| {
-                        bar.child(self.render_legacy_menus(cx))
+                        bar.child(self.render_legacy_menus(window, cx))
                     })
                     .when(self.snapshot.show_toolbar && !detached, |v| {
                         v.child(self.render_toolbar(cx))
@@ -9961,7 +10037,8 @@ impl Render for Workspace {
             layered = layered.child(card);
         }
         if self.notices.is_empty() {
-            return layered.into_any_element();
+            return div().relative().size_full().child(layered)
+                .children(self.theme_reveal.overlay()).into_any_element();
         }
         let notice = self.notices[0].clone();
         let remaining = self.notices.len() - 1;
@@ -10253,7 +10330,7 @@ impl Render for Workspace {
                             ),
                     ),
             );
-        layered
+        let layered = layered
             .child(
                 div()
                     .absolute()
@@ -10264,7 +10341,9 @@ impl Render for Workspace {
                     .bg(gpui_kit::hsla(0., 0., 0., 0.42))
                     .child(card),
             )
-            .into_any_element()
+            .into_any_element();
+        div().relative().size_full().child(layered)
+            .children(self.theme_reveal.overlay()).into_any_element()
     }
 }
 
@@ -10585,7 +10664,7 @@ mod drop_tests {
 #[cfg(test)]
 mod picture_tests {
     use super::fitted_picture;
-    use gpui_kit::{point, px, size, Bounds, Pixels};
+    use gpui_kit::{Bounds, Pixels, point, px, size};
 
     fn area(width: f32, height: f32) -> Bounds<Pixels> {
         Bounds {
