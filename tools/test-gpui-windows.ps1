@@ -147,12 +147,11 @@ function Press-Control([string]$Name, [switch]$Last) {
 }
 
 function Switch-ToToolWindow([string] $Title) {
-    # Tools open in their own window now, so the sidebar click above does not
-    # change what the workspace window shows.
-    $root = [Windows.Automation.AutomationElement]::RootElement
+    # Owned tool windows appear beneath the workspace in the automation tree.
+    $root = [Windows.Automation.AutomationElement]::FromHandle($script:mainWindowHandle)
     $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $Title)
     for ($attempt = 0; $attempt -lt 50; $attempt++) {
-        $window = $root.FindFirst([Windows.Automation.TreeScope]::Children, $condition)
+        $window = $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
         if ($window) {
             $script:windowHandle = [IntPtr]$window.Current.NativeWindowHandle
             [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
