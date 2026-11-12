@@ -8404,8 +8404,7 @@ impl Workspace {
             .flex_wrap()
             .gap_1()
             .items_center()
-            // A pill outline keeps the transport controls readable as one unit
-            // now that the formatting row sits below them.
+            // Keep the transport controls grouped beside the text actions.
             .rounded(gpui_kit::px(999.))
             .border_1()
             .border_color(p.divider)
@@ -8653,9 +8652,6 @@ impl Workspace {
                                     })),
                             ),
                     )
-                    // A column child stretches to the card width; the pill has
-                    // to hug its buttons, so a row wrapper sizes it.
-                    .child(div().h_flex().child(playback_toolbar))
                     .child(format_toolbar)
                     .when(self.show_original, |col| {
                         col.child(
@@ -8668,7 +8664,16 @@ impl Workspace {
                         )
                     })
                     .child(editor.flex_1().min_h(px(40.)))
-                    .child(text_actions);
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_2()
+                            .child(text_actions)
+                            .child(div().flex_1())
+                            .child(div().ml_auto().child(playback_toolbar)),
+                    );
         let editor_section = div()
             .id("subtitle-editor-section")
             .flex_shrink_0()
