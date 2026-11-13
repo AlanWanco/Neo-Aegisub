@@ -524,36 +524,46 @@ with path.open('wb') as out:
     Press-Control '时间平移'
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 800, 600, 0x0040)
-    Start-Sleep -Milliseconds 350
-    # TEMPORARY DIAGNOSTIC: report the geometry the assertion reads.
-    $probeWindow = [GpuiDesktop+Rect]::new()
-    [void][GpuiDesktop]::GetWindowRect($script:windowHandle, [ref]$probeWindow)
-    $probeRoot = ([Windows.Automation.AutomationElement]::FromHandle($script:windowHandle)).Current.BoundingRectangle
-    $probeScreen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    Write-Host ("LAYOUT-PROBE outer={0},{1} {2}x{3} client={4},{5} {6}x{7} screen={8}x{9}" -f
-        $probeWindow.Left, $probeWindow.Top, ($probeWindow.Right - $probeWindow.Left), ($probeWindow.Bottom - $probeWindow.Top),
-        $probeRoot.Left, $probeRoot.Top, ($probeRoot.Right - $probeRoot.Left), ($probeRoot.Bottom - $probeRoot.Top),
-        $probeScreen.Width, $probeScreen.Height)
-    $probeAmount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
-    $probeClear = (Find-Control '清空…').Current.BoundingRectangle
-    Write-Host ("LAYOUT-PROBE amount={0},{1}-{2},{3} clear={4},{5}-{6},{7}" -f
-        $probeAmount.Left, $probeAmount.Top, $probeAmount.Right, $probeAmount.Bottom,
-        $probeClear.Left, $probeClear.Top, $probeClear.Right, $probeClear.Bottom)
+    [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
     # The two cards share one row: the form and the history list each keep their
     # own scroll area beside each other instead of stacking into one tall column.
+    # Accessibility bounds are re-published on the next frame, so read them until
+    # the layout settles instead of trusting one fixed sleep.
     $amountRect = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
     if ((Find-Control '平移时长' -Kind Edit).Current.IsOffscreen) { throw 'Compact layout hides the amount field' }
     $clearRect = (Find-Control '清空…').Current.BoundingRectangle
-    if ($clearRect.Left -le $amountRect.Right) { Write-Host 'LAYOUT-PROBE the history card is not beside the parameter form' }
+    for ($attempt = 0; $attempt -lt 40 -and $clearRect.Left -le $amountRect.Right; $attempt++) {
+        Start-Sleep -Milliseconds 150
+        $amountRect = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
+        $clearRect = (Find-Control '清空…').Current.BoundingRectangle
+    }
     Save-Screenshot 'timing-two-columns'
+    if ($clearRect.Left -le $amountRect.Right) {
+        throw ("History card is not beside the parameter form (amount={0},{1}-{2},{3} clear={4},{5}-{6},{7})" -f
+            $amountRect.Left, $amountRect.Top, $amountRect.Right, $amountRect.Bottom,
+            $clearRect.Left, $clearRect.Top, $clearRect.Right, $clearRect.Bottom)
+    }
     # Below the wrap threshold the history drops under the form rather than
     # squeezing both columns past the width their segmented rows need.
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 560, 600, 0x0040)
-    Start-Sleep -Milliseconds 350
+    [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
     $wrappedAmount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
     $wrappedClear = (Find-Control '清空…').Current.BoundingRectangle
-    if ($wrappedClear.Top -le $wrappedAmount.Top) { throw 'Narrow window did not stack the history under the form' }
+    for ($attempt = 0; $attempt -lt 40 -and $wrappedClear.Top -le $wrappedAmount.Top; $attempt++) {
+        Start-Sleep -Milliseconds 150
+        $wrappedAmount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
+        $wrappedClear = (Find-Control '清空…').Current.BoundingRectangle
+    }
     Save-Screenshot 'timing-wrapped'
+    if ($wrappedClear.Top -le $wrappedAmount.Top) {
+        $wrappedBounds = [GpuiDesktop+Rect]::new()
+        [void][GpuiDesktop]::GetWindowRect($script:windowHandle, [ref]$wrappedBounds)
+        $wrappedRoot = ([Windows.Automation.AutomationElement]::FromHandle($script:windowHandle)).Current.BoundingRectangle
+        throw ("Narrow window did not stack the history under the form (window={0}x{1} client={2}x{3} amount={4},{5} clear={6},{7})" -f
+            ($wrappedBounds.Right - $wrappedBounds.Left), ($wrappedBounds.Bottom - $wrappedBounds.Top),
+            ($wrappedRoot.Right - $wrappedRoot.Left), ($wrappedRoot.Bottom - $wrappedRoot.Top),
+            $wrappedAmount.Left, $wrappedAmount.Top, $wrappedClear.Left, $wrappedClear.Top)
+    }
     Assert-Clean $base
     @{ actual_windows_desktop = $true; native_video_frames_differ = $true; native_video_click_through = $true;
        visible_amount_field = $true; exact_form_shift_ms = 1250;
