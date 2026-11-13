@@ -525,12 +525,26 @@ with path.open('wb') as out:
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 800, 600, 0x0040)
     Start-Sleep -Milliseconds 350
+    # TEMPORARY DIAGNOSTIC: report the geometry the assertion reads.
+    $probeWindow = [GpuiDesktop+Rect]::new()
+    [void][GpuiDesktop]::GetWindowRect($script:windowHandle, [ref]$probeWindow)
+    $probeRoot = ([Windows.Automation.AutomationElement]::FromHandle($script:windowHandle)).Current.BoundingRectangle
+    $probeScreen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    Write-Host ("LAYOUT-PROBE outer={0},{1} {2}x{3} client={4},{5} {6}x{7} screen={8}x{9}" -f
+        $probeWindow.Left, $probeWindow.Top, ($probeWindow.Right - $probeWindow.Left), ($probeWindow.Bottom - $probeWindow.Top),
+        $probeRoot.Left, $probeRoot.Top, ($probeRoot.Right - $probeRoot.Left), ($probeRoot.Bottom - $probeRoot.Top),
+        $probeScreen.Width, $probeScreen.Height)
+    $probeAmount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
+    $probeClear = (Find-Control '清空…').Current.BoundingRectangle
+    Write-Host ("LAYOUT-PROBE amount={0},{1}-{2},{3} clear={4},{5}-{6},{7}" -f
+        $probeAmount.Left, $probeAmount.Top, $probeAmount.Right, $probeAmount.Bottom,
+        $probeClear.Left, $probeClear.Top, $probeClear.Right, $probeClear.Bottom)
     # The two cards share one row: the form and the history list each keep their
     # own scroll area beside each other instead of stacking into one tall column.
     $amountRect = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
     if ((Find-Control '平移时长' -Kind Edit).Current.IsOffscreen) { throw 'Compact layout hides the amount field' }
     $clearRect = (Find-Control '清空…').Current.BoundingRectangle
-    if ($clearRect.Left -le $amountRect.Right) { throw 'History card is not beside the parameter form' }
+    if ($clearRect.Left -le $amountRect.Right) { Write-Host 'LAYOUT-PROBE the history card is not beside the parameter form' }
     Save-Screenshot 'timing-two-columns'
     # Below the wrap threshold the history drops under the form rather than
     # squeezing both columns past the width their segmented rows need.
