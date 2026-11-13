@@ -623,8 +623,8 @@ struct Snapshot {
     #[serde(default)]
     video_path: String,
     /// The subtitle renderer the host loaded, e.g. `CSRI/VSFilterMod`. mpv can
-    /// only draw with its own libass, so a CSRI renderer keeps the picture on
-    /// the host: see `Workspace::host_draws_subtitles`.
+    /// only draw with its own libass, so a CSRI renderer's subtitles ride in a
+    /// native layer above mpv's window: see `Workspace::csri_renderer`.
     #[serde(default)]
     subtitles_provider: String,
     #[serde(default)]
@@ -4686,21 +4686,21 @@ impl Workspace {
         gpui_kit::base::GlobalState::is_in_deferred_context(cx) || !self.notices.is_empty()
     }
 
-    /// Whether a CSRI renderer owns the picture for the current state.
+    /// Whether a CSRI renderer draws this picture's subtitles.
     ///
     /// mpv renders subtitles with its bundled libass and nothing else, so with
     /// a CSRI renderer loaded (VSFilter, VSFilterMod, the DLLs in `csri\`) an
-    /// mpv picture shows a different rendition from the host's. Paused frames,
-    /// stepping and the visual tool therefore come from the host.
+    /// mpv picture shows a different rendition from the host's. The host's
+    /// bitmaps therefore ride above mpv's window in a layer of their own, while
+    /// playing *and* while paused.
     ///
-    /// Playback is the exception: a host frame costs a full CPU composite plus
-    /// a frame copy, and the front end only ever shows what arrived in time, so
-    /// the rate collapses on heavy renders. mpv paints video on the GPU, so it
-    /// keeps the picture while playing and the host's rendering returns the
-    /// moment playback stops.
+    /// Pausing keeps mpv's picture: handing the frame back to the workspace
+    /// would repaint the same rect from a cached copy, and that swap is what
+    /// moved and flashed the picture. The Windows acceptance run checks that
+    /// invariant (`tools/test-gpui-windows.ps1`).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn host_draws_subtitles(&self) -> bool {
-        self.snapshot.subtitles_provider.starts_with("CSRI/") && !self.snapshot.playing
+    fn csri_renderer(&self) -> bool {
+        self.snapshot.subtitles_provider.starts_with("CSRI/")
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -4758,9 +4758,6 @@ impl Workspace {
             || self.color_dialog.is_some()
             || self.script_dialog.is_some()
             || self.theme_reveal.is_active()
-            // Only the host can draw a CSRI renderer's subtitles; while
-            // playing, mpv keeps the picture for its frame rate.
-            || self.host_draws_subtitles()
             // Both mpv's window and the host's dialogs are windows of their
             // own; the host's layers never reach over either.
             || self.overlay_over_picture(cx);
@@ -4799,13 +4796,10 @@ impl Workspace {
         );
         surface.place(viewport, self.native_visible);
         let native_revision = surface.subtitle_revision();
-        // The renderer's own subtitles ride above mpv's picture while playing:
-        // the host sends a bitmap only when its rendering changes, and paused
-        // frames (which already carry the subtitles) take the layer down.
-        let wants_layer = self.native_visible
-            && self.snapshot.playing
-            && self.snapshot.subtitles_provider.starts_with("CSRI/")
-            && fit;
+        // The renderer's own subtitles ride above mpv's picture: the host sends
+        // a bitmap only when its rendering changes, and an empty line takes the
+        // layer's contents down without moving the layer itself.
+        let wants_layer = self.native_visible && self.csri_renderer() && fit;
         if wants_layer {
             if self.subtitle_layer.is_none() {
                 if let Ok(layer) = subtitle_overlay::SubtitleLayer::new(window) {
@@ -4829,11 +4823,10 @@ impl Workspace {
             self.hide_subtitle_layer();
         }
         // A CSRI renderer's subtitles are the host's: mpv must not draw its
-        // own on top of them (paused frames already carry them, and playback
-        // gets them from the layer above). Any track added before the renderer
-        // was chosen goes away here.
+        // own on top of them; the layer above carries them. Any track added
+        // before the renderer was chosen goes away here.
         if self.native_visible {
-            if self.snapshot.subtitles_provider.starts_with("CSRI/") {
+            if self.csri_renderer() {
                 if let Some(surface) = self.mpv_surface.as_mut() {
                     surface.clear_subtitles();
                 }
@@ -4857,7 +4850,7 @@ impl Workspace {
         self.subtitle_layer_image = None;
     }
 
-    /// Keeps the layer above mpv fed while playback runs. The host answers an
+    /// Keeps the layer above mpv fed, playing or paused. The host answers an
     /// empty body until its rendering changes, so a static sign costs one
     /// upload per line while an animated one follows at video rate.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -4876,7 +4869,7 @@ impl Workspace {
                             reply.next_change.clamp(16, 500)
                         };
                         let applied = weak.update(cx, |view, cx| {
-                            if !view.snapshot.playing || !view.subtitle_layer_placed {
+                            if !view.subtitle_layer_placed {
                                 return None;
                             }
                             if reply.empty {
@@ -4897,7 +4890,15 @@ impl Workspace {
                                 });
                                 cx.notify();
                             }
-                            Some(delay)
+                            // A paused picture does not advance, so the host
+                            // answers the same frame every time; animated lines
+                            // would otherwise ask sixty times a second for
+                            // nothing.
+                            Some(if view.snapshot.playing {
+                                delay
+                            } else {
+                                delay.max(100)
+                            })
                         });
                         match applied {
                             Ok(Some(delay)) => delay,

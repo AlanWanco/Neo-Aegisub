@@ -432,3 +432,9 @@ GPUI 面板可逐组调整、撤回、接受当前行、分别跳过源/目标�
 命中过一个崩溃：`CALayer.contents` 的 CGImage 在交给图层后又 `CGImageRelease`，图层释放时留下悬空引用，播放几秒后 `CATransaction::commit` 里 `CFRelease` 触发 SIGTRAP；改为图层与 `Content` 各持一份引用，`drop_image` 先清 `contents` 再释放。
 
 验收：前后端 release 构建通过，31 项前端测试通过。macOS 无 CSRI，临时把桥字段硬编码为 `CSRI/libass`：播放时出现 `aegisub-mpv-*` 与字幕层两个窗口，30 fps 素材实测 29.8 fps，前端 CPU 17–22%、宿主 14–21%；把层窗口与 mpv 窗口的同一帧做互相关，最佳位移 1 像素（2x 截图，即 0.5 pt），字幕与 mpv 的 libass 渲染对齐；动画素材（`\fad`、`\move`、`\t`）1 秒内产生 31 张新位图，静态行 serial 不变；暂停后层清空、画面回到宿主合成的帧。恢复真实字段后同一素材仍只有主窗口与 `aegisub-mpv-*`，`subtitles_provider` 为 `libass`，无字幕层。Windows 分支本机无法运行，仅源码核对；临时硬编码已复原，临时字幕与日志删除，用户配置逐字节恢复。
+
+2026-11-13 暂停保留 mpv 画面与字幕层自持渲染器：Windows CI 在 `tools/test-gpui-windows.ps1:348` 报 `Pause dropped the native picture back into the workspace`。验收脚本的约定是暂停后 mpv 窗口仍在原位，而此前的规则 `starts_with("CSRI/") && !playing` 会把暂停交还宿主合成。现在选 CSRI 时不再按播放状态切画面：`Workspace::csri_renderer()` 只看渲染器名，mpv 始终出画，字幕层在播放与暂停时都保持原位，空行只清层内容、不移窗口；暂停时的轮询间隔取 `max(delay, 100 ms)`，动画行不会 60 次/秒空转。
+
+字幕层此前借用视频 provider 的渲染器并调用 `AsyncVideoProvider::GetSubtitles`，把毫秒当秒传进去（该函数内部再除 1000），libass 实际只收到 t≈0.002 s，位图恒为空。改正单位后，主线程渲染与视频工作线程并发使用同一个 `ASS_Renderer`，`hb_vector_t::alloc` 中堆损坏触发 SIGTRAP（`aegisub-2026-11-13-231902.ips`）。层因此自持渲染器：`SubtitlesProviderFactory::GetProvider(&runner)`，`runner` 是文件内联的 `BackgroundRunner`（provider 保存指针，须比它长寿）；用 `ScriptFingerprint`（Info/Styles/Attachments/Events 的 `GetEntryData` 做 FNV）只在脚本变化时 `LoadSubtitles`，渲染器名变化时重建 provider；黑/白两帧本地解算 alpha（与原 `GetSubtitles` 同一算法），裁剪与预乘不变。
+
+验收：前后端 release 构建通过，31 项前端测试通过。macOS 无 CSRI，临时把桥字段硬编码为 `CSRI/libass`：暂停在第 75 帧时层位图 857×184、位于 (368,839)、630752 字节；逐帧 30/60/90 时包围盒 x 为 46/261/475、serial 24/25/26，暂停下确实随帧更新。播放时 mpv 与字幕层两个窗口同矩形在屏、serial 增至 62；停止后两窗仍在原位，截取画面可见 `Growing line`、`Moving line` 叠在视频上；三次播放/停止循环无新崩溃报告；定位到第 0 帧时层回 `empty`、像素体为 0 而窗口不动。Windows 分支本机无法运行，仅源码核对；临时硬编码与内联调试已复原，`App/Auto/Load Linked Files` 与截图/样本按测试前备份恢复。
