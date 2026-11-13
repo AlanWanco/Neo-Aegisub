@@ -146,6 +146,12 @@ public:
 	bool ShouldSetVideoProperties() const { return source_provider->ShouldSetVideoProperties(); }
 	bool HasAudio() const                 { return source_provider->HasAudio(); }
 
+	/// @brief Class name of the subtitle renderer in use, e.g. "CSRI/VSFilterMod"
+	///
+	/// Empty when no renderer could be loaded. Only a CSRI renderer draws on
+	/// the host alone, so a front end uses this to decide who owns the picture.
+	std::string GetSubtitlesProviderName() const;
+
 	/// @brief Constructor
 	/// @param video_filename File to open
 	/// @param sink Receiver for decoded frames and provider errors

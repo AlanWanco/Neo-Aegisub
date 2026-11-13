@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::{Context as _, Result, bail};
 use gpui_kit::assets::IconName;
@@ -10,8 +10,8 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{
-    Bounds, Context, IntoElement, MouseButton, ObjectFit, Pixels, RenderImage, Styled, StyledImage,
-    canvas, div, img, prelude::*, px, relative, rgb,
+    Bounds, Context, Entity, IntoElement, MouseButton, ObjectFit, Pixels, Render, RenderImage,
+    Styled, StyledImage, Window, canvas, div, fill, img, point, prelude::*, px, relative, rgb, size,
 };
 use image::{Frame, RgbaImage};
 use serde::Deserialize;
@@ -45,8 +45,6 @@ pub struct AudioState {
     pub snap_distance: i64,
     #[serde(default)]
     pub drag_sensitivity: i64,
-    #[serde(default)]
-    pub wheel_zoom: bool,
     #[serde(default)]
     pub lock_scroll: bool,
     #[serde(default)]
@@ -252,9 +250,80 @@ pub struct AudioTile {
 /// this holds several screens of scrolling in both directions while staying in
 /// the tens of megabytes of RGBA at worst.
 pub const TILE_CACHE_LIMIT: usize = 48;
-/// Concurrent render requests. Each costs a few milliseconds on the host, so
-/// piling them up only delays the slice the user is actually looking at.
-pub const TILE_INFLIGHT_LIMIT: usize = 3;
+/// Rendering is serial on the host. Keep only one old viewport request ahead
+/// of the newest viewport and leave playback/gesture requests room to run.
+pub const TILE_INFLIGHT_LIMIT: usize = 1;
+
+/// Interpolate between host samples, but stop extrapolating after a stalled
+/// bridge. Repeated positions must not restart the clock on coarse backends.
+struct PlaybackClock {
+    epoch: u64,
+    position: i64,
+    duration: i64,
+    rate: f64,
+    playing: bool,
+    anchored: Instant,
+}
+
+impl PlaybackClock {
+    fn new(now: Instant) -> Self {
+        Self { epoch: 0, position: 0, duration: 0, rate: 1., playing: false, anchored: now }
+    }
+
+    fn sync(&mut self, state: &AudioState, now: Instant) {
+        let playing = state.loaded && state.playing;
+        if self.epoch != state.epoch || self.playing != playing
+            || self.position != state.position || self.rate != state.rate {
+            self.anchored = now;
+        }
+        self.epoch = state.epoch;
+        self.position = state.position;
+        self.duration = state.duration;
+        self.rate = state.rate;
+        self.playing = playing;
+    }
+
+    fn position_at(&self, now: Instant) -> i64 {
+        let elapsed = if self.playing {
+            (now.saturating_duration_since(self.anchored).min(Duration::from_millis(250))
+                .as_secs_f64() * self.rate * 1000.).round() as i64
+        } else { 0 };
+        self.position.saturating_add(elapsed).clamp(0, self.duration.max(0))
+    }
+}
+
+/// Mounted beside the cached workspace, so cursor frames cannot invalidate its
+/// layout. Bounds are measured by the waveform canvas in window coordinates.
+pub struct AudioCursor {
+    clock: PlaybackClock,
+    bounds: Rc<RefCell<Bounds<Pixels>>>,
+    visible: bool,
+    view_start: i64,
+    span: i64,
+    ink: gpui_kit::Hsla,
+}
+
+impl Render for AudioCursor {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let active = self.visible && self.clock.playing;
+        if active { window.request_animation_frame(); }
+        let position = self.clock.position_at(Instant::now());
+        let bounds = self.bounds.clone();
+        let (view_start, span, ink) = (self.view_start, self.span.max(1), self.ink);
+        canvas(|_, _, _| {}, move |_, _, window, _| {
+            let region = *bounds.borrow();
+            if active && region.size.width > px(0.) && region.size.height > px(0.) {
+                let fraction = ((position - view_start) as f32 / span as f32).clamp(0., 1.);
+                let x = (f32::from(region.size.width) * fraction)
+                    .min((f32::from(region.size.width) - 2.).max(0.));
+                window.paint_quad(fill(Bounds::new(
+                    point(region.left() + px(x), region.top()),
+                    size(px(2.), region.size.height),
+                ), ink));
+            }
+        }).absolute().inset_0()
+    }
+}
 
 pub struct AudioPanel {
     pub mode: &'static str,
@@ -273,6 +342,7 @@ pub struct AudioPanel {
     pub marker_view: Option<(u64, i64, i64)>,
     pub marker_loading: bool,
     pub bounds: Rc<RefCell<Bounds<Pixels>>>,
+    cursor: Option<Entity<AudioCursor>>,
     pub gesture: Option<u64>,
     pub dragging: bool,
     pub pending_ms: Option<i64>,
@@ -300,6 +370,7 @@ impl AudioPanel {
             marker_view: None,
             marker_loading: false,
             bounds: Rc::new(RefCell::new(Bounds::default())),
+            cursor: None,
             gesture: None,
             dragging: false,
             pending_ms: None,
@@ -312,6 +383,39 @@ impl AudioPanel {
             pan_drag: None,
             hover_x: None,
             last_track: (0., 0.),
+        }
+    }
+
+    pub fn with_cursor(cx: &mut Context<Workspace>) -> Self {
+        let mut panel = Self::new();
+        let bounds = panel.bounds.clone();
+        panel.cursor = Some(cx.new(|_| AudioCursor {
+            clock: PlaybackClock::new(Instant::now()), bounds, visible: false,
+            view_start: panel.view_start, span: panel.span, ink: rgb(0xffffff).into(),
+        }));
+        panel
+    }
+
+    pub fn cursor(&self) -> Option<Entity<AudioCursor>> { self.cursor.clone() }
+
+    pub fn set_cursor_visible(&self, visible: bool, cx: &mut Context<Workspace>) {
+        if let Some(cursor) = &self.cursor {
+            cursor.update(cx, |cursor, cx| {
+                if cursor.visible != visible {
+                    cursor.visible = visible;
+                    cx.notify();
+                }
+            });
+        }
+    }
+
+    pub fn sync_playback(&self, state: &AudioState, cx: &mut Context<Workspace>) {
+        if let Some(cursor) = &self.cursor {
+            cursor.update(cx, |cursor, cx| {
+                let was_playing = cursor.clock.playing;
+                cursor.clock.sync(state, Instant::now());
+                if was_playing != cursor.clock.playing { cx.notify(); }
+            });
         }
     }
     /// Length of one slice: a quarter of the viewport, snapped to a 1-2-5 step
@@ -454,7 +558,7 @@ impl AudioPanel {
     fn scroll_wheel(
         &mut self,
         delta: gpui_kit::ScrollDelta,
-        zoom: bool,
+        control: bool,
         fraction: f64,
         duration: i64,
     ) {
@@ -462,7 +566,7 @@ impl AudioPanel {
             gpui_kit::ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y)),
             gpui_kit::ScrollDelta::Lines(delta) => (delta.x * 40., delta.y * 40.),
         };
-        if zoom {
+        if !control {
             // Horizontal gestures never zoom, matching the native audio display.
             if x.abs() <= y.abs() {
                 let span = (self.span as f64 * 1.25_f64.powf(-f64::from(y) / 40.)).round() as i64;
@@ -733,6 +837,17 @@ impl AudioPanel {
                 .size_full(),
             );
         let width = f32::from(self.bounds.borrow().size.width).max(1.);
+        if let Some(cursor) = &self.cursor {
+            cursor.update(cx, |cursor, cx| {
+                let ink = appearance.color("Colour/Audio Display/Play Cursor", rgb(0xffffff).into());
+                if cursor.view_start != self.view_start || cursor.span != self.span || cursor.ink != ink {
+                    cursor.view_start = self.view_start;
+                    cursor.span = self.span;
+                    cursor.ink = ink;
+                    cx.notify();
+                }
+            });
+        }
         // The container's measured height is what the host was asked to render
         // for, so slices are matched against it rather than against the height
         // the layout requested: flex compression can make the two differ, and
@@ -934,19 +1049,6 @@ impl AudioPanel {
                     ),
             );
         }
-        if state.playing {
-            let position =
-                ((state.position - self.view_start) as f32 / self.span as f32).clamp(0., 1.);
-            graph = graph.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(width * position))
-                    .w(px(2.))
-                    .bg(appearance.color("Colour/Audio Display/Play Cursor", rgb(0xffffff).into())),
-            );
-        }
         if state.loaded && !self.dragging {
             if let Some(hover_x) = self.hover_x {
                 let x = f32::from(hover_x - self.bounds.borrow().left()).clamp(0., width);
@@ -986,18 +1088,13 @@ impl AudioPanel {
                     if !view.snapshot.audio.loaded || view.audio.dragging {
                         return;
                     }
-                    let invert = if cfg!(target_os = "macos") {
-                        event.modifiers.platform
-                    } else {
-                        event.modifiers.control
-                    };
                     let bounds = *view.audio.bounds.borrow();
                     let fraction = (f64::from(f32::from(event.position.x - bounds.left()))
                         / f64::from(f32::from(bounds.size.width).max(1.)))
                     .clamp(0., 1.);
                     view.audio.scroll_wheel(
                         event.delta,
-                        invert != view.snapshot.audio.wheel_zoom,
+                        event.modifiers.control,
                         fraction,
                         view.snapshot.audio.duration,
                     );
@@ -1846,29 +1943,74 @@ fn neighbour_ranges(
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioPanel, AudioRange, AudioState, PanDrag, neighbour_ranges, thumb_fractions};
+    use super::{AudioPanel, AudioRange, AudioState, PanDrag, PlaybackClock, neighbour_ranges, thumb_fractions};
+    use std::time::{Duration, Instant};
 
     #[test]
-    fn wheel_pans_both_axes_and_zoom_ignores_horizontal_gestures() {
+    fn playback_clock_interpolates_repeated_samples_and_bounds_bridge_stalls() {
+        let now = Instant::now();
+        let mut clock = PlaybackClock::new(now);
+        let state = AudioState { loaded: true, playing: true, epoch: 1,
+            position: 1000, duration: 2000, rate: 1., ..Default::default() };
+        clock.sync(&state, now);
+        assert_eq!(clock.position_at(now + Duration::from_millis(16)), 1016);
+        clock.sync(&state, now + Duration::from_millis(20));
+        assert_eq!(clock.position_at(now + Duration::from_millis(40)), 1040);
+        assert_eq!(clock.position_at(now + Duration::from_secs(1)), 1250);
+        for rate in [0.5, 2.] {
+            clock.sync(&AudioState { rate, ..state.clone() }, now);
+            assert_eq!(clock.position_at(now + Duration::from_millis(40)),
+                1000 + (40. * rate) as i64);
+        }
+        clock.sync(&AudioState { position: 1990, ..state }, now);
+        assert_eq!(clock.position_at(now + Duration::from_millis(40)), 2000);
+    }
+
+    #[test]
+    fn playback_clock_reanchors_on_seek_stop_and_audio_replacement() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(50);
+        let mut clock = PlaybackClock::new(now);
+        let mut state = AudioState { loaded: true, playing: true, epoch: 1,
+            position: 1000, duration: 5000, rate: 1., ..Default::default() };
+        clock.sync(&state, now);
+        state.position = 500;
+        clock.sync(&state, later);
+        assert_eq!(clock.position_at(later + Duration::from_millis(10)), 510);
+        state.playing = false;
+        clock.sync(&state, later);
+        assert_eq!(clock.position_at(later + Duration::from_secs(1)), 500);
+        state.playing = true;
+        clock.sync(&state, now);
+        state.epoch = 2;
+        clock.sync(&state, later);
+        assert_eq!(clock.position_at(later + Duration::from_millis(10)), 510);
+        state.loaded = false;
+        clock.sync(&state, later);
+        assert!(!clock.playing);
+    }
+
+    #[test]
+    fn control_wheel_pans_both_axes_and_plain_wheel_zooms_vertically() {
         use gpui_kit::{Bounds, ScrollDelta, point, px, size};
         let mut panel = AudioPanel::new();
         *panel.bounds.borrow_mut() = Bounds::new(point(px(0.), px(0.)), size(px(1000.), px(100.)));
         panel.scroll_wheel(
             ScrollDelta::Pixels(point(px(0.), px(-100.))),
-            false,
+            true,
             0.5,
             60000,
         );
         assert_eq!((panel.view_start, panel.span), (1200, 12000));
-        panel.scroll_wheel(ScrollDelta::Lines(point(-1., 0.)), false, 0.5, 60000);
+        panel.scroll_wheel(ScrollDelta::Lines(point(-1., 0.)), true, 0.5, 60000);
         assert_eq!((panel.view_start, panel.span), (1680, 12000));
-        panel.scroll_wheel(ScrollDelta::Lines(point(1., 0.)), true, 0.5, 60000);
+        panel.scroll_wheel(ScrollDelta::Lines(point(1., 0.)), false, 0.5, 60000);
         assert_eq!((panel.view_start, panel.span), (1680, 12000));
-        panel.scroll_wheel(ScrollDelta::Lines(point(0., 1.)), true, 0.5, 60000);
+        panel.scroll_wheel(ScrollDelta::Lines(point(0., 1.)), false, 0.5, 60000);
         assert_eq!((panel.view_start, panel.span), (2880, 9600));
-        panel.scroll_wheel(ScrollDelta::Lines(point(1000., 0.)), false, 0.5, 60000);
+        panel.scroll_wheel(ScrollDelta::Lines(point(1000., 0.)), true, 0.5, 60000);
         assert_eq!(panel.view_start, 0);
-        panel.scroll_wheel(ScrollDelta::Lines(point(-1000., 0.)), false, 0.5, 60000);
+        panel.scroll_wheel(ScrollDelta::Lines(point(-1000., 0.)), true, 0.5, 60000);
         assert_eq!(panel.view_start, 50400);
     }
 

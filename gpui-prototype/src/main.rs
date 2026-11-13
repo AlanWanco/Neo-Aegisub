@@ -17,7 +17,7 @@ use automation_panel::{AutomationPanel, AutomationState};
 mod colour_picker;
 mod command_catalog;
 
-use audio_panel::{AudioImage, AudioPanel, AudioState, TILE_INFLIGHT_LIMIT};
+use audio_panel::{AudioCursor, AudioImage, AudioPanel, AudioState, TILE_INFLIGHT_LIMIT};
 mod document_panels;
 mod hotkey_panel;
 mod paste_panel;
@@ -39,6 +39,7 @@ mod translation_panel;
 use styling_panel::StylingPanel;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod mpv_surface;
+mod subtitle_overlay;
 mod video_settings_panel;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use mpv_surface::MpvSurface;
@@ -545,6 +546,45 @@ struct FontEntry {
     size: i64,
 }
 
+/// One subtitle bitmap from the host, for the layer above mpv.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Clone, Debug, Deserialize)]
+struct SubtitleBitmap {
+    #[serde(default)]
+    serial: i64,
+    /// Nothing visible: the layer draws nothing.
+    #[serde(default)]
+    empty: bool,
+    /// This serial is the one the caller already holds.
+    #[serde(default)]
+    unchanged: bool,
+    #[serde(default)]
+    x: i32,
+    #[serde(default)]
+    y: i32,
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
+    #[serde(default)]
+    video_width: u32,
+    #[serde(default)]
+    video_height: u32,
+    #[serde(default)]
+    byte_length: i64,
+    /// The visible lines animate, so the bitmap changes every frame.
+    #[serde(default)]
+    animated: bool,
+    /// Milliseconds until the visible lines may change.
+    #[serde(default = "default_next_change")]
+    next_change: i64,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn default_next_change() -> i64 {
+    500
+}
+
 /// The override colour dialog. The host owns the per-line override tags; this
 /// only picks the colour and hands it back.
 struct ColorDialog {
@@ -582,6 +622,11 @@ struct Snapshot {
     video: bool,
     #[serde(default)]
     video_path: String,
+    /// The subtitle renderer the host loaded, e.g. `CSRI/VSFilterMod`. mpv can
+    /// only draw with its own libass, so a CSRI renderer keeps the picture on
+    /// the host: see `Workspace::host_draws_subtitles`.
+    #[serde(default)]
+    subtitles_provider: String,
     #[serde(default)]
     timecodes: bool,
     #[serde(default)]
@@ -704,7 +749,7 @@ fn line_field_row(
     // The time fields only ever hold "0:00:00.00", so they keep a fixed width
     // (label + box) and the free space goes to the actor field instead.
     for (key, label, grow, basis) in [
-        ("style", "样式", 1.4, 200.),
+        ("style", "样式", 0., 184.),
         ("actor", "角色", 1.0, 90.),
         ("start", "始", 0., 118.),
         ("end", "终", 0., 118.),
@@ -716,7 +761,7 @@ fn line_field_row(
                 .gap_1p5()
                 .flex_basis(gpui_kit::px(basis))
                 .flex_grow(grow)
-                .flex_shrink(if grow > 0. { 1. } else { 0. })
+                .flex_shrink(if key == "style" || grow > 0. { 1. } else { 0. })
                 .min_w_0()
                 // The label rides beside the field, not above it: a stacked label
                 // cost a whole text line per row and doubled the panel height.
@@ -735,7 +780,7 @@ fn line_field_row(
                     let weak = cx.weak_entity();
                     let disabled = view.selected_line < 0;
                     let label = current.clone();
-                    page::select_trigger(cx, "editor-style-select", label, disabled)
+                    let select = page::select_trigger(cx, "editor-style-select", label, disabled)
                         .h(px(32.))
                         .accessibility_label("样式")
                         .dropdown_menu(move |mut menu, _, _| {
@@ -759,7 +804,30 @@ fn line_field_row(
                                 ));
                             }
                             menu.scrollable(true)
-                        })
+                        });
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1p5()
+                        .w_full()
+                        .min_w_0()
+                        .child(div().flex_1().min_w_0().child(select))
+                        .child(
+                            Button::new("editor-style-manager")
+                                .ghost()
+                                .small()
+                                .rounded_full()
+                                .w(px(32.))
+                                .h(px(32.))
+                                .p_0()
+                                .flex_shrink_0()
+                                .child(Icon::new(Panel::Styles.icon()).size(px(15.)))
+                                .accessibility_label("样式管理器")
+                                .tooltip("打开样式管理器")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.invoke(json!({"op": "command", "name": "tool/style/manager"}), cx);
+                                })),
+                        )
                         .into_any_element()
                 } else {
                     Input::new(&view.property_inputs[key])
@@ -1153,6 +1221,28 @@ impl Bridge {
         Ok((reply, pixels))
     }
 
+    /// Requests the renderer's subtitles as a bitmap for the native overlay
+    /// above mpv. `since` is the serial already uploaded; the host then answers
+    /// with an empty body.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    async fn subtitle_layer(&self, since: i64) -> Result<(SubtitleBitmap, Vec<u8>)> {
+        // A 4K frame is 33 MB; the crop is bounded by it.
+        let most = 128 * 1024 * 1024;
+        let (header, pixels) =
+            self.raw_call(json!({"op": "subtitle_layer", "since": since}), most)
+                .await?;
+        let reply: SubtitleBitmap =
+            serde_json::from_value(header).context("invalid subtitle bitmap")?;
+        if pixels.len() as i64 != reply.byte_length {
+            return Err(anyhow!(
+                "subtitle bitmap sent {} bytes, expected {}",
+                pixels.len(),
+                reply.byte_length
+            ));
+        }
+        Ok((reply, pixels))
+    }
+
     /// Requests the newest video frame. `since` is the serial of the frame the
     /// caller already holds; the host then answers with an empty body.
     async fn video_frame(&self, since: i64) -> Result<(VideoFrameHead, Vec<u8>)> {
@@ -1403,6 +1493,18 @@ struct Workspace {
     /// A subtitle file request to the host is in flight.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_subs_inflight: bool,
+    /// The renderer's own subtitles drawn over mpv's picture while playing.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    subtitle_layer: Option<subtitle_overlay::SubtitleLayer>,
+    /// Whether the layer is placed over the picture right now.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    subtitle_layer_placed: bool,
+    /// A bitmap waiting for the next render, when the layer's scale is known.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    subtitle_layer_image: Option<subtitle_overlay::Image>,
+    /// The layer's request loop runs until playback stops.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    subtitle_layer_polling: bool,
     properties_line_id: i64,
     _property_events: Vec<Subscription>,
     _command_search_events: Subscription,
@@ -1631,6 +1733,7 @@ impl Workspace {
                 details_revision: 0,
                 video: false,
                 video_path: String::new(),
+                subtitles_provider: String::new(),
                 timecodes: false,
                 playing: false,
                 audio: AudioState::default(),
@@ -1680,7 +1783,7 @@ impl Workspace {
             catalog: Arc::new(Catalog::default()),
             catalog_loading: false,
             document,
-            audio: AudioPanel::new(),
+            audio: AudioPanel::with_cursor(cx),
             timeline,
             visual: VisualPanel::new(),
             video_view: VideoView::default(),
@@ -1714,6 +1817,14 @@ impl Workspace {
             native_visible: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_subs_inflight: false,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            subtitle_layer: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            subtitle_layer_placed: false,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            subtitle_layer_image: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            subtitle_layer_polling: false,
             properties_line_id: -1,
             _property_events: property_events,
             _command_search_events: command_search_events,
@@ -1856,6 +1967,7 @@ impl Workspace {
             }
         }
         self.snapshot = snapshot;
+        self.audio.sync_playback(&self.snapshot.audio, cx);
         self.audio.follow_playback(&self.snapshot.audio);
         self.sync_script_dialog(cx);
         if !self.snapshot.modified {
@@ -1906,20 +2018,21 @@ impl Workspace {
         let frame = self.snapshot.frame;
         let playing = self.snapshot.playing;
         let audio_playing = self.snapshot.audio.playing;
-        let audio_position = self.snapshot.audio.position;
         self.snapshot.frame = playback.frame;
         self.snapshot.video_time = playback.video_time;
         self.snapshot.playing = playback.playing;
         self.snapshot.audio.playing = playback.audio_playing;
         self.snapshot.audio.position = playback.audio_position;
-        if self.audio.follow_playback(&self.snapshot.audio) && self.active_panel == Panel::Subtitles {
+        self.audio.sync_playback(&self.snapshot.audio, cx);
+        let scrolled = self.audio.follow_playback(&self.snapshot.audio);
+        if scrolled && self.active_panel == Panel::Subtitles {
             self.refresh_audio(cx);
         }
         // Repaint only when a visible playback value changes.
         if self.snapshot.frame != frame
             || self.snapshot.playing != playing
             || self.snapshot.audio.playing != audio_playing
-            || self.snapshot.audio.position != audio_position
+            || scrolled
         {
             cx.notify();
         }
@@ -4573,14 +4686,32 @@ impl Workspace {
         gpui_kit::base::GlobalState::is_in_deferred_context(cx) || !self.notices.is_empty()
     }
 
+    /// Whether a CSRI renderer owns the picture for the current state.
+    ///
+    /// mpv renders subtitles with its bundled libass and nothing else, so with
+    /// a CSRI renderer loaded (VSFilter, VSFilterMod, the DLLs in `csri\`) an
+    /// mpv picture shows a different rendition from the host's. Paused frames,
+    /// stepping and the visual tool therefore come from the host.
+    ///
+    /// Playback is the exception: a host frame costs a full CPU composite plus
+    /// a frame copy, and the front end only ever shows what arrived in time, so
+    /// the rate collapses on heavy renders. mpv paints video on the GPU, so it
+    /// keeps the picture while playing and the host's rendering returns the
+    /// moment playback stops.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn host_draws_subtitles(&self) -> bool {
+        self.snapshot.subtitles_provider.starts_with("CSRI/") && !self.snapshot.playing
+    }
+
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn update_native_video(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if !self.snapshot.video
-            || self.snapshot.video_path.is_empty()
-            || self.video_popped
-        {
+        if !self.snapshot.video || self.snapshot.video_path.is_empty() || self.video_popped {
             self.mpv_surface = None;
             self.native_visible = false;
+            self.hide_subtitle_layer();
+            if let Some(mut layer) = self.subtitle_layer.take() {
+                layer.detach();
+            }
             return;
         }
         let bounds = *self.video_view.bounds.borrow();
@@ -4591,6 +4722,7 @@ impl Workspace {
         if self.native_video_failed.as_deref() == Some(path.as_str()) {
             self.mpv_surface = None;
             self.native_visible = false;
+            self.hide_subtitle_layer();
             return;
         }
         // mpv's window covers the picture, but rounding inside it can still
@@ -4626,6 +4758,9 @@ impl Workspace {
             || self.color_dialog.is_some()
             || self.script_dialog.is_some()
             || self.theme_reveal.is_active()
+            // Only the host can draw a CSRI renderer's subtitles; while
+            // playing, mpv keeps the picture for its frame rate.
+            || self.host_draws_subtitles()
             // Both mpv's window and the host's dialogs are windows of their
             // own; the host's layers never reach over either.
             || self.overlay_over_picture(cx);
@@ -4663,12 +4798,121 @@ impl Workspace {
             frame_secs,
         );
         surface.place(viewport, self.native_visible);
-        let stale = self.native_visible
-            && !self.native_subs_inflight
-            && surface.subtitle_revision() != Some(self.snapshot.revision);
-        if stale {
-            self.request_native_subtitles(cx);
+        let native_revision = surface.subtitle_revision();
+        // The renderer's own subtitles ride above mpv's picture while playing:
+        // the host sends a bitmap only when its rendering changes, and paused
+        // frames (which already carry the subtitles) take the layer down.
+        let wants_layer = self.native_visible
+            && self.snapshot.playing
+            && self.snapshot.subtitles_provider.starts_with("CSRI/")
+            && fit;
+        if wants_layer {
+            if self.subtitle_layer.is_none() {
+                if let Ok(layer) = subtitle_overlay::SubtitleLayer::new(window) {
+                    self.subtitle_layer = Some(layer);
+                }
+            }
+            if let Some(layer) = self.subtitle_layer.as_mut() {
+                // Placement first: it sets the scale the bitmap is drawn at.
+                layer.place(picture, true);
+                if let Some(image) = self.subtitle_layer_image.take() {
+                    layer.set_image(Some(image));
+                }
+            }
+            self.subtitle_layer_placed = true;
+            if !self.subtitle_layer_polling {
+                self.subtitle_layer_polling = true;
+                self.poll_subtitle_layer(cx);
+            }
         }
+        else if self.subtitle_layer_placed {
+            self.hide_subtitle_layer();
+        }
+        // A CSRI renderer's subtitles are the host's: mpv must not draw its
+        // own on top of them (paused frames already carry them, and playback
+        // gets them from the layer above). Any track added before the renderer
+        // was chosen goes away here.
+        if self.native_visible {
+            if self.snapshot.subtitles_provider.starts_with("CSRI/") {
+                if let Some(surface) = self.mpv_surface.as_mut() {
+                    surface.clear_subtitles();
+                }
+            }
+            else if !self.native_subs_inflight
+                && native_revision != Some(self.snapshot.revision)
+            {
+                self.request_native_subtitles(cx);
+            }
+        }
+    }
+
+    /// Takes the subtitle layer off the picture without tearing the window
+    /// down: it is reused on the next playback.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn hide_subtitle_layer(&mut self) {
+        if let Some(layer) = self.subtitle_layer.as_mut() {
+            layer.set_image(None);
+        }
+        self.subtitle_layer_placed = false;
+        self.subtitle_layer_image = None;
+    }
+
+    /// Keeps the layer above mpv fed while playback runs. The host answers an
+    /// empty body until its rendering changes, so a static sign costs one
+    /// upload per line while an animated one follows at video rate.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn poll_subtitle_layer(&mut self, cx: &mut Context<Self>) {
+        let bridge = self.bridge.clone();
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+            let mut since = -1;
+            loop {
+                let delay = match bridge.subtitle_layer(since).await {
+                    Ok((reply, pixels)) => {
+                        since = reply.serial;
+                        let delay = if reply.animated {
+                            16
+                        } else {
+                            reply.next_change.clamp(16, 500)
+                        };
+                        let applied = weak.update(cx, |view, cx| {
+                            if !view.snapshot.playing || !view.subtitle_layer_placed {
+                                return None;
+                            }
+                            if reply.empty {
+                                view.subtitle_layer_image = None;
+                                if let Some(layer) = view.subtitle_layer.as_mut() {
+                                    layer.set_image(None);
+                                }
+                            }
+                            else if !reply.unchanged {
+                                view.subtitle_layer_image = Some(subtitle_overlay::Image {
+                                    video_width: reply.video_width,
+                                    video_height: reply.video_height,
+                                    x: reply.x,
+                                    y: reply.y,
+                                    width: reply.width,
+                                    height: reply.height,
+                                    rgba: pixels,
+                                });
+                                cx.notify();
+                            }
+                            Some(delay)
+                        });
+                        match applied {
+                            Ok(Some(delay)) => delay,
+                            _ => break,
+                        }
+                    }
+                    Err(_) => break,
+                };
+                cx.background_executor()
+                    .timer(Duration::from_millis(delay.max(16) as u64))
+                    .await;
+            }
+            let _ = weak.update(cx, |view, _| view.subtitle_layer_polling = false);
+        })
+        .detach();
     }
 
     /// Asks the host for the current subtitles as a temporary ASS file and loads
@@ -4836,7 +5080,10 @@ impl Workspace {
                 // A definite width keeps the aspect ratio from measuring
                 // against the card's full width, which would leave the card
                 // hundreds of pixels taller than the picture it holds.
-                area.w(px(560.)).max_w(gpui_kit::relative(1.)).mx_auto().aspect_ratio(aspect)
+                area.w(px(560.))
+                    .max_w(gpui_kit::relative(1.))
+                    .mx_auto()
+                    .aspect_ratio(aspect)
             })
             .on_scroll_wheel(
                 cx.listener(|view, event: &gpui_kit::ScrollWheelEvent, _, cx| {
@@ -5061,20 +5308,25 @@ impl Workspace {
                     .and_then(|value| serde_json::from_value::<AudioState>(value).context("invalid audio markers"));
                 let _ = weak.update(cx, |view, cx| {
                     view.audio.marker_loading = false;
+                    let mut redraw = false;
                     match result {
                         Ok(state) => {
                             if state.epoch == marker_view.0 && state.epoch == view.snapshot.audio.epoch {
                                 view.audio.marker_view = Some(marker_view);
                                 if (view.audio.view_start, view.audio.span) == (marker_view.1, marker_view.2) {
                                     view.snapshot.audio.markers = state.markers;
+                                    redraw = true;
                                 }
                             }
                             // A scroll during the request sends only its newest viewport.
                             view.refresh_audio(cx);
                         }
-                        Err(error) => view.status = format!("音频标记更新失败：{error:#}"),
+                        Err(error) => {
+                            view.status = format!("音频标记更新失败：{error:#}");
+                            redraw = true;
+                        }
                     }
-                    cx.notify();
+                    if redraw { cx.notify(); }
                 });
             }).detach();
         }
@@ -5144,6 +5396,7 @@ impl Workspace {
                     });
                 let _ = weak.update(cx, |view, cx| {
                     view.audio.tile_inflight.retain(|pending| *pending != key);
+                    let mut redraw = false;
                     match result {
                         // A slice is drawn where the host actually started it,
                         // so one that lands after the view moved on is still
@@ -5153,6 +5406,9 @@ impl Workspace {
                                 && revision == view.snapshot.audio.render_revision =>
                         {
                             if let Some(image) = image {
+                                redraw = key.mode == view.audio.mode
+                                    && start < view.audio.view_start + view.audio.span
+                                    && start + key.span > view.audio.view_start;
                                 view.audio.store_tile(key, start, image, cx);
                             }
                             view.refresh_audio(cx);
@@ -5163,9 +5419,10 @@ impl Workspace {
                         // slice cannot spin; the next snapshot or gesture retries.
                         Err(error) => {
                             view.status = format!("音频画面生成失败：{error:#}");
+                            redraw = true;
                         }
                     }
-                    cx.notify();
+                    if redraw { cx.notify(); }
                 });
             })
             .detach();
@@ -5207,7 +5464,10 @@ impl Workspace {
                 match result {
                     Ok(reply) => {
                         view.audio.gesture = reply["gesture"].as_u64();
-                        if let Ok(state) = serde_json::from_value::<AudioState>(reply) { view.snapshot.audio = state; }
+                        if let Ok(state) = serde_json::from_value::<AudioState>(reply) {
+                            view.snapshot.audio = state;
+                            view.audio.sync_playback(&view.snapshot.audio, cx);
+                        }
                         view.flush_audio_drag(cx);
                     }
                     Err(error) => { view.audio.dragging = false; view.status = format!("音频选区失败：{error}"); }
@@ -5244,7 +5504,12 @@ impl Workspace {
             let _ = weak.update(cx, |view, cx| {
                 view.audio.drag_loading = false;
                 match result {
-                    Ok(reply) => { if let Ok(state) = serde_json::from_value::<AudioState>(reply) { view.snapshot.audio = state; } }
+                    Ok(reply) => {
+                        if let Ok(state) = serde_json::from_value::<AudioState>(reply) {
+                            view.snapshot.audio = state;
+                            view.audio.sync_playback(&view.snapshot.audio, cx);
+                        }
+                    }
                     Err(error) => { view.audio.dragging = false; view.status = format!("音频拖动失败：{error}"); }
                 }
                 if finished { view.audio.gesture = None; }
@@ -7043,63 +7308,14 @@ impl Workspace {
         (!hints.is_empty()).then_some((*label, hints))
     }
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_workspace_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::current(cx);
-        let filename = std::path::Path::new(&self.snapshot.file)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("未命名字幕");
         let enabled = |name: &str| {
             self.catalog
                 .command(name)
                 .is_some_and(|command| command.can_invoke())
         };
-        div()
-            .h_flex()
-            .h(px(42.))
-            .flex_shrink_0()
-            .gap_2()
-            .px_4()
-            .items_center()
-            .bg(p.surface)
-            .border_b_1()
-            .border_color(p.divider)
-            .child(
-                div()
-                    .h_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .text_size(px(16.))
-                            .font_semibold()
-                            .child(self.active_panel.label()),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .items_center()
-                            .gap_2()
-                            .text_size(px(11.))
-                            .text_color(p.muted)
-                            .child(Icon::new(IconName::FileText).size(px(12.)).flex_shrink_0())
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(filename.to_owned()),
-                            ),
-                    ),
-            )
+        div().h_flex().items_center().gap_2().flex_shrink_0()
             .child(
                 Button::new("open-subtitles")
                     .rounded(gpui_kit::px(999.))
@@ -7195,6 +7411,61 @@ impl Workspace {
             )
     }
 
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = Palette::current(cx);
+        let filename = std::path::Path::new(&self.snapshot.file)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("未命名字幕");
+        div()
+            .h_flex()
+            .h(px(42.))
+            .flex_shrink_0()
+            .gap_2()
+            .px_4()
+            .items_center()
+            .bg(p.surface)
+            .border_b_1()
+            .border_color(p.divider)
+            .child(
+                div()
+                    .h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_size(px(16.))
+                            .font_semibold()
+                            .child(self.active_panel.label()),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .gap_2()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(Icon::new(IconName::FileText).size(px(12.)).flex_shrink_0())
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(filename.to_owned()),
+                            ),
+                    ),
+            )
+            .when(cfg!(target_os = "macos"), |bar| bar.child(self.render_workspace_actions(cx)))
+    }
+
     fn render_legacy_menus(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::current(cx);
         let active = self.menu_open.or(self.menu_hovered);
@@ -7209,14 +7480,7 @@ impl Workspace {
             if active.is_some() { 1_f32 } else { 0_f32 },
             gpui_kit::base::Transition::new(Duration::from_millis(100)), window, cx);
         let mut index = 0usize;
-        let mut bar = div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .px_4()
-            .h(px(38.))
-            .bg(p.surface)
-            .flex_shrink_0();
+        let mut menus = div().h_flex().items_center().gap_1().flex_shrink_0();
         for entry in self.catalog.menu("main") {
             if entry.special == "window" || entry.submenu == "main/window" {
                 continue;
@@ -7271,12 +7535,12 @@ impl Workspace {
                     .left(px(left)).w(px(width.max(0.))).rounded_full()
                     .bg(p.selected).opacity(opacity.clamp(0., 1.)));
             }
-            bar = bar.child(wrapper.child(
+            menus = menus.child(wrapper.child(
                 Button::new(format!("legacy-menu-{label}"))
                     .icon(IconName::Menu)
                     .rounded(gpui_kit::px(999.))
                     .small()
-                    .px(gpui_kit::px(13.))
+                    .px(gpui_kit::px(7.))
                     .py(gpui_kit::px(3.))
                     .label(label)
                     .ghost()
@@ -7304,21 +7568,26 @@ impl Workspace {
                     }),
             ));
         }
-        bar.child(div().flex_1()).child(
-            Button::new("command-browser")
-                .rounded(gpui_kit::px(999.))
-                .small()
-                .px(gpui_kit::px(13.))
-                .py(gpui_kit::px(3.))
-                .icon(IconName::Search)
-                .label("搜索命令")
-                .ghost()
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.active_panel = Panel::Commands;
-                    view.refresh_catalog(cx);
-                    cx.notify();
-                })),
-        )
+        div().h_flex().flex_wrap().items_center().gap_2()
+            .px_4().py_1().min_h(px(38.)).bg(p.surface).flex_shrink_0()
+            .child(menus)
+            .child(div().h_flex().items_center().gap_2().ml_auto().flex_shrink_0()
+                .child(self.render_workspace_actions(cx))
+                .child(
+                    Button::new("command-browser")
+                        .rounded(gpui_kit::px(999.))
+                        .small()
+                        .px(gpui_kit::px(13.))
+                        .py(gpui_kit::px(3.))
+                        .icon(IconName::Search)
+                        .label("搜索命令")
+                        .ghost()
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.active_panel = Panel::Commands;
+                            view.refresh_catalog(cx);
+                            cx.notify();
+                        })),
+                ))
     }
 
     fn render_commands(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -7474,14 +7743,17 @@ impl Workspace {
             .on_click(cx.listener(|view, _, _, cx| view.commit_properties(cx)));
         let core = div()
             .h_flex()
+            .flex_wrap()
             .items_center()
             .gap_1p5()
             .w_full()
             .min_w_0()
-            .child(div().flex_1().min_w_0().child(line_field_row(cx, self, &p)))
-            .child(more_button)
-            .child(toggle_comment)
-            .child(apply);
+            .child(div().flex_basis(px(520.)).flex_grow(1.).min_w_0()
+                .child(line_field_row(cx, self, &p)))
+            .child(div().h_flex().items_center().gap_1p5().flex_shrink_0()
+                .child(more_button)
+                .child(toggle_comment)
+                .child(apply));
         let more_row = more.then(|| {
             div()
                 .h_flex()
@@ -7515,7 +7787,7 @@ impl Workspace {
                     // The panel sizes to its fields; letting it flex made it lose
                     // the fight with the editor and the list.
                     .flex_none()
-                    .h(px(self.properties_height()))
+                    .min_h(px(self.properties_height()))
                     // The properties strip reads as a band across the editor, not
                     // as a card of its own, so it keeps square corners.
                     .rounded(px(0.))
@@ -7684,13 +7956,17 @@ impl Workspace {
             for panel in panels {
                 let selected = self.sidebar_selected == panel;
                 let content = div()
-                    .h_flex()
+                    .relative()
                     .w_full()
-                    .gap_2()
-                    .items_center()
+                    .h_full()
                     .overflow_hidden()
-                    .child(div().w(px(16.)).flex_shrink_0().child(Icon::new(panel.icon()).size(px(15.))))
-                    .child(div().w(px(104.)).flex_shrink_0().opacity(label_opacity)
+                    .child(div().absolute().top_0().bottom_0().w(px(16.))
+                        .left(gpui_kit::relative((1. - label_opacity) * 0.5))
+                        .ml(px(-8. * (1. - label_opacity)))
+                        .h_flex().items_center().justify_center()
+                        .child(Icon::new(panel.icon()).size(px(15.))))
+                    .child(div().absolute().left(px(24.)).top_0().bottom_0().w(px(104.))
+                        .h_flex().items_center().opacity(label_opacity)
                         .text_size(px(13.)).whitespace_nowrap().child(panel.label()));
                 let button = Button::new(format!("panel-{}", panel.label()))
                     .rounded(gpui_kit::px(999.))
@@ -9421,6 +9697,21 @@ async fn invoke_weak(
         }
     }
 }
+/// Cursor frames invalidate this cheap wrapper, leaving the cached workspace
+/// subtree intact until document, viewport, or control state changes.
+struct WorkspaceSurface {
+    workspace: Entity<Workspace>,
+    cursor: Option<Entity<AudioCursor>>,
+}
+
+impl Render for WorkspaceSurface {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().relative().size_full()
+            .child(self.workspace.clone().cached(gpui_kit::StyleRefinement::default().size_full()))
+            .children(self.cursor.clone())
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(dark) = self.theme_reveal.advance(self.snapshot.dark, window, cx) {
@@ -9429,6 +9720,14 @@ impl Render for Workspace {
                 workspace_theme::apply(cx);
             }
         }
+        self.audio.set_cursor_visible(
+            self.active_panel == Panel::Subtitles
+                && self.notices.is_empty()
+                && self.snapshot.progress.is_none()
+                && self.script_dialog.is_none()
+                && !self.theme_reveal.is_active(),
+            cx,
+        );
         let compact = self.sidebar_collapsed
             .unwrap_or(f32::from(window.viewport_size().width) < 1150.);
         let sidebar_width = gpui_kit::base::spring("workspace-sidebar-width",
@@ -10517,6 +10816,7 @@ fn open_workspace(
                     if weak.upgrade().is_none() {
                         break;
                     }
+                    let poll_started = Instant::now();
                     // A full document snapshot is a large reply; during
                     // playback it competes with the frame requests, so only
                     // refresh it when the document can actually have changed.
@@ -10563,12 +10863,15 @@ fn open_workspace(
                         }
                     }
                     cx.background_executor()
-                        .timer(Duration::from_millis(if playing { 16 } else { 350 }))
+                        .timer(Duration::from_millis(if playing { 16 } else { 350 })
+                            .saturating_sub(poll_started.elapsed()))
                         .await;
                 }
             })
             .detach();
-            cx.new(|cx| Root::new(workspace, window, cx))
+            let cursor = workspace.read(cx).audio.cursor();
+            let surface = cx.new(|_| WorkspaceSurface { workspace, cursor });
+            cx.new(|cx| Root::new(surface, window, cx))
         },
     )
 }
@@ -10726,7 +11029,10 @@ mod picture_tests {
     fn falls_back_to_sixteen_by_nine_for_an_unusable_aspect() {
         for aspect in [0., -1.7, f32::NAN, f32::INFINITY] {
             let (_, _, w, h) = measure(fitted_picture(area(640., 360.), aspect));
-            assert!((w - 640.).abs() < 0.01 && (h - 360.).abs() < 0.01, "{aspect}");
+            assert!(
+                (w - 640.).abs() < 0.01 && (h - 360.).abs() < 0.01,
+                "{aspect}"
+            );
         }
     }
 
@@ -10736,5 +11042,4 @@ mod picture_tests {
         assert!(x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite());
         assert!(w >= 1. && h > 0.);
     }
-
 }

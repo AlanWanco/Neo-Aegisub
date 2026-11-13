@@ -69,6 +69,7 @@ gpui_host_src = files(
     'gpui_server.cpp',
     'gpui_visual.cpp',
     'gpui_video.cpp',
+    'gpui_subtitles.cpp',
     'gpui_preferences.cpp',
     'gpui_spelling.cpp',
     'hotkey.cpp',

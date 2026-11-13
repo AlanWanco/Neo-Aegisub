@@ -367,7 +367,7 @@ std::string Preferences(json::Object const& request) {
 			"Subtitle/Edit Box/Font Face", "Subtitle/Edit Box/Font Size", "Subtitle/Edit Box/Soft Line Break",
 			"Subtitle/Grid/Focus Allow", "Subtitle/Grid/Highlight Subtitles in Frame",
 			"Audio/Snap/Distance", "Audio/Start Drag Sensitivity",
-			"Audio/Wheel Default to Zoom", "Audio/Lock Scroll on Cursor", "Audio/Auto/Focus",
+			"Audio/Lock Scroll on Cursor", "Audio/Auto/Focus",
 			"Audio/Display/Draw/Cursor Time", "Audio/Line Boundaries Thickness",
 			"Audio/Display/Draw/Seconds", "Audio/Display/Draw/Video Position",
 			"Audio/Display/Draw/Keyframes in Dialogue Mode", "Audio/Display/Draw/Keyframes in Karaoke Mode",

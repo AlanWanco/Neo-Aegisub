@@ -153,6 +153,10 @@ std::pair<int, int> AsyncVideoProvider::GetDisplayResolution() const {
 	);
 }
 
+std::string AsyncVideoProvider::GetSubtitlesProviderName() const {
+	return subs_provider ? subs_provider->GetName() : std::string();
+}
+
 AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, agi::ycbcr::Header colormatrix, AsyncVideoSink *sink, agi::BackgroundRunner *br)
 : worker(agi::dispatch::Create())
 , source_provider(VideoProviderFactory::GetProvider(video_filename, colormatrix, br))

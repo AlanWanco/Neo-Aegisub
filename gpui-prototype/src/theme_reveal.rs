@@ -168,7 +168,7 @@ fn reveal_mask(source: &RgbaImage, origin: (f32, f32), radius: f32, feather: f32
     image
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn capture(window: &Window) -> anyhow::Result<Snapshot> {
     use anyhow::{Context, ensure};
     let id = native_window_id(window)?;
@@ -185,22 +185,40 @@ fn capture(window: &Window) -> anyhow::Result<Snapshot> {
         width > 0 && height > 0 && image.width() >= width && image.height() >= height,
         "captured window does not contain its client area"
     );
+    // The frame surrounds the client area evenly: macOS windows carry no
+    // caption above it, so the client rectangle ends at the frame's bottom.
     let x = (image.width() - width) / 2;
-    #[cfg(target_os = "macos")]
-    let bottom = 0;
-    #[cfg(target_os = "windows")]
-    let bottom = x.min(image.height() - height);
-    let y = image.height() - height - bottom;
+    let y = image.height() - height;
     if image.dimensions() != (width, height) {
         image = image::imageops::crop_imm(&image, x, y, width, height).to_image();
     }
-    // GPUI stores RenderImage frames in BGRA order.
-    for pixel in image.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
     Ok(Snapshot {
-        pixels: image,
+        pixels: bgra(image),
         logical_size,
+        texture: RefCell::new(None),
+    })
+}
+
+/// xcap skips the calling process's own windows when it enumerates them, so
+/// this app never finds its own window in `Window::all()`. Capture the monitor
+/// holding the window and cut the client rectangle out of it instead: while the
+/// theme button that starts the reveal is being clicked, the window is in front.
+#[cfg(target_os = "windows")]
+fn capture(window: &Window) -> anyhow::Result<Snapshot> {
+    use anyhow::{Context, ensure};
+    let (client_x, client_y, width, height) = client_rect_on_screen(native_hwnd(window)?)?;
+    ensure!(width > 0 && height > 0, "the window has no client area");
+    let monitor =
+        xcap::Monitor::from_point(client_x, client_y).context("no monitor holds the window")?;
+    let x = client_x - monitor.x()?;
+    let y = client_y - monitor.y()?;
+    ensure!(x >= 0 && y >= 0, "the client area starts outside its monitor");
+    let image = monitor
+        .capture_region(x as u32, y as u32, width, height)
+        .context("could not capture the window area")?;
+    Ok(Snapshot {
+        pixels: bgra(image),
+        logical_size: window.viewport_size(),
         texture: RefCell::new(None),
     })
 }
@@ -210,16 +228,22 @@ fn capture(_: &Window) -> anyhow::Result<Snapshot> {
     anyhow::bail!("window capture is unavailable on this platform")
 }
 
+/// GPUI uploads RenderImage frames in BGRA order.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+fn bgra(mut image: RgbaImage) -> RgbaImage {
+    for pixel in image.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    image
+}
+
+#[cfg(target_os = "macos")]
 fn native_window_id(window: &Window) -> anyhow::Result<u32> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     match HasWindowHandle::window_handle(window)
         .map_err(|error| anyhow::anyhow!("no native window handle: {error}"))?
         .as_raw()
     {
-        #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get() as u32),
-        #[cfg(target_os = "macos")]
         RawWindowHandle::AppKit(handle) => {
             use std::ffi::c_void;
             #[link(name = "objc")]
@@ -244,6 +268,59 @@ fn native_window_id(window: &Window) -> anyhow::Result<u32> {
         }
         _ => anyhow::bail!("unsupported native window handle"),
     }
+}
+
+#[cfg(target_os = "windows")]
+fn native_hwnd(window: &Window) -> anyhow::Result<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match HasWindowHandle::window_handle(window)
+        .map_err(|error| anyhow::anyhow!("no native window handle: {error}"))?
+        .as_raw()
+    {
+        RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
+        _ => anyhow::bail!("unsupported native window handle"),
+    }
+}
+
+/// Screen position and physical size of the window's client area.
+#[cfg(target_os = "windows")]
+fn client_rect_on_screen(hwnd: isize) -> anyhow::Result<(i32, i32, u32, u32)> {
+    let mut rect = WinRect::default();
+    let mut origin = WinPoint::default();
+    // SAFETY: the window handle comes from GPUI's live raw handle on the UI
+    // thread; both calls only write the two locals, which outlive the calls.
+    unsafe {
+        anyhow::ensure!(GetClientRect(hwnd, &mut rect) != 0, "GetClientRect failed");
+        anyhow::ensure!(ClientToScreen(hwnd, &mut origin) != 0, "ClientToScreen failed");
+    }
+    let width = (rect.right - rect.left).max(0) as u32;
+    let height = (rect.bottom - rect.top).max(0) as u32;
+    Ok((origin.x, origin.y, width, height))
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[derive(Default)]
+struct WinPoint {
+    x: i32,
+    y: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[derive(Default)]
+struct WinRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn GetClientRect(hwnd: isize, rect: *mut WinRect) -> i32;
+    fn ClientToScreen(hwnd: isize, point: *mut WinPoint) -> i32;
 }
 
 #[cfg(test)]

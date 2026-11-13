@@ -36,6 +36,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 class AssFile;
@@ -43,6 +44,7 @@ struct VideoFrame;
 
 class SubtitlesProvider {
 	std::vector<char> buffer;
+	std::string name;
 	virtual void LoadSubtitles(const char *data, size_t len)=0;
 
 public:
@@ -50,6 +52,13 @@ public:
 	void LoadSubtitles(AssFile *subs, int time = -1);
 	virtual void DrawSubtitles(VideoFrame &dst, double time)=0;
 	virtual void Reinitialize() { }
+
+	/// @brief Class name of the renderer, as SubtitlesProviderFactory knows it
+	///
+	/// The bridge reports it so a front end can tell a CSRI renderer
+	/// ("CSRI/VSFilterMod") from libass: only the host can draw with CSRI.
+	std::string const& GetName() const { return name; }
+	void SetName(std::string value) { name = std::move(value); }
 };
 
 namespace agi { class BackgroundRunner; }

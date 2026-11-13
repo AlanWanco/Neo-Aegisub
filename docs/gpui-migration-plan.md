@@ -398,3 +398,37 @@ GPUI 面板可逐组调整、撤回、接受当前行、分别跳过源/目标�
 验收：`cargo +1.95.0 build --release --locked` 通过。Mac 真实鼠标点击打开视觉排版和样式管理，再点击主窗口折叠按钮：侧栏实际收起，辅助功能信息确认主窗口获得焦点，CoreGraphics 窗口顺序确认两个子窗口仍在主窗口前方，三个窗口均维持普通层级 0。关闭并重新打开样式管理后重复点击主窗口，层级与输入保持正常，无窗口关联错误日志。未连接或测试 Windows；其他平台尚无原生所属关系实现，记录明确的不可用错误。
 
 2026-11-12 Windows CI 工具窗口定位：首次构建的七项 GPUI 编译均通过，Windows x64 的桌面验收在时间平移窗口已实际打开时仍报 `Tool window not found`。所属窗口位于主窗口的自动化子树中，验收脚本改为从主窗口句柄查找后代窗口，保留原有可见控件操作、文档时间、撤销和布局检查。
+
+2026-11-12 编辑区样式入口与滚轮操作：样式选择组使用紧凑宽度，右侧新增带提示和无障碍名称的样式管理器图标按钮，复用现有管理命令与单实例窗口。长样式名省略显示；窄编辑区将更多、注释和应用操作整体换行，属性带按内容撑高，保留角色与起止时间输入。
+
+音频波形固定为普通滚轮缩放、Ctrl＋滚轮水平平移，macOS 同样使用 Ctrl；移除旧的默认滚轮反转偏好及桥接字段。缩放继续固定鼠标所指时间，纯水平手势不缩放；Ctrl 平移支持两个滚轮轴并保留视图边界限制。
+
+验收：Rust release 与宿主构建通过，12 项音频测试通过。Mac 真实窗口检查 1321×888、1200×800 布局、长样式名截断、样式切换以及新增按钮打开样式管理器；60 秒音频实测普通滚轮改变刻度间距，Ctrl＋滚轮保持间距不变并平移时间范围。未连接或测试 Windows，临时诊断与测试夹具在验证后移除，用户配置恢复。
+
+2026-11-13 音频播放与卷动刷新：播放线改为与缓存工作区并列的独立 canvas，按播放速率和窗口动画帧插值宿主播放位置；重复的后端位置不重置插值，桥接停止更新时最多持续外推 250 ms，跳转、停止、速率变化和音频切换重新锚定。播放位置变化不再单独触发工作区重建；仍保留播放状态、视频帧和跟随滚动的刷新。宿主频谱绘制将纵向频率映射、插值索引和区间计算移至像素列循环外，复用行缓冲；每次仅保留一个串行绘图请求，过期范围与预取切片回复不再触发无用重绘。
+
+验收：前后端 release 构建、14 项音频回归测试通过。24 组波形/频谱切片（96/256/512 px 高）与修改前逐字节一致。明确更新宿主启动时优先使用的前端副本后，在 Mac 真实窗口验证播放线推进、停止隐藏、普通滚轮缩放及 Ctrl＋滚轮保持刻度间距平移；临时计数探针在固定视图播放测量段记录仅 3 次工作区渲染，两次截图中的播放线继续推进。未测量整体显示帧率；早先误用旧前端副本的窗口采样不作为改进证据。临时源码探针移除，测试窗口关闭，临时输入驱动与字幕/音频夹具已清理，4 份用户配置按测试前备份逐字节恢复。验收截图与结果留在忽略的本机构建目录；未连接或测试 Windows。
+
+2026-11-13 顶部操作入口：Windows/Linux 将打开字幕、保存、撤销、重做、打开视频和保存状态移至菜单栏右侧，与搜索命令同组；入口不再随下方标题工具条的显示开关消失。菜单横向留白收紧，空间不足时操作组整体换到下一行，标题行仅保留工作区名称和文件名。Mac 继续使用原生菜单和原有标题工具条入口。
+
+验收：Mac 临时显示同一菜单布局，在 1321×888 窗口确认菜单与操作按钮同排，980×760 窗口确认操作组完整换行且长文件名不挤占按钮。验收后恢复平台条件并完成 release 构建；未连接或测试 Windows。截图留在忽略的本机构建目录。
+
+2026-11-13 视频时间轴关键帧颜色：刻度由警示黄改用主题的灰色 grip 色，深色为 #a1aabd、浅色为 #c2cbd9，保留播放头的强调色。Release 构建通过，本机真实视频载入 36 个关键帧检查深色时间轴，未操作 Windows。
+
+2026-11-13 昼夜切换动效的 Windows 取帧：揭示动效此前在 Windows 上从不执行。xcap 枚举窗口时排除调用进程自己的窗口（xcap-0.9.10 `src/windows/impl_window.rs` 的 `is_valid_window`：`get_window_pid(hwnd) == GetCurrentProcessId()` 直接 `return false`），`Window::all()` 因此永远找不到本窗口，取帧报错而错误只写入 stderr，GUI 下不可见，于是点击主题按钮只是瞬间换色。Windows 改为抓取窗口所在显示器：`GetClientRect`＋`ClientToScreen` 取客户区的屏幕物理坐标，`Monitor::from_point` 选中显示器，`Monitor::capture_region` 只回传该矩形，再转成 BGRA；macOS 仍走窗口枚举路径。代价是点击瞬间若有其他窗口盖住客户区，420 ms 的旧画面会带上它。
+
+验收：前后端 release 构建通过，2 项 theme_reveal 掩膜测试通过。macOS 通过宿主 `preferences` 把 `App/Theme` 由 2（深色）改为 1（浅色），以约 118 毫秒间隔截取窗口：中间帧平均亮度 112（深色 33、浅色 194），与改动前后两帧不同的像素各占 41%，圆形揭示确实在推进。Windows 分支本机无法运行，`--target x86_64-pc-windows-gnu` 类型检查也因 gpui-pre-windows 构建脚本缺少 HLSL 编译器而中断，故该分支只做了源码核对；测试后的临时字幕、截图与日志已删除，4 份用户配置按测试前备份逐字节恢复。
+
+2026-11-13 字幕渲染器与播放画面一致：播放画面一直由 mpv 的 libass 绘制，而预览走宿主的字幕渲染器；宿主选了 CSRI 渲染器（VSFilter、VSFilterMod，即 exe 同目录 `csri\` 下的 DLL）时两者渲染结果不同，Windows 上默认就是这样（`csri\` 由安装包写入，`GetSorted` 在未设置 `Subtitle/Provider` 时把 CSRI 排在 libass 前）。现在宿主在快照里报出实际渲染器（`SubtitlesProvider` 记录工厂名，`AsyncVideoProvider::GetSubtitlesProviderName()`，桥字段 `subtitles_provider`），前端在名字以 `CSRI/` 开头时不再创建 mpv 窗口（`Workspace::host_draws_subtitles`，`update_native_video` 直接清空 `mpv_surface` 并置 `native_visible=false`）：暂停、播放、视觉排版、弹出视频窗都由宿主合成帧。代价是播放流畅度取决于宿主合成与桥接传帧（每帧 BGRA，1080p 约 8.3 MB），4K 播放尚未测量。
+
+验收：前后端 release 构建通过，31 项前端测试通过。macOS 无 CSRI 渲染器，临时把桥字段硬编码成 `CSRI/VSFilterMod` 验证：视觉排版工具窗播放时窗口数 2（无 `aegisub-mpv-*`），桥接持续回传 24.5 fps、帧号 31→79 与 24 fps 播放吻合；恢复真实字段后同一窗口播放出现 `aegisub-mpv-*`（3 窗），快照 `subtitles_provider` 为 `libass`，行为与改动前一致。Windows 的 CSRI 加载与 VSFilterMod 合成路径未在本机运行；临时硬编码已复原，测试视频/字幕/截图/日志已删除，4 份用户配置逐字节恢复。
+
+决定（2026-11-13，用户明确）：VSFilterMod 不随安装包分发，`csri\` 仍只放既有 xy-VSFilter 的 VSFilter.dll。需要检查 mod 标签的字幕组自行把 `x64/VSFilterMod.dll`（r5.3.1 起只有 x86/x64，无 arm64）放进 exe 同目录的 `csri\`，再在「字幕渲染器」里选 `CSRI/VSFilterMod`；上面这条渲染器与播放画面一致的改动只在这样选中 CSRI 时生效。
+
+2026-11-13 播放画面与字幕渲染器一致的范围：宿主只在暂停时接管画面。选 CSRI 渲染器（VSFilter/VSFilterMod）时，暂停、逐帧和视觉排版都由宿主绘制，保证标签效果与最终成片一致；播放时仍由 mpv 用 GPU 出画，因为它只能走 libass，而宿主每帧要整帧合成并上传 ~8.3 MB，1080p 24fps 实测前端主线程已占 21%（2 s 内 1072 个样本、426 个在 `Window::draw`），重特效下帧率撑不住。`Workspace::host_draws_subtitles()` 因此带 `&& !playing`，mpv 表面在暂停时隐藏而不是销毁，恢复播放不需要重建视频窗。验收：强制 CSRI 下暂停 2 个窗口、播放 3 个（含 `aegisub-mpv-*`）、再暂停回到 2 个；31 项前端测试通过，临时宿主补丁已还原。
+
+2026-11-13 播放时的字幕层：选 CSRI 渲染器时，播放画面仍是 mpv 的 GPU 输出，但字幕改由宿主渲染、经原生透明窗口叠在 mpv 上。宿主新增 `src/gpui_subtitles.cpp` 的 `subtitle_layer` 请求：用 `provider->GetSubtitles(time/1000.)` 取直通 RGBA，裁剪到 alpha 包围盒（顶行优先、预乘），按「渲染器指针＋可见行指纹」缓存，动画行（`\t`、`\move`、`\fad`、`\k` 等）按时间重绘，静态行只在本行集合变化时重绘一次；无可见行回 `empty`，调用方已持有的 serial 回 `unchanged` 且不带像素体。`next_change` 给到最近行边界（上限 500 ms）。前端 `subtitle_overlay.rs` 在 macOS 用无边框透明 `NSWindow`（GPUI 窗口的 child window，高于 mpv）里的单个 `CALayer` 显示位图，Windows 用 `WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE` 的 popup 加 `UpdateLayeredWindow`；`Workspace::poll_subtitle_layer` 按 `animated ? 16 ms : next_change` 轮询，只在播放且层已放置时上传。缩放或平移视图时层撤下（mpv 自己画 libass，属已知限制）。同时 CSRI 渲染器下不再给 mpv 加临时 ASS（`MpvSurface::clear_subtitles`），否则 libass 会在同一画面再画一份。
+
+命中过一个崩溃：`CALayer.contents` 的 CGImage 在交给图层后又 `CGImageRelease`，图层释放时留下悬空引用，播放几秒后 `CATransaction::commit` 里 `CFRelease` 触发 SIGTRAP；改为图层与 `Content` 各持一份引用，`drop_image` 先清 `contents` 再释放。
+
+验收：前后端 release 构建通过，31 项前端测试通过。macOS 无 CSRI，临时把桥字段硬编码为 `CSRI/libass`：播放时出现 `aegisub-mpv-*` 与字幕层两个窗口，30 fps 素材实测 29.8 fps，前端 CPU 17–22%、宿主 14–21%；把层窗口与 mpv 窗口的同一帧做互相关，最佳位移 1 像素（2x 截图，即 0.5 pt），字幕与 mpv 的 libass 渲染对齐；动画素材（`\fad`、`\move`、`\t`）1 秒内产生 31 张新位图，静态行 serial 不变；暂停后层清空、画面回到宿主合成的帧。恢复真实字段后同一素材仍只有主窗口与 `aegisub-mpv-*`，`subtitles_provider` 为 `libass`，无字幕层。Windows 分支本机无法运行，仅源码核对；临时硬编码已复原，临时字幕与日志删除，用户配置逐字节恢复。

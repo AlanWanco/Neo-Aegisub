@@ -265,18 +265,16 @@ fn spawn_reader(api: Arc<MpvApi>, mpv: usize, shared: Arc<Shared>) -> JoinHandle
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 let generation = shared.load_generation.load(Ordering::Acquire);
-                shared.loaded_generation.store(generation, Ordering::Release);
+                shared
+                    .loaded_generation
+                    .store(generation, Ordering::Release);
                 // A seek queued before this event is dropped by mpv, which
                 // left the picture on the first frame while the timeline sat
                 // at the restored cursor. Replay the host's position now.
                 let desired = f64::from_bits(shared.desired_position.load(Ordering::Acquire));
                 if desired.is_finite() {
                     let text = format!("{desired:.6}");
-                    let _ = queue_command(
-                        &api,
-                        handle,
-                        &["seek", text.as_str(), "absolute+exact"],
-                    );
+                    let _ = queue_command(&api, handle, &["seek", text.as_str(), "absolute+exact"]);
                 }
                 if let Some(path) = pending.take() {
                     let _ = queue_subtitles(&api, handle, &path);
@@ -318,10 +316,10 @@ pub struct MpvSurface {
     /// seek is queued once instead of on every render.
     paused_at: Option<i64>,
     subtitle_revision: Option<u64>,
-    /// Aspect, logarithmic zoom, and pan already queued to mpv.
-    view: Option<[f64; 4]>,
     /// Letterbox colour, as `0xRRGGBB`, matching the card the window covers.
     background: u32,
+    /// Aspect, logarithmic zoom, and pan already queued to mpv.
+    view: Option<[f64; 4]>,
 }
 
 impl MpvSurface {
@@ -353,9 +351,9 @@ impl MpvSurface {
             rate: 1.,
             seek_at: None,
             paused_at: None,
-            view: None,
             subtitle_revision: None,
             background,
+            view: None,
         };
         surface.configure()?;
         surface.reader = Some(spawn_reader(
@@ -533,6 +531,22 @@ impl MpvSurface {
         }
         self.subtitle_revision = Some(revision);
         Ok(())
+    }
+
+    /// Drops mpv's external subtitle track: a CSRI renderer's subtitles reach
+    /// the screen through the host's layer instead, and mpv's own libass would
+    /// draw a second, differently rendered copy on top.
+    pub fn clear_subtitles(&mut self) {
+        let mut pending = self
+            .shared
+            .pending_subs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let had_pending = pending.take().is_some();
+        let had_track = self.subtitle_revision.take().is_some();
+        if self.shared.file_loaded() && (had_pending || had_track) {
+            let _ = queue_command(&self.api, self.mpv, &["sub-remove"]);
+        }
     }
 
     /// Places mpv's native window over `bounds` (GPUI window coordinates) and
@@ -1121,8 +1135,7 @@ mod platform {
             static REGISTERED: LazyLock<std::result::Result<(), String>> =
                 LazyLock::new(register_class);
             REGISTERED.clone().map_err(|error| anyhow!("{error}"))?;
-            let ex_style =
-                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT;
+            let ex_style = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT;
             let style = WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
             // Created hidden; `place` shows it once the video is playing.
             let hwnd = unsafe {
@@ -1176,7 +1189,12 @@ mod platform {
             let (x, y, width, height) = physical_frame(bounds, scale);
             let mut origin = Point { x: 0, y: 0 };
             unsafe { ClientToScreen(self.parent, &mut origin) };
-            let mut client = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+            let mut client = Rect {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
             unsafe { GetClientRect(self.parent, &mut client) };
             let left = (origin.x + x).max(origin.x);
             let top = (origin.y + y).max(origin.y);

@@ -302,6 +302,35 @@ void AudioSpectrumRenderer::Render(AudioCanvas &canvas, int start, AudioRenderin
 	float log_ratio_calc = (b_fref - clin) / (clog - clin);
 	log_ratio_calc       = mid (0.f, log_ratio_calc, 1.f);
 
+	spectrum_rows.resize(imgheight);
+	float bin_prv = minband;
+	float bin_cur = minband;
+	for (int y = 0; y < imgheight; ++y) {
+		assert(bin_cur < float(maxband));
+		float bin_nxt = maxband;
+		if (y + 1 < imgheight) {
+			const float pos_rel = float(y + 1) / float(imgheight);
+			const float b_lin = minband + pos_rel * (maxband - minband);
+			const float b_log = minband * expf(pos_rel * scale_log);
+			bin_nxt = b_lin + log_ratio_calc * (b_log - b_lin);
+		}
+		auto &row = spectrum_rows[y];
+		row.interpolate = bin_nxt - bin_prv < 2;
+		if (row.interpolate) {
+			row.first = floor_int(bin_cur);
+			row.last = std::min(row.first + 1, nbr_bins - 1);
+			row.fraction = bin_cur - float(row.first);
+		}
+		else {
+			row.first = std::min(floor_int((bin_prv + bin_cur) * 0.5f), nbr_bins - 2);
+			row.last = std::min(floor_int((bin_cur + bin_nxt) * 0.5f), nbr_bins - 1);
+			row.fraction = 0;
+			assert(row.first < row.last);
+		}
+		bin_prv = bin_cur;
+		bin_cur = bin_nxt;
+	}
+
 	// ax = absolute x, absolute to the virtual spectrum bitmap
 	for (int ax = start; ax < end; ++ax)
 	{
@@ -312,51 +341,18 @@ void AudioSpectrumRenderer::Render(AudioCanvas &canvas, int start, AudioRenderin
 		// Prepare canvas writing
 		unsigned char *px = imgdata + (imgheight-1) * stride + (ax - start) * 4;
 
-		float bin_prv = minband;
-		float bin_cur = minband;
-		for (int y = 0; y < imgheight; ++y)
-		{
-			assert (bin_cur < float (maxband));
-
-			float       bin_nxt = maxband;
-			if (y + 1 < imgheight)
-			{
-				// Bin index is an interpolation between the linear and log curves.
-				const float pos_rel = float (y + 1) / float (imgheight);
-				const float b_lin   = minband + pos_rel * (maxband - minband);
-				const float b_log   = minband * expf (pos_rel * scale_log);
-				bin_nxt = b_lin + log_ratio_calc * (b_log - b_lin);
+		for (auto const& row : spectrum_rows) {
+			float val;
+			if (row.interpolate) {
+				const float v0 = power[row.first];
+				const float v1 = power[row.last];
+				val = v0 + row.fraction * (v1 - v0);
 			}
-
-			float val = 0;
-
-			// Interpolate between consecutive bins
-			if (bin_nxt - bin_prv < 2)
-			{
-				const int   bin_0 = floor_int (bin_cur);
-				const int   bin_1 = std::min (bin_0 + 1, nbr_bins - 1);
-				const float frac  = bin_cur - float (bin_0);
-				const float v0    = power [bin_0];
-				const float v1    = power [bin_1];
-				val = v0 + frac * (v1 - v0);
+			else {
+				val = *std::max_element(&power[row.first], &power[row.last]);
 			}
-
-			// Pick the greatest bin on the interval
-			else
-			{
-				int bin_inf = floor_int ((bin_prv + bin_cur) * 0.5f);
-				int bin_sup = floor_int ((bin_cur + bin_nxt) * 0.5f);
-				bin_inf = std::min (bin_inf, nbr_bins - 2);
-				bin_sup = std::min (bin_sup, nbr_bins - 1);
-				assert (bin_inf < bin_sup);
-				val = *std::max_element (&power [bin_inf], &power [bin_sup]);
-			}
-
-			pal->map_bgra (val * amplitude_scale, px);
-
-			px     -= stride;
-			bin_prv = bin_cur;
-			bin_cur = bin_nxt;
+			pal->map_bgra(val * amplitude_scale, px);
+			px -= stride;
 		}
 	}
 

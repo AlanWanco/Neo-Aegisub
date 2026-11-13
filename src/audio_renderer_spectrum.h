@@ -134,6 +134,15 @@ class AudioSpectrumRenderer final : public AudioRendererCanvasProvider {
 	/// Pre-allocated scratch area for storing raw audio data
 	std::vector<int16_t> audio_scratch;
 
+	struct SpectrumRow {
+		int first;
+		int last;
+		float fraction;
+		bool interpolate;
+	};
+	/// Vertical mapping is shared by every pixel column. Reuse its allocation.
+	std::vector<SpectrumRow> spectrum_rows;
+
 public:
 	/// @brief Constructor
 	/// @param color_scheme_name Name of the color scheme to use

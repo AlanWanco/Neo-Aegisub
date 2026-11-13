@@ -89,7 +89,7 @@ impl VideoTimeline {
         let target = if thick { 1. } else { 0. };
         let keyframes = snapshot.video_keyframes.clone();
         let last_frame = (snapshot.frame_count - 1).max(1);
-        let keyframe_ink = p.warning;
+        let keyframe_ink = p.grip;
         div()
             .id("video-scrubber")
             .w_full()

@@ -58,7 +58,10 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(agi::Ba
 	for (auto factory : sorted) {
 		try {
 			auto provider = factory->create(factory->subtype, br);
-			if (provider) return provider;
+			if (provider) {
+				provider->SetName(factory->name);
+				return provider;
+			}
 		}
 		catch (agi::UserCancelException const&) { throw; }
 		catch (agi::Exception const& err) { error += factory->name + ": " + err.GetMessage() + "\n"; }

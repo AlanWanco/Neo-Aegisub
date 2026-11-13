@@ -27,7 +27,6 @@
 {"EBU STL", ("Timecode offset minutes"), "Subtitle Format/EBU STL/Timecode Offset/M", 0, 59, false},
 {"EBU STL", ("Timecode offset seconds"), "Subtitle Format/EBU STL/Timecode Offset/S", 0, 59, false},
 {"EBU STL", ("Timecode offset frames"), "Subtitle Format/EBU STL/Timecode Offset/F", 0, 59, false},
-{"音频", ("Default mouse wheel to zoom"), "Audio/Wheel Default to Zoom", 0, 2147483647, false},
 {"音频", ("Lock scroll on cursor"), "Audio/Lock Scroll on Cursor", 0, 2147483647, false},
 {"音频", ("Snap markers by default"), "Audio/Snap/Enable", 0, 2147483647, false},
 {"音频", ("Auto-focus on mouse over"), "Audio/Auto/Focus", 0, 2147483647, false},

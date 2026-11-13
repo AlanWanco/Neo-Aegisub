@@ -18,6 +18,7 @@
 #include "gpui_search.h"
 
 #include "gpui_video.h"
+#include "gpui_subtitles.h"
 #include "gpui_visual.h"
 #include "gpui_preferences.h"
 #include "gpui_server.h"
@@ -436,6 +437,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		if (op == "playback") { Reply(client, PlaybackSnapshot()); return; }
 		if (op == "video_settings") { Reply(client, gpui::VideoSettings(context, object)); return; }
 		if (op == "video_frame") { Reply(client, video_frames.Frame(object)); return; }
+		if (op == "subtitle_layer") { Reply(client, gpui::SubtitleLayer(context, object)); return; }
 		if (op == "visual") { Reply(client, visual.Interact(object)); return; }
 		if (op == "native_subtitles") { Reply(client, NativeSubtitles()); return; }
 		if (op == "audio_render") { Reply(client, audio.Render(object)); return; }
@@ -586,6 +588,7 @@ struct GpuiBridge::Impl final : gpui::SocketServer::Handler {
 		    << ",\"revision\":" << revision << ",\"details_revision\":" << details_revision
 		    << ",\"video\":" << (context->project->VideoProvider() ? "true" : "false")
 		    << ",\"video_path\":" << quote_json(current_provider ? context->project->VideoName().string() : std::string())
+		    << ",\"subtitles_provider\":" << quote_json(current_provider ? current_provider->GetSubtitlesProviderName() : std::string())
 		    << ",\"timecodes\":" << (context->project->Timecodes().IsLoaded() ? "true" : "false")
 		    << ",\"playing\":" << (context->videoController->IsPlaying() ? "true" : "false")
 		    << ",\"frame\":" << context->videoController->GetFrameN()
