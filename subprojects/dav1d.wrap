@@ -1,7 +1,10 @@
 [wrap-git]
 directory = dav1d
 url = https://github.com/videolan/dav1d.git
-revision = 1.5.4
+# 1.5.4 plus the four fixes above it, including "compat: Fix building with
+# newer versions of MSVC": MSVC 19.52 rejects the unguarded __has_include_next
+# in include/compat/msvc/stdatomic.h.  Go back to a release tag once 1.5.5 is out.
+revision = a34e0685b9111b9eb1d7835ea7bea5b425dced73
 
 [provide]
 dav1d = dav1d_dep
