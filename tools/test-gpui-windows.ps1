@@ -143,24 +143,37 @@ function Wait-Layout([scriptblock]$Sample, [int]$TimeoutMs = 6000) {
     # Accessibility bounds are re-published on the next frame, so a sample taken
     # right after a layout change can still describe the previous one.  Repeat
     # the whole sample until two consecutive ones agree: a check that compares
-    # two controls then reads one frame instead of two, and every element has to
-    # have real extent so a placeholder rectangle never passes the check.
+    # two controls then reads one frame instead of two, and every rectangle has
+    # to have real extent so a placeholder never passes the check.  The sample
+    # returns a name -> rectangle table, so callers read fields by name and a
+    # single-entry sample keeps the same shape as a two-entry one.
     $previous = $null
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $current = @(& $Sample)
-        $key = ($current | ForEach-Object { '{0:N0},{1:N0},{2:N0},{3:N0}' -f $_.Left, $_.Top, $_.Width, $_.Height }) -join ';'
-        if ($previous -eq $key -and -not ($current | Where-Object { $_.Width -le 0 -or $_.Height -le 0 })) {
-            return ,$current
+        $current = & $Sample
+        if ($current -isnot [Collections.IDictionary]) {
+            throw 'Layout sample did not return a rectangle table'
         }
+        $key = ($current.Keys | Sort-Object | ForEach-Object {
+            '{0}={1:N0},{2:N0},{3:N0},{4:N0}' -f $_, $current[$_].Left, $current[$_].Top, $current[$_].Width, $current[$_].Height
+        }) -join ';'
+        # A control can answer with no rectangle at all while its frame is being
+        # replaced; count the unusable entries instead of testing the pipeline
+        # for truth, because a single null result also reads as false.
+        $unusable = @(foreach ($name in $current.Keys) {
+            $rect = $current[$name]
+            if (-not $rect -or $rect.Width -le 0 -or $rect.Height -le 0) { $name }
+        })
+        if ($previous -eq $key -and $unusable.Count -eq 0) { return $current }
         $previous = $key
+        $lastUnusable = $unusable -join ','
         Start-Sleep -Milliseconds 120
     }
-    throw "Control geometry did not settle: $key"
+    throw "Control geometry did not settle: $key (unusable: $lastUnusable)"
 }
 
 function Wait-ControlRect([string]$Name, [string]$Kind = 'Button') {
-    return (Wait-Layout { (Find-Control $Name -Kind $Kind).Current.BoundingRectangle })[0]
+    return (Wait-Layout { @{ target = (Find-Control $Name -Kind $Kind).Current.BoundingRectangle } }).target
 }
 
 function Wait-WindowReady([IntPtr]$Handle, [int]$TimeoutMs = 4000) {
@@ -587,9 +600,11 @@ with path.open('wb') as out:
     # own scroll area beside each other instead of stacking into one tall column.
     # Both rectangles come from one settled sample, so the pair describes a
     # single frame instead of two different layouts.
-    $pair = Wait-Layout { (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle, (Find-Control '清空…').Current.BoundingRectangle }
-    $amountRect = $pair[0]
-    $clearRect = $pair[1]
+    $layout = Wait-Layout { @{
+        amount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
+        clear  = (Find-Control '清空…').Current.BoundingRectangle } }
+    $amountRect = $layout.amount
+    $clearRect = $layout.clear
     Save-Screenshot 'timing-two-columns'
     if ($clearRect.Left -le $amountRect.Right) {
         throw ("History card is not beside the parameter form (amount={0},{1}-{2},{3} clear={4},{5}-{6},{7})" -f
@@ -601,9 +616,11 @@ with path.open('wb') as out:
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 560, 600, 0x0040)
     [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
     Wait-WindowRect 560 600
-    $pair = Wait-Layout { (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle, (Find-Control '清空…').Current.BoundingRectangle }
-    $wrappedAmount = $pair[0]
-    $wrappedClear = $pair[1]
+    $layout = Wait-Layout { @{
+        amount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
+        clear  = (Find-Control '清空…').Current.BoundingRectangle } }
+    $wrappedAmount = $layout.amount
+    $wrappedClear = $layout.clear
     Save-Screenshot 'timing-wrapped'
     if ($wrappedClear.Top -le $wrappedAmount.Top) {
         $wrappedBounds = [GpuiDesktop+Rect]::new()
