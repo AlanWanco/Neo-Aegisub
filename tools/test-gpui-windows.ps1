@@ -139,7 +139,7 @@ function Find-Control([string]$Name, [switch]$Last, [string]$Kind = 'Button') {
     throw "Visible control not found: $Name"
 }
 
-function Wait-Layout([scriptblock]$Sample, [int]$TimeoutMs = 6000) {
+function Wait-Layout([scriptblock]$Sample, [hashtable]$SampleArguments = @{}, [int]$TimeoutMs = 6000) {
     # Accessibility bounds are re-published on the next frame, so a sample taken
     # right after a layout change can still describe the previous one.  Repeat
     # the whole sample until two consecutive ones agree: a check that compares
@@ -150,7 +150,7 @@ function Wait-Layout([scriptblock]$Sample, [int]$TimeoutMs = 6000) {
     $previous = $null
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $current = & $Sample
+        $current = & $Sample @SampleArguments
         if ($current -isnot [Collections.IDictionary]) {
             throw 'Layout sample did not return a rectangle table'
         }
@@ -159,11 +159,7 @@ function Wait-Layout([scriptblock]$Sample, [int]$TimeoutMs = 6000) {
         }) -join ';'
         # A control can answer with no rectangle at all while its frame is being
         # replaced; count the unusable entries instead of testing the pipeline
-        # for truth, because a single null result also reads as false.  The loop
-        # variable is not called $name: the samples are script blocks, and a
-        # local here would shadow the caller's $Name on later invocations
-        # because PowerShell resolves variables case-insensitively up the call
-        # stack.
+        # for truth, because a single null result also reads as false.
         $unusable = @(foreach ($entryName in $current.Keys) {
             $entryRect = $current[$entryName]
             if (-not $entryRect -or $entryRect.Width -le 0 -or $entryRect.Height -le 0) { $entryName }
@@ -177,11 +173,12 @@ function Wait-Layout([scriptblock]$Sample, [int]$TimeoutMs = 6000) {
 }
 
 function Wait-ControlRect([string]$Name, [string]$Kind = 'Button') {
-    # GetNewClosure binds $Name/$Kind at creation, so a local inside Wait-Layout
-    # can never shadow them: PowerShell resolves variables up the call stack,
-    # case-insensitively.
-    $sample = { @{ target = (Find-Control $Name -Kind $Kind).Current.BoundingRectangle } }.GetNewClosure()
-    return (Wait-Layout $sample).target
+    # The lookup parameters travel as sample arguments, not as free variables:
+    # a script block resolves those up the call stack, case-insensitively, so a
+    # local inside Wait-Layout could otherwise shadow them.
+    $sample = { param($ControlName, $ControlKind)
+        @{ target = (Find-Control $ControlName -Kind $ControlKind).Current.BoundingRectangle } }
+    return (Wait-Layout $sample @{ ControlName = $Name; ControlKind = $Kind }).target
 }
 
 function Wait-WindowReady([IntPtr]$Handle, [int]$TimeoutMs = 4000) {
