@@ -139,6 +139,65 @@ function Find-Control([string]$Name, [switch]$Last, [string]$Kind = 'Button') {
     throw "Visible control not found: $Name"
 }
 
+function Wait-Layout([scriptblock]$Sample, [int]$TimeoutMs = 6000) {
+    # Accessibility bounds are re-published on the next frame, so a sample taken
+    # right after a layout change can still describe the previous one.  Repeat
+    # the whole sample until two consecutive ones agree: a check that compares
+    # two controls then reads one frame instead of two, and every element has to
+    # have real extent so a placeholder rectangle never passes the check.
+    $previous = $null
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $current = @(& $Sample)
+        $key = ($current | ForEach-Object { '{0:N0},{1:N0},{2:N0},{3:N0}' -f $_.Left, $_.Top, $_.Width, $_.Height }) -join ';'
+        if ($previous -eq $key -and -not ($current | Where-Object { $_.Width -le 0 -or $_.Height -le 0 })) {
+            return ,$current
+        }
+        $previous = $key
+        Start-Sleep -Milliseconds 120
+    }
+    throw "Control geometry did not settle: $key"
+}
+
+function Wait-ControlRect([string]$Name, [string]$Kind = 'Button') {
+    return (Wait-Layout { (Find-Control $Name -Kind $Kind).Current.BoundingRectangle })[0]
+}
+
+function Wait-WindowReady([IntPtr]$Handle, [int]$TimeoutMs = 4000) {
+    # A freshly activated window reports its final bounds one frame later; wait
+    # for a stable pair of reads instead of assuming a fixed delay.
+    $previous = $null
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ([GpuiDesktop]::IsWindowVisible($Handle)) {
+            $rect = ([Windows.Automation.AutomationElement]::FromHandle($Handle)).Current.BoundingRectangle
+            if ($rect.Width -gt 0 -and $rect.Height -gt 0 -and $previous -and
+                [Math]::Abs($rect.Width - $previous.Width) -le 1 -and [Math]::Abs($rect.Height - $previous.Height) -le 1) {
+                return
+            }
+            $previous = $rect
+        }
+        Start-Sleep -Milliseconds 120
+    }
+}
+
+function Wait-WindowRect([int]$Width, [int]$Height, [int]$TimeoutMs = 4000) {
+    # SetWindowPos only posts the resize: wait until the native frame reports the
+    # requested size, so a threshold check can never be decided by the previous
+    # size.  GetWindowRect and SetWindowPos both speak physical pixels, so this
+    # comparison is unaffected by the runner's DPI.
+    $bounds = [GpuiDesktop+Rect]::new()
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        [void][GpuiDesktop]::GetWindowRect($script:windowHandle, [ref]$bounds)
+        $currentWidth = $bounds.Right - $bounds.Left
+        $currentHeight = $bounds.Bottom - $bounds.Top
+        if ([Math]::Abs($currentWidth - $Width) -le 1 -and [Math]::Abs($currentHeight - $Height) -le 1) { return }
+        Start-Sleep -Milliseconds 80
+    }
+    throw ("Window did not reach {0}x{1}: {2}x{3}" -f $Width, $Height, $currentWidth, $currentHeight)
+}
+
 function Press-Control([string]$Name, [switch]$Last) {
     $element = Find-Control $Name -Last:$Last
     $pattern = $element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
@@ -155,7 +214,7 @@ function Switch-ToToolWindow([string] $Title) {
         if ($window) {
             $script:windowHandle = [IntPtr]$window.Current.NativeWindowHandle
             [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
-            Start-Sleep -Milliseconds 350
+            Wait-WindowReady $script:windowHandle
             return
         }
         Start-Sleep -Milliseconds 200
@@ -166,7 +225,7 @@ function Switch-ToToolWindow([string] $Title) {
 function Switch-ToMainWindow {
     $script:windowHandle = $script:mainWindowHandle
     [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
-    Start-Sleep -Milliseconds 350
+    Wait-WindowReady $script:windowHandle
 }
 
 function Set-Amount([string]$Value) {
@@ -474,9 +533,8 @@ with path.open('wb') as out:
     $null = Invoke-Bridge @{ op = 'command'; name = 'video/stop' }
     Press-Control '时间平移'
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'
-    $input = Find-Control '平移时长' -Kind Edit
-    $initialBounds = $input.Current.BoundingRectangle
-    if ($input.Current.IsOffscreen -or $initialBounds.Height -lt 15) { throw 'Shift input is clipped or offscreen' }
+    $initialBounds = Wait-ControlRect '平移时长' -Kind Edit
+    if ($initialBounds.Height -lt 15) { throw 'Shift input is clipped or offscreen' }
     Save-Screenshot 'timing-initial'
 
     # Exercise the visible controls and verify resulting document times through the host.
@@ -502,14 +560,13 @@ with path.open('wb') as out:
     Assert-Clean $base
 
     # Scroll the independent history list; its movement must not move the input.
-    $clearHistory = (Find-Control '清空…').Current.BoundingRectangle
+    $clearHistory = Wait-ControlRect '清空…'
     [void][GpuiDesktop]::SetCursorPos(
         [int](($clearHistory.Left + $clearHistory.Right) / 2),
         [int]($clearHistory.Bottom + 120))
     [GpuiDesktop]::mouse_event(0x0800, 0, 0, -12000, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 500
-    $afterBounds = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
-    if ([Math]::Abs($afterBounds.Y - $initialBounds.Y) -gt 1) { throw 'History scrolling moved the parameter input' }
+    $afterBounds = Wait-ControlRect '平移时长' -Kind Edit
+    if ([Math]::Abs($afterBounds.Top - $initialBounds.Top) -gt 1) { throw 'History scrolling moved the parameter input' }
     Save-Screenshot 'timing-history-scrolled'
 
     # Each iteration ends focused on the tool window, so the sidebar click has to
@@ -525,18 +582,14 @@ with path.open('wb') as out:
     Switch-ToToolWindow 'Neo Aegisub · 时间平移'
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 800, 600, 0x0040)
     [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
+    Wait-WindowRect 800 600
     # The two cards share one row: the form and the history list each keep their
     # own scroll area beside each other instead of stacking into one tall column.
-    # Accessibility bounds are re-published on the next frame, so read them until
-    # the layout settles instead of trusting one fixed sleep.
-    $amountRect = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
-    if ((Find-Control '平移时长' -Kind Edit).Current.IsOffscreen) { throw 'Compact layout hides the amount field' }
-    $clearRect = (Find-Control '清空…').Current.BoundingRectangle
-    for ($attempt = 0; $attempt -lt 40 -and $clearRect.Left -le $amountRect.Right; $attempt++) {
-        Start-Sleep -Milliseconds 150
-        $amountRect = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
-        $clearRect = (Find-Control '清空…').Current.BoundingRectangle
-    }
+    # Both rectangles come from one settled sample, so the pair describes a
+    # single frame instead of two different layouts.
+    $pair = Wait-Layout { (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle, (Find-Control '清空…').Current.BoundingRectangle }
+    $amountRect = $pair[0]
+    $clearRect = $pair[1]
     Save-Screenshot 'timing-two-columns'
     if ($clearRect.Left -le $amountRect.Right) {
         throw ("History card is not beside the parameter form (amount={0},{1}-{2},{3} clear={4},{5}-{6},{7})" -f
@@ -547,13 +600,10 @@ with path.open('wb') as out:
     # squeezing both columns past the width their segmented rows need.
     [void][GpuiDesktop]::SetWindowPos($script:windowHandle, [IntPtr]::Zero, $screen.X, $screen.Y, 560, 600, 0x0040)
     [void][GpuiDesktop]::SetForegroundWindow($script:windowHandle)
-    $wrappedAmount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
-    $wrappedClear = (Find-Control '清空…').Current.BoundingRectangle
-    for ($attempt = 0; $attempt -lt 40 -and $wrappedClear.Top -le $wrappedAmount.Top; $attempt++) {
-        Start-Sleep -Milliseconds 150
-        $wrappedAmount = (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle
-        $wrappedClear = (Find-Control '清空…').Current.BoundingRectangle
-    }
+    Wait-WindowRect 560 600
+    $pair = Wait-Layout { (Find-Control '平移时长' -Kind Edit).Current.BoundingRectangle, (Find-Control '清空…').Current.BoundingRectangle }
+    $wrappedAmount = $pair[0]
+    $wrappedClear = $pair[1]
     Save-Screenshot 'timing-wrapped'
     if ($wrappedClear.Top -le $wrappedAmount.Top) {
         $wrappedBounds = [GpuiDesktop+Rect]::new()
