@@ -148,9 +148,21 @@ function Wait-Layout([scriptblock]$Sample, [hashtable]$SampleArguments = @{}, [i
     # returns a name -> rectangle table, so callers read fields by name and a
     # single-entry sample keeps the same shape as a two-entry one.
     $previous = $null
+    $lastUnusable = ''
+    $lastFailure = $null
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $current = & $Sample @SampleArguments
+        try {
+            $current = & $Sample @SampleArguments
+        } catch {
+            # A provider element that was rebuilt on the next frame answers an
+            # old reference with an error instead of a rectangle; the retry
+            # resolves a fresh one.
+            $lastFailure = $_.Exception.Message
+            Start-Sleep -Milliseconds 120
+            continue
+        }
+        $lastFailure = $null
         if ($current -isnot [Collections.IDictionary]) {
             throw 'Layout sample did not return a rectangle table'
         }
@@ -169,6 +181,7 @@ function Wait-Layout([scriptblock]$Sample, [hashtable]$SampleArguments = @{}, [i
         $lastUnusable = $unusable -join ','
         Start-Sleep -Milliseconds 120
     }
+    if ($lastFailure) { throw "Control geometry did not settle: $lastFailure" }
     throw "Control geometry did not settle: $key (unusable: $lastUnusable)"
 }
 
@@ -179,6 +192,27 @@ function Wait-ControlRect([string]$Name, [string]$Kind = 'Button') {
     $sample = { param($ControlName, $ControlKind)
         @{ target = (Find-Control $ControlName -Kind $ControlKind).Current.BoundingRectangle } }
     return (Wait-Layout $sample @{ ControlName = $Name; ControlKind = $Kind }).target
+}
+
+function Get-ControlPattern([string]$Name, $Pattern, [string]$Kind = 'Button', [switch]$Last, [int]$TimeoutMs = 6000) {
+    # The provider rebuilds its elements as the window redraws, so an element
+    # captured a moment earlier can be detached and report no patterns at all.
+    # Resolve the control again for every attempt instead of asking the same
+    # element twice, and say which pattern was missing when the wait expires.
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $detail = 'control not found'
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $element = Find-Control $Name -Kind $Kind -Last:$Last
+            $resolved = $null
+            if ($element.TryGetCurrentPattern($Pattern, [ref]$resolved)) { return $resolved }
+            $detail = "control exposes no $($Pattern.ProgrammaticName)"
+        } catch {
+            $detail = $_.Exception.Message
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Control $Name never accepted $($Pattern.ProgrammaticName): $detail"
 }
 
 function Wait-WindowReady([IntPtr]$Handle, [int]$TimeoutMs = 4000) {
@@ -217,8 +251,7 @@ function Wait-WindowRect([int]$Width, [int]$Height, [int]$TimeoutMs = 4000) {
 }
 
 function Press-Control([string]$Name, [switch]$Last) {
-    $element = Find-Control $Name -Last:$Last
-    $pattern = $element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+    $pattern = Get-ControlPattern $Name ([Windows.Automation.InvokePattern]::Pattern) -Last:$Last
     $pattern.Invoke()
     Start-Sleep -Milliseconds 250
 }
@@ -247,8 +280,7 @@ function Switch-ToMainWindow {
 }
 
 function Set-Amount([string]$Value) {
-    $element = Find-Control '平移时长' -Kind Edit
-    $pattern = $element.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern)
+    $pattern = Get-ControlPattern '平移时长' ([Windows.Automation.ValuePattern]::Pattern) -Kind Edit
     $pattern.SetValue($Value)
     Start-Sleep -Milliseconds 200
 }
